@@ -1,6 +1,8 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from lyrics_support import LyricsManager, parse_lrc, parse_plain_lyrics
 
@@ -58,7 +60,7 @@ class LyricsTests(unittest.TestCase):
             track = root / "song.flac"
             track.write_bytes(b"not-real-audio")
 
-            manager = LyricsManager(enabled=True)
+            manager = LyricsManager(enabled=True, online_enabled=False)
             self.assertIsNone(manager.load(track))
 
             (root / "song.lrc").write_text(
@@ -84,12 +86,97 @@ class LyricsTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            manager = LyricsManager(enabled=True)
+            manager = LyricsManager(enabled=True, online_enabled=False)
             document = manager.load(track)
 
             self.assertIsNotNone(document)
             self.assertTrue(document.synced)
             self.assertEqual(document.current_line(2.0), "Sidecar lyric")
+            self.assertIn("song.lrc", document.source)
+
+
+    def test_downloaded_lrc_is_cached_and_reused_offline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "Artist - Song.flac"
+            track.write_bytes(b"not-real-audio")
+            cache_dir = root / "cache"
+
+            with mock.patch(
+                "lyrics_support._fetch_lrclib",
+                return_value="[00:01.00]Downloaded line\n",
+            ) as fetch:
+                manager = LyricsManager(
+                    enabled=True,
+                    online_enabled=True,
+                    cache_dir=cache_dir,
+                    request_timeout=0.25,
+                )
+                self.assertIsNone(manager.load(track))
+                document = None
+                for _ in range(100):
+                    document = manager.poll(track)
+                    if document is not None:
+                        break
+                    time.sleep(0.01)
+
+            self.assertIsNotNone(document)
+            self.assertTrue(document.synced)
+            self.assertEqual(document.current_line(2.0), "Downloaded line")
+            self.assertEqual(document.source, "LRCLIB · downloaded")
+            fetch.assert_called_once()
+            self.assertEqual(len(list(cache_dir.glob("*.lrc"))), 1)
+
+            offline = LyricsManager(
+                enabled=True,
+                online_enabled=False,
+                cache_dir=cache_dir,
+            )
+            cached = offline.load(track)
+
+            self.assertIsNotNone(cached)
+            self.assertTrue(cached.synced)
+            self.assertEqual(cached.current_line(2.0), "Downloaded line")
+            self.assertEqual(cached.source, "LRCLIB cache")
+
+    def test_sidecar_still_beats_downloaded_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "song.flac"
+            track.write_bytes(b"not-real-audio")
+            cache_dir = root / "cache"
+
+            with mock.patch(
+                "lyrics_support._fetch_lrclib",
+                return_value="[00:01.00]Remote lyric\n",
+            ):
+                online = LyricsManager(
+                    enabled=True,
+                    online_enabled=True,
+                    cache_dir=cache_dir,
+                )
+                self.assertIsNone(online.load(track))
+                remote = None
+                for _ in range(100):
+                    remote = online.poll(track)
+                    if remote is not None:
+                        break
+                    time.sleep(0.01)
+                self.assertIsNotNone(remote)
+                self.assertEqual(remote.current_line(2.0), "Remote lyric")
+
+            (root / "song.lrc").write_text(
+                "[00:01.00]Local lyric\n",
+                encoding="utf-8",
+            )
+            fresh = LyricsManager(
+                enabled=True,
+                online_enabled=True,
+                cache_dir=cache_dir,
+            )
+            document = fresh.load(track)
+
+            self.assertEqual(document.current_line(2.0), "Local lyric")
             self.assertIn("song.lrc", document.source)
 
 

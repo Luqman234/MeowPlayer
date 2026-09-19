@@ -1,5 +1,12 @@
 import bisect
+import hashlib
+import json
+import os
 import re
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -238,10 +245,195 @@ def _embedded_plain(tags):
     return None
 
 
+def _lyrics_cache_dir():
+    root = os.environ.get("XDG_CACHE_HOME")
+    if root:
+        base = Path(root).expanduser()
+        if not base.is_absolute():
+            base = Path.home() / ".cache"
+    else:
+        base = Path.home() / ".cache"
+    return base / "meowplayer" / "lyrics"
+
+
+def _metadata_text(tags, *names):
+    if not tags:
+        return ""
+
+    for name in names:
+        try:
+            value = tags.get(name)
+        except (AttributeError, TypeError):
+            value = None
+        text = _string_value(value)
+        if text:
+            return text.splitlines()[0].strip()
+    return ""
+
+
+def _track_lookup_metadata(track_path):
+    title = track_path.stem
+    artist = ""
+    album = ""
+    duration = 0.0
+    audio = None
+    tags = None
+
+    if MutagenFile is not None:
+        try:
+            audio = MutagenFile(track_path)
+            tags = getattr(audio, "tags", None) if audio is not None else None
+        except Exception:
+            audio = None
+            tags = None
+
+    if tags is not None:
+        title = _metadata_text(
+            tags, "title", "TIT2", "\xa9nam", "TITLE"
+        ) or title
+        artist = _metadata_text(
+            tags, "artist", "TPE1", "\xa9ART", "ARTIST"
+        )
+        album = _metadata_text(
+            tags, "album", "TALB", "\xa9alb", "ALBUM"
+        )
+
+    try:
+        duration = float(getattr(getattr(audio, "info", None), "length", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+
+    return {
+        "title": title.strip(),
+        "artist": artist.strip(),
+        "album": album.strip(),
+        "duration": max(0.0, duration),
+        "audio": audio,
+        "tags": tags,
+    }
+
+
+def _cache_key(metadata):
+    identity = "\0".join(
+        [
+            metadata.get("artist", "").casefold(),
+            metadata.get("title", "").casefold(),
+            metadata.get("album", "").casefold(),
+            str(int(round(metadata.get("duration", 0.0)))),
+        ]
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _lrclib_request(path, params, timeout):
+    query = urllib.parse.urlencode(
+        {
+            key: value
+            for key, value in params.items()
+            if value not in (None, "")
+        }
+    )
+    url = f"https://lrclib.net{path}"
+    if query:
+        url += "?" + query
+
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": (
+                "MeowPlayer/0.13 "
+                "(https://github.com/Luqman234/MeowPlayer)"
+            ),
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = response.read()
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        return None
+
+    try:
+        return json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, TypeError):
+        return None
+
+
+def _synced_lyrics_from_payload(payload):
+    if isinstance(payload, dict):
+        text = payload.get("syncedLyrics")
+        return text.strip() if isinstance(text, str) and text.strip() else ""
+
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("syncedLyrics")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+
+    return ""
+
+
+def _fetch_lrclib(metadata, timeout=3.0):
+    title = metadata.get("title", "").strip()
+    artist = metadata.get("artist", "").strip()
+    album = metadata.get("album", "").strip()
+    duration = metadata.get("duration", 0.0)
+
+    if not title:
+        return ""
+
+    if artist:
+        params = {
+            "track_name": title,
+            "artist_name": artist,
+        }
+        if album:
+            params["album_name"] = album
+        if duration > 0:
+            params["duration"] = int(round(duration))
+
+        payload = _lrclib_request("/api/get", params, timeout)
+        synced = _synced_lyrics_from_payload(payload)
+        if synced:
+            return synced
+
+    query = " ".join(part for part in (artist, title) if part).strip()
+    if not query:
+        return ""
+
+    payload = _lrclib_request(
+        "/api/search",
+        {"q": query},
+        timeout,
+    )
+    return _synced_lyrics_from_payload(payload)
+
+
 class LyricsManager:
-    def __init__(self, enabled=True):
+    def __init__(
+        self,
+        enabled=True,
+        online_enabled=True,
+        cache_dir=None,
+        request_timeout=3.0,
+    ):
         self.enabled = bool(enabled)
+        self.online_enabled = bool(online_enabled)
+        self.cache_dir = (
+            Path(cache_dir).expanduser()
+            if cache_dir is not None
+            else _lyrics_cache_dir()
+        )
+        try:
+            self.request_timeout = max(0.25, float(request_timeout))
+        except (TypeError, ValueError):
+            self.request_timeout = 3.0
         self._cache = {}
+        self._pending = {}
+        self._pending_lock = threading.Lock()
 
     def _cache_identity(self, path):
         path = Path(path).expanduser()
@@ -259,6 +451,92 @@ class LyricsManager:
             mtime(path.with_suffix(".txt")),
         )
 
+    def _persistent_cache_path(self, metadata):
+        return self.cache_dir / f"{_cache_key(metadata)}.lrc"
+
+    def _load_cached_lrc(self, metadata):
+        path = self._persistent_cache_path(metadata)
+        if not path.is_file():
+            return None
+
+        document = parse_lrc(
+            _decode_text(path),
+            source="LRCLIB cache",
+        )
+        if document is not None and document.synced:
+            return document
+        return None
+
+    def _save_cached_lrc(self, metadata, text):
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            path = self._persistent_cache_path(metadata)
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text(text.rstrip() + "\n", encoding="utf-8")
+            temporary.replace(path)
+            return path
+        except OSError:
+            return None
+
+    def _start_online_fetch(self, identity, metadata):
+        if not self.online_enabled:
+            return
+
+        with self._pending_lock:
+            if identity in self._pending:
+                return
+            state = {
+                "done": False,
+                "text": "",
+                "metadata": metadata,
+            }
+            self._pending[identity] = state
+
+        def worker():
+            text = _fetch_lrclib(
+                metadata,
+                timeout=self.request_timeout,
+            )
+            with self._pending_lock:
+                current = self._pending.get(identity)
+                if current is state:
+                    state["text"] = text
+                    state["done"] = True
+
+        threading.Thread(
+            target=worker,
+            name="meowplayer-lyrics",
+            daemon=True,
+        ).start()
+
+    def poll(self, track_path):
+        if not self.enabled or not self.online_enabled:
+            return None
+
+        track_path = Path(track_path).expanduser()
+        identity = self._cache_identity(track_path)
+
+        with self._pending_lock:
+            state = self._pending.get(identity)
+            if state is None or not state.get("done"):
+                return None
+            self._pending.pop(identity, None)
+
+        synced_text = state.get("text", "")
+        if not synced_text:
+            return None
+
+        document = parse_lrc(
+            synced_text,
+            source="LRCLIB · downloaded",
+        )
+        if document is None or not document.synced:
+            return None
+
+        self._save_cached_lrc(state["metadata"], synced_text)
+        self._cache[identity] = document
+        return document
+
     def load(self, track_path):
         if not self.enabled:
             return None
@@ -268,34 +546,39 @@ class LyricsManager:
         if identity in self._cache:
             return self._cache[identity]
 
+        # 1. User-provided synchronized sidecar always wins.
         lrc_path = track_path.with_suffix(".lrc")
         if lrc_path.is_file():
-            text = _decode_text(lrc_path)
             document = parse_lrc(
-                text,
+                _decode_text(lrc_path),
                 source=f"Sidecar · {lrc_path.name}",
             )
             if document is not None:
                 self._cache[identity] = document
                 return document
 
-        embedded_synced = None
+        metadata = _track_lookup_metadata(track_path)
+        tags = metadata.get("tags")
+
+        # 2. A previously downloaded synchronized lyric is instant/offline.
+        document = self._load_cached_lrc(metadata)
+        if document is not None:
+            self._cache[identity] = document
+            return document
+
+        # 3. Embedded synchronized lyrics are local and avoid a network request.
         embedded_plain = None
+        if tags is not None:
+            embedded_synced = _embedded_synced(tags)
+            if embedded_synced is not None:
+                self._cache[identity] = embedded_synced
+                return embedded_synced
+            embedded_plain = _embedded_plain(tags)
 
-        if MutagenFile is not None:
-            try:
-                audio = MutagenFile(track_path)
-                tags = getattr(audio, "tags", None) if audio is not None else None
-            except Exception:
-                tags = None
+        # 4. Ask LRCLIB in the background. poll() promotes the result later.
+        self._start_online_fetch(identity, metadata)
 
-            if tags is not None:
-                embedded_synced = _embedded_synced(tags)
-                if embedded_synced is not None:
-                    self._cache[identity] = embedded_synced
-                    return embedded_synced
-                embedded_plain = _embedded_plain(tags)
-
+        # 5. Plain sidecar / embedded lyrics remain useful while fetching.
         text_path = track_path.with_suffix(".txt")
         if text_path.is_file():
             document = parse_plain_lyrics(
