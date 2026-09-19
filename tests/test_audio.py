@@ -10,6 +10,8 @@ class FakeMPV:
     def __init__(self, current_path=None):
         self.path = current_path
         self.primed = []
+        self.loaded = []
+        self.play_calls = 0
         self.trimmed = 0
         self.cleared = 0
 
@@ -24,6 +26,13 @@ class FakeMPV:
 
     def clear_future_playlist(self):
         self.cleared += 1
+
+    def load(self, filename):
+        self.loaded.append(Path(filename))
+        self.path = None
+
+    def play(self):
+        self.play_calls += 1
 
 
 class AudioEngineTests(unittest.TestCase):
@@ -126,6 +135,26 @@ class AudioEngineTests(unittest.TestCase):
         player.playback_sequence = [0, 2, 3]
 
         self.assertEqual(player.peek_next_index(), 3)
+
+    def test_manual_next_clears_preloaded_future_before_replace(self):
+        player = self.make_player(current=0)
+        player.gapless_next_index = 1
+        player.mpv.primed = [Path("/music/1.flac")]
+
+        player.play(
+            1,
+            preserve_sequence=True,
+        )
+
+        self.assertEqual(player.current, 1)
+        self.assertEqual(player.mpv.cleared, 1)
+        self.assertEqual(
+            player.mpv.loaded,
+            [Path("/music/1.flac")],
+        )
+        self.assertEqual(player.mpv.play_calls, 1)
+        self.assertTrue(player._awaiting_mpv_path)
+        self.assertEqual(player.gapless_next_index, 2)
 
     def test_gapless_priming_waits_for_manual_load_confirmation(self):
         player = self.make_player(current=1)
