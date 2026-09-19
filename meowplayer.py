@@ -10,12 +10,26 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    from mutagen import File as MutagenFile
+except ImportError:
+    MutagenFile = None
 
 
 SUPPORTED_EXTENSIONS = {
     ".mp3", ".flac", ".ogg", ".opus",
     ".wav", ".m4a", ".aac", ".wma"
+}
+
+LIBRARY_VIEWS = ("songs", "artists", "albums", "folders")
+VIEW_LABELS = {
+    "songs": ("Songs", "Songs"),
+    "artists": ("Artists", "Artists"),
+    "albums": ("Albums", "Albums"),
+    "folders": ("Folders", "Nests"),
 }
 
 CAT_QUOTES = [
@@ -27,6 +41,7 @@ CAT_QUOTES = [
     "If it fits in the terminal, the cat sits in the terminal.",
     "Paws on the keyboard. Music in the speakers.",
     "The Catnip Stash is legally considered organized chaos.",
+    "Metadata is just a cat reading the tiny label on the record.",
 ]
 
 CAT_MASCOT = (
@@ -42,6 +57,86 @@ MAXIMUM_MEOW_MASCOT = (
 )
 
 TAIL_FRAMES = ("~", "⌁", "∿", "≈")
+
+
+@dataclass(frozen=True)
+class TrackMetadata:
+    path: Path
+    title: str
+    artist: str
+    album: str
+    album_artist: str
+    track_number: int
+    track_text: str
+    year: str
+    folder: str
+    filename: str
+    tagged: bool
+
+    @property
+    def artist_title(self):
+        return f"{self.title} — {self.artist}"
+
+    @property
+    def queue_label(self):
+        if self.album != "Unknown Album":
+            return f"{self.artist_title} · {self.album}"
+        return self.artist_title
+
+
+def _first_tag(tags, *names):
+    if not tags:
+        return ""
+
+    for name in names:
+        value = tags.get(name)
+        if value is None:
+            continue
+
+        if isinstance(value, (list, tuple)):
+            if not value:
+                continue
+            value = value[0]
+
+        value = str(value).strip()
+        if value:
+            return value
+
+    return ""
+
+
+def _parse_track_number(value):
+    if not value:
+        return 0, ""
+
+    text = str(value).strip()
+    first = text.split("/", 1)[0].strip()
+
+    digits = ""
+    for char in first:
+        if char.isdigit():
+            digits += char
+        elif digits:
+            break
+
+    try:
+        number = int(digits) if digits else 0
+    except ValueError:
+        number = 0
+
+    return number, text
+
+
+def _clean_year(value):
+    if not value:
+        return ""
+
+    text = str(value).strip()
+    for token in text.replace("/", "-").split("-"):
+        token = token.strip()
+        if len(token) == 4 and token.isdigit():
+            return token
+    return text[:12]
 
 
 class MPVController:
@@ -147,6 +242,10 @@ class MeowPlayer:
         self.maximum_meow = maximum_meow
 
         self.songs = self.find_songs()
+        self.metadata = [
+            self.read_metadata(path)
+            for path in self.songs
+        ]
         self.song_lookup = {
             song.resolve(): index for index, song in enumerate(self.songs)
         }
@@ -161,15 +260,31 @@ class MeowPlayer:
         self.repeat = False
 
         self.view = "library"
+        self.library_view = "songs"
         self.catnip_stash = []
 
         self.search_query = ""
         self.search_active = False
 
-        self.status_message = self.text(
-            "Ready. Select a track and press Enter.",
-            "The cat is ready. Pick a song and let it purr."
-        )
+        tagged_count = sum(meta.tagged for meta in self.metadata)
+        if MutagenFile is None:
+            initial_serious = (
+                "Mutagen is not installed; using filename/folder fallbacks."
+            )
+            initial_cat = (
+                "No tag-reader detected. The cat is guessing from filenames."
+            )
+        else:
+            initial_serious = (
+                f"Library ready: metadata found on {tagged_count}/"
+                f"{len(self.metadata)} track(s)."
+            )
+            initial_cat = (
+                f"The cat sniffed tags on {tagged_count}/"
+                f"{len(self.metadata)} meow(s)."
+            )
+
+        self.status_message = self.text(initial_serious, initial_cat)
         self.quote = random.choice(CAT_QUOTES)
         self.last_quote_change = time.monotonic()
         self.tail_frame = 0
@@ -189,34 +304,288 @@ class MeowPlayer:
         for path in self.music_dir.rglob("*"):
             if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
                 songs.append(path)
-        return sorted(songs, key=lambda p: p.name.lower())
+        return sorted(songs, key=lambda p: p.name.casefold())
+
+    def read_metadata(self, path):
+        title = path.stem
+        artist = "Unknown Artist"
+        album = "Unknown Album"
+        album_artist = ""
+        track_number = 0
+        track_text = ""
+        year = ""
+        tagged = False
+
+        try:
+            relative_parent = path.parent.relative_to(self.music_dir)
+            folder = (
+                str(relative_parent)
+                if str(relative_parent) != "."
+                else "Music Root"
+            )
+        except ValueError:
+            folder = str(path.parent)
+
+        if MutagenFile is not None:
+            try:
+                audio = MutagenFile(path, easy=True)
+                tags = (
+                    getattr(audio, "tags", None)
+                    if audio is not None
+                    else None
+                )
+
+                raw_title = _first_tag(tags, "title", "©nam")
+                raw_artist = _first_tag(
+                    tags,
+                    "artist",
+                    "albumartist",
+                    "author",
+                    "©ART",
+                )
+                raw_album = _first_tag(tags, "album", "©alb")
+                raw_album_artist = _first_tag(
+                    tags,
+                    "albumartist",
+                    "album artist",
+                    "aART",
+                )
+                raw_track = _first_tag(
+                    tags,
+                    "tracknumber",
+                    "track",
+                    "trkn",
+                )
+                raw_year = _first_tag(
+                    tags,
+                    "date",
+                    "year",
+                    "©day",
+                )
+
+                tagged = any(
+                    (
+                        raw_title,
+                        raw_artist,
+                        raw_album,
+                        raw_album_artist,
+                        raw_track,
+                        raw_year,
+                    )
+                )
+
+                if raw_title:
+                    title = raw_title
+                if raw_artist:
+                    artist = raw_artist
+                if raw_album:
+                    album = raw_album
+                if raw_album_artist:
+                    album_artist = raw_album_artist
+
+                track_number, track_text = _parse_track_number(raw_track)
+                year = _clean_year(raw_year)
+
+            except Exception:
+                # Bad or unsupported tags should never break the library.
+                pass
+
+        if not album_artist:
+            album_artist = artist
+
+        return TrackMetadata(
+            path=path,
+            title=title,
+            artist=artist,
+            album=album,
+            album_artist=album_artist,
+            track_number=track_number,
+            track_text=track_text,
+            year=year,
+            folder=folder,
+            filename=path.name,
+            tagged=tagged,
+        )
+
+    def meta(self, index):
+        return self.metadata[index]
+
+    def search_haystack(self, index):
+        meta = self.meta(index)
+        try:
+            relative = str(meta.path.relative_to(self.music_dir))
+        except ValueError:
+            relative = str(meta.path)
+
+        fields = [
+            meta.title,
+            meta.year,
+            meta.folder,
+            meta.filename,
+            relative,
+        ]
+
+        if meta.artist != "Unknown Artist":
+            fields.append(meta.artist)
+        if meta.album != "Unknown Album":
+            fields.append(meta.album)
+        if (
+            meta.album_artist
+            and meta.album_artist != "Unknown Artist"
+        ):
+            fields.append(meta.album_artist)
+
+        return " ".join(fields).casefold()
 
     def filtered_song_indices(self):
-        if not self.search_query:
-            return list(range(len(self.songs)))
+        indices = list(range(len(self.songs)))
+        query = self.search_query.casefold().strip()
 
-        query = self.search_query.casefold()
-        matches = []
+        if query:
+            indices = [
+                index
+                for index in indices
+                if query in self.search_haystack(index)
+            ]
 
-        for index, song in enumerate(self.songs):
-            try:
-                relative = song.relative_to(self.music_dir)
-                haystack = str(relative)
-            except ValueError:
-                haystack = str(song)
+        return indices
 
-            if query in haystack.casefold():
-                matches.append(index)
+    def ordered_library_indices(self):
+        indices = self.filtered_song_indices()
 
-        return matches
+        if self.library_view == "songs":
+            return sorted(
+                indices,
+                key=lambda i: (
+                    self.meta(i).title.casefold(),
+                    self.meta(i).artist.casefold(),
+                    self.meta(i).album.casefold(),
+                    self.meta(i).track_number,
+                    self.meta(i).filename.casefold(),
+                ),
+            )
+
+        if self.library_view == "artists":
+            return sorted(
+                indices,
+                key=lambda i: (
+                    self.meta(i).artist.casefold(),
+                    self.meta(i).album.casefold(),
+                    self.meta(i).track_number or 999999,
+                    self.meta(i).title.casefold(),
+                ),
+            )
+
+        if self.library_view == "albums":
+            return sorted(
+                indices,
+                key=lambda i: (
+                    self.meta(i).album_artist.casefold(),
+                    self.meta(i).album.casefold(),
+                    self.meta(i).track_number or 999999,
+                    self.meta(i).title.casefold(),
+                ),
+            )
+
+        return sorted(
+            indices,
+            key=lambda i: (
+                self.meta(i).folder.casefold(),
+                self.meta(i).filename.casefold(),
+            ),
+        )
+
+    def track_row_text(self, index):
+        meta = self.meta(index)
+
+        if self.library_view == "songs":
+            text = meta.artist_title
+            if meta.album != "Unknown Album":
+                text += f" · {meta.album}"
+            return text
+
+        if self.library_view == "artists":
+            text = meta.title
+            if meta.album != "Unknown Album":
+                text += f" · {meta.album}"
+            if meta.year:
+                text += f" ({meta.year})"
+            return text
+
+        if self.library_view == "albums":
+            number = (
+                f"{meta.track_number:02d}. "
+                if meta.track_number
+                else "    "
+            )
+            return f"{number}{meta.title} — {meta.artist}"
+
+        return meta.filename
+
+    def library_rows(self):
+        ordered = self.ordered_library_indices()
+
+        if self.library_view == "songs":
+            return [
+                ("track", self.track_row_text(index), index)
+                for index in ordered
+            ]
+
+        rows = []
+        last_group = None
+
+        for index in ordered:
+            meta = self.meta(index)
+
+            if self.library_view == "artists":
+                group_key = meta.artist
+                group_label = meta.artist
+            elif self.library_view == "albums":
+                group_key = (meta.album_artist, meta.album)
+                if meta.album_artist != "Unknown Artist":
+                    group_label = f"{meta.album} — {meta.album_artist}"
+                else:
+                    group_label = meta.album
+                if meta.year:
+                    group_label += f" ({meta.year})"
+            else:
+                group_key = meta.folder
+                group_label = meta.folder
+
+            if group_key != last_group:
+                rows.append(("header", group_label, None))
+                last_group = group_key
+
+            rows.append(("track", self.track_row_text(index), index))
+
+        return rows
 
     def selected_library_song(self):
-        visible = self.filtered_song_indices()
+        visible = self.ordered_library_indices()
         if not visible:
             return None
 
         self.selected = max(0, min(self.selected, len(visible) - 1))
         return visible[self.selected]
+
+    def select_library_view(self, view):
+        if view not in LIBRARY_VIEWS:
+            return
+
+        self.library_view = view
+        self.selected = 0
+
+        serious_label, cat_label = VIEW_LABELS[view]
+        self.set_status(
+            f"Library view: {serious_label}.",
+            f"Music Nest view: {cat_label}."
+        )
+
+    def cycle_library_view(self):
+        position = LIBRARY_VIEWS.index(self.library_view)
+        self.select_library_view(
+            LIBRARY_VIEWS[(position + 1) % len(LIBRARY_VIEWS)]
+        )
 
     def play(self, index, automatic=False, record_history=True):
         if not self.songs:
@@ -236,15 +605,16 @@ class MeowPlayer:
         self.current = index
         self.mpv.load(self.songs[index])
 
+        meta = self.meta(index)
         if automatic:
             self.set_status(
-                "Playing next track.",
-                "The cat found the next meow."
+                f"Playing next track: {meta.artist_title}",
+                f"The cat found the next meow: {meta.artist_title}"
             )
         else:
             self.set_status(
-                f"Playing: {self.songs[index].name}",
-                "The cat has chosen a song."
+                f"Playing: {meta.artist_title}",
+                f"The cat chose: {meta.artist_title}"
             )
 
     def play_selected_library_song(self):
@@ -263,9 +633,10 @@ class MeowPlayer:
 
         self.catnip_stash.append(index)
         self.stash_selected = len(self.catnip_stash) - 1
+        label = self.meta(index).artist_title
         self.set_status(
-            f"Added to queue: {self.songs[index].name}",
-            f"Stashed the meow: {self.songs[index].name}"
+            f"Added to queue: {label}",
+            f"Stashed the meow: {label}"
         )
 
     def play_stash_position(self, position, automatic=False):
@@ -284,13 +655,13 @@ class MeowPlayer:
 
         if automatic:
             self.set_status(
-                "Playing the next queued track.",
+                f"Playing queued track: {self.meta(index).artist_title}",
                 "The cat pulled the next treat from The Catnip Stash."
             )
         else:
             self.set_status(
-                f"Playing queued track: {self.songs[index].name}",
-                f"Pulled from The Catnip Stash: {self.songs[index].name}"
+                f"Playing queued track: {self.meta(index).artist_title}",
+                f"Pulled from The Catnip Stash: {self.meta(index).artist_title}"
             )
 
         return True
@@ -355,9 +726,10 @@ class MeowPlayer:
         else:
             self.stash_selected = 0
 
+        label = self.meta(index).artist_title
         self.set_status(
-            f"Removed from queue: {self.songs[index].name}",
-            f"Yeeted from The Catnip Stash: {self.songs[index].name}"
+            f"Removed from queue: {label}",
+            f"Yeeted from The Catnip Stash: {label}"
         )
 
     def move_stash_item(self, direction):
@@ -520,7 +892,7 @@ class MeowPlayer:
         lines = list(mascot) + [
             "",
             "Welcome to MeowPlayer",
-            "Scanning your music nest..."
+            "Sniffing metadata and indexing your music nest..."
         ]
 
         start_y = max(0, (height - len(lines)) // 2)
@@ -649,47 +1021,79 @@ class MeowPlayer:
         list_height,
         scroll,
     ):
-        visible = self.filtered_song_indices()
+        ordered = self.ordered_library_indices()
+        rows = self.library_rows()
 
-        if visible:
-            self.selected = max(0, min(self.selected, len(visible) - 1))
+        if ordered:
+            self.selected = max(
+                0,
+                min(self.selected, len(ordered) - 1)
+            )
+            selected_index = ordered[self.selected]
         else:
             self.selected = 0
+            selected_index = None
 
-        if self.selected < scroll:
-            scroll = self.selected
-        if self.selected >= scroll + list_height:
-            scroll = self.selected - list_height + 1
+        selected_row = 0
+        if selected_index is not None:
+            for row_index, (_, _, song_index) in enumerate(rows):
+                if song_index == selected_index:
+                    selected_row = row_index
+                    break
 
-        if not visible:
+        if selected_row < scroll:
+            scroll = selected_row
+        if selected_row >= scroll + list_height:
+            scroll = selected_row - list_height + 1
+
+        if not rows:
             message = self.text(
                 "No tracks match the current search.",
                 "No meows match that scent trail."
             )
             try:
-                stdscr.addstr(list_start, 2, message[:width - 4], curses.A_DIM)
+                stdscr.addstr(
+                    list_start,
+                    2,
+                    message[:width - 4],
+                    curses.A_DIM
+                )
             except curses.error:
                 pass
             return scroll
 
-        for screen_row, visible_position in enumerate(
-            range(scroll, min(len(visible), scroll + list_height))
+        for screen_row, row_index in enumerate(
+            range(scroll, min(len(rows), scroll + list_height))
         ):
-            song_index = visible[visible_position]
-            song = self.songs[song_index]
+            kind, label, song_index = rows[row_index]
+            y = list_start + screen_row
 
+            if kind == "header":
+                marker = "▾ " if not self.serious_mode else "— "
+                text = marker + label
+                try:
+                    stdscr.addstr(
+                        y,
+                        2,
+                        text[:width - 4],
+                        curses.A_BOLD | curses.color_pair(1)
+                    )
+                except curses.error:
+                    pass
+                continue
+
+            is_selected = song_index == selected_index
             if song_index == self.current:
                 prefix = "▶  " if self.serious_mode else "🐾 "
-            elif visible_position == self.selected and not self.serious_mode:
+            elif is_selected and not self.serious_mode:
                 prefix = ">^.^< "
             else:
                 prefix = "   "
 
-            text = prefix + song.name
-            y = list_start + screen_row
+            text = prefix + label
             attr = curses.A_NORMAL
 
-            if visible_position == self.selected:
+            if is_selected:
                 attr |= curses.A_REVERSE
             if song_index == self.current:
                 attr |= curses.color_pair(2)
@@ -740,7 +1144,7 @@ class MeowPlayer:
             )
         ):
             song_index = self.catnip_stash[stash_position]
-            song = self.songs[song_index]
+            meta = self.meta(song_index)
             number = stash_position + 1
 
             if stash_position == self.stash_selected and not self.serious_mode:
@@ -748,7 +1152,7 @@ class MeowPlayer:
             else:
                 prefix = f"     {number:02d}. "
 
-            text = prefix + song.name
+            text = prefix + meta.queue_label
             y = list_start + screen_row
             attr = curses.A_NORMAL
 
@@ -806,11 +1210,11 @@ class MeowPlayer:
             content_start = self.draw_header(stdscr, width)
 
             if self.current is not None:
-                song = self.songs[self.current]
+                meta = self.meta(self.current)
                 paused = self.mpv.get_property("pause")
                 icon = "⏸" if paused else "▶"
                 label = "Now Playing" if self.serious_mode else "Now Purring"
-                now_playing = f"{icon}  {label}: {song.name}"
+                now_playing = f"{icon}  {label}: {meta.artist_title}"
             else:
                 now_playing = self.text(
                     "No song playing",
@@ -873,20 +1277,41 @@ class MeowPlayer:
 
             if self.view == "library":
                 matches = len(self.filtered_song_indices())
+                serious_view, cat_view = VIEW_LABELS[self.library_view]
+                current_view = serious_view if self.serious_mode else cat_view
+
                 if self.search_active:
                     mode_line = self.text(
-                        f"SEARCH > {self.search_query}_   ({matches} match(es))",
-                        f"SCENT SEARCH > {self.search_query}_   ({matches} meow(s))"
+                        (
+                            f"SEARCH > {self.search_query}_   "
+                            f"({matches} match(es)) · {current_view}"
+                        ),
+                        (
+                            f"SCENT SEARCH > {self.search_query}_   "
+                            f"({matches} meow(s)) · {current_view}"
+                        )
                     )
                 elif self.search_query:
                     mode_line = self.text(
-                        f"Library — filter: {self.search_query!r} ({matches} match(es))",
-                        f"Music Nest — scent: {self.search_query!r} ({matches} meow(s))"
+                        (
+                            f"Library / {current_view} — filter: "
+                            f"{self.search_query!r} ({matches})"
+                        ),
+                        (
+                            f"Music Nest / {current_view} — scent: "
+                            f"{self.search_query!r} ({matches})"
+                        )
                     )
                 else:
                     mode_line = self.text(
-                        f"Library — {len(self.songs)} track(s)",
-                        f"Music Nest — {len(self.songs)} meow(s)"
+                        (
+                            f"Library / {current_view} — "
+                            f"{len(self.songs)} track(s)"
+                        ),
+                        (
+                            f"Music Nest / {current_view} — "
+                            f"{len(self.songs)} meow(s)"
+                        )
                     )
             else:
                 mode_line = self.text(
@@ -937,14 +1362,14 @@ class MeowPlayer:
             if self.view == "library":
                 if self.serious_mode:
                     controls = (
-                        "↑↓ Select  ENTER Play  / Search  A Add queue  "
-                        "Q Queue  SPACE Pause  N/P Track  X Quit"
+                        "↑↓ Select  ENTER Play  1-4 Views  TAB Next view  "
+                        "/ Search  A Queue  Q Queue view  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
-                        "↑↓ Choose  ENTER Purr  / Scent-search  A Stash  "
-                        "Q Catnip Stash  SPACE Paws  N/P Meow  X Escape"
+                        "↑↓ Choose  ENTER Purr  1-4 Views  TAB Next nest  "
+                        "/ Scent  A Stash  Q Catnip  X Escape"
                     )
                     quote = f"🐱 {self.quote}"
             else:
@@ -1083,7 +1508,7 @@ class MeowPlayer:
                 continue
 
             if self.view == "library":
-                visible = self.filtered_song_indices()
+                visible = self.ordered_library_indices()
 
                 if key == curses.KEY_UP and visible:
                     self.selected = max(0, self.selected - 1)
@@ -1101,8 +1526,14 @@ class MeowPlayer:
                     self.search_query = ""
                     self.selected = 0
                     self.set_status(
-                        "Type to search. Enter keeps filter; Esc clears it.",
-                        "Sniff for a song. Enter locks scent; Esc forgets it."
+                        (
+                            "Type to search tags and paths. "
+                            "Enter keeps filter; Esc clears it."
+                        ),
+                        (
+                            "Sniff tags, albums, artists, and folders. "
+                            "Enter locks scent; Esc forgets it."
+                        )
                     )
                 elif key == 27 and self.search_query:
                     self.search_query = ""
@@ -1111,6 +1542,19 @@ class MeowPlayer:
                         "Search cleared.",
                         "Scent trail cleared."
                     )
+                elif key == ord("\t"):
+                    self.cycle_library_view()
+                    library_scroll = 0
+                elif key in (
+                    ord("1"),
+                    ord("2"),
+                    ord("3"),
+                    ord("4"),
+                ):
+                    self.select_library_view(
+                        LIBRARY_VIEWS[int(chr(key)) - 1]
+                    )
+                    library_scroll = 0
 
             else:
                 if key == curses.KEY_UP and self.catnip_stash:
