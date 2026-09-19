@@ -22,9 +22,14 @@ Music Nest — scent: 'space' (2 meows)
 - Full-screen terminal interface
 - Recursive music-folder scanning
 - Metadata parsing for title, artist, album, album artist, track number, and year
-- Persistent SQLite **Cat Catalog** metadata cache
-- Incremental rescanning: unchanged tracks reuse cached metadata
+- Persistent SQLite **Cat Catalog** library database
+- Incremental metadata cache: unchanged tracks reuse cached tags
 - Automatic cache invalidation for modified files and pruning for deleted files
+- Persistent **Pawmarks** favorites
+- Persistent play counts and listening history
+- **Purr History** view sorted by most recently played
+- Artist → album → track drill-down navigation
+- Album → track drill-down navigation
 - Filename/folder fallbacks for untagged or malformed audio files
 - Grouped library views for Songs, Artists, Albums, and Folders
 - Live search/filtering across metadata, filenames, and folder paths
@@ -155,7 +160,7 @@ chmod +x meowplayer.py
 
 ## Install as a real command
 
-MeowPlayer is now packaged as **MeowPlayer 0.7.0** with a standard `pyproject.toml`.
+MeowPlayer is now packaged as **MeowPlayer 0.8.0** with a standard `pyproject.toml`.
 
 The Python distribution is named:
 
@@ -236,8 +241,8 @@ This creates standard Python distribution artifacts in:
 
 ```text
 dist/
-├── meowplayer_terminal-0.7.0-py3-none-any.whl
-└── meowplayer_terminal-0.7.0.tar.gz
+├── meowplayer_terminal-0.8.0-py3-none-any.whl
+└── meowplayer_terminal-0.8.0.tar.gz
 ```
 
 You can install the wheel directly with `pip` or `pipx`.
@@ -281,17 +286,19 @@ If MeowPlayer detects Termux but cannot find shared music storage, it prints a T
 
 ## The Cat Catalog
 
-MeowPlayer 0.7.0 adds a persistent SQLite library database/cache called **The Cat Catalog**.
+MeowPlayer 0.8.0 adds a persistent SQLite library database/cache called **The Cat Catalog**.
 
 By default it lives at:
 
 ```text
-~/.cache/meowplayer/library.sqlite3
+~/.local/share/meowplayer/library.sqlite3
 ```
 
-If `XDG_CACHE_HOME` is set, MeowPlayer respects it instead.
+If `XDG_DATA_HOME` is set, MeowPlayer respects it instead.
 
-The music files remain the source of truth. The database stores derived metadata for faster future startups:
+MeowPlayer 0.8.0 automatically migrates the old 0.7.0 database from `~/.cache/meowplayer/library.sqlite3` the first time it opens the new version.
+
+Your music files remain the source of truth for audio and tags. The Cat Catalog stores both derived metadata for faster startup **and** persistent library data such as Pawmarks and listening history:
 
 ```text
 absolute path
@@ -307,6 +314,11 @@ year
 folder
 filename
 tagged / fallback status
+favorite / Pawmark
+play count
+last played time
+added-at time
+individual listening-history events
 ```
 
 ### How incremental scanning works
@@ -359,9 +371,9 @@ If you deliberately changed many tags, suspect stale metadata, or just want the 
 meowplayer --rebuild-catalog
 ```
 
-This discards cached metadata for the current music root and rebuilds it from the actual files. It does **not** delete or modify any music.
+This invalidates cached metadata for the current music root and rebuilds it from the actual files. It does **not** delete or modify any music, and it preserves Pawmarks, play counts, and listening history.
 
-Because the Cat Catalog is derived cache data, deleting `library.sqlite3` is also safe; MeowPlayer will recreate it on the next launch.
+Do **not** treat `library.sqlite3` as disposable cache anymore. Deleting it will not affect your music files, but it **will erase MeowPlayer-specific data** such as Pawmarks and listening history.
 
 ## Metadata and library views
 
@@ -388,29 +400,80 @@ While in the Music Nest:
 | `2` | Artists |
 | `3` | Albums |
 | `4` | Folders / Nests |
+| `5` | Favorites / Pawmarks |
+| `6` | Listening History / Purr History |
 | `Tab` | Cycle to the next view |
 
 **Songs** is a flat metadata-aware track list.
 
-**Artists** groups tracks under artist headers.
+**Artists** is now navigable. Select an artist and press `Enter` to open that artist, select an album and press `Enter` again, then choose an individual track to play.
 
-**Albums** groups tracks by album and album artist, respects track numbers when available, and shows the album year when tagged.
+**Albums** is also navigable. Select an album and press `Enter` to drill into its track list.
 
 **Folders / Nests** groups files by their physical directory inside the music library.
+
+**Pawmarks** contains only tracks you marked with `F`.
+
+**Purr History** shows tracks you have played, most recently played first, and includes their persistent play counts.
+
+Use `B` or `Backspace` to move up one artist/album level.
 
 Example:
 
 ```text
-Music Nest / Albums — 128 meows
+Music Nest / Artists — 128 meows
 
-▾ In Rainbows — Radiohead (2007)
-   01. 15 Step — Radiohead
->^.^< 02. Bodysnatchers — Radiohead
-   03. Nude — Radiohead
+>^.^< Radiohead · 42 track(s) ›
+      YOASOBI · 18 track(s) ›
+      宇多田ヒカル · 27 track(s) ›
 
-▾ Unknown Album
-   loose-recording.mp3
+ENTER
+
+Music Nest / Artists / Radiohead
+
+>^.^< In Rainbows (2007) · 10 track(s) ›
+      Kid A (2000) · 10 track(s) ›
+
+ENTER
+
+Music Nest / Artists / Radiohead / In Rainbows
+
+>^.^< 01. 15 Step — Radiohead
+      02. Bodysnatchers — Radiohead
+      03. Nude — Radiohead
 ```
+
+## Pawmarks and listening history
+
+Press `F` on an individual track to toggle its **Pawmark**.
+
+A Pawmarked track is stored persistently in the Cat Catalog and is shown with a star in normal track lists:
+
+```text
+★ Nude — Radiohead · In Rainbows
+```
+
+Open view `5` to see only Pawmarked tracks.
+
+Every time MeowPlayer deliberately starts a track, the Cat Catalog records:
+
+```text
+play_count += 1
+last_played = now
+history event = now
+```
+
+Session restore and simply resuming a stopped/paused current track do not create a fake new listen.
+
+View `6`, **Purr History**, shows listened-to tracks ordered by their latest play time:
+
+```text
+Nude — Radiohead · played 14×
+夜に駆ける — YOASOBI · played 9×
+Space Song — Beach House · played 6×
+```
+
+The database also keeps individual history events internally, so later releases can build richer statistics without starting the history over.
 
 ## Search: Scent Search
 
@@ -485,9 +548,11 @@ Loaded playlist entries must point to songs that are already inside the current 
 | Key | MeowPlayer action |
 | --- | --- |
 | `↑` / `↓` | Choose a track |
-| `Enter` | Play selected track |
-| `1` / `2` / `3` / `4` | Songs / Artists / Albums / Folders view |
+| `Enter` | Open artist/album group, or play a track at leaf level |
+| `1`–`6` | Songs / Artists / Albums / Folders / Pawmarks / Purr History |
 | `Tab` | Cycle library view |
+| `B` / `Backspace` | Go up one artist/album level |
+| `F` | Toggle Pawmark on the selected track |
 | `/` | Start Scent Search |
 | `A` | Add selected track to The Catnip Stash |
 | `Q` | Toggle Music Nest / Catnip Stash |
@@ -530,7 +595,7 @@ The state file is managed automatically and remembers:
 - Meow Level / volume
 - Pounce Mode / shuffle
 - Tail-Chase / repeat
-- current Songs / Artists / Albums / Nests view
+- current Songs / Artists / Albums / Nests / Pawmarks / Purr History view
 - last track
 - last playback position
 - The Catnip Stash queue
@@ -667,7 +732,7 @@ Typical moods include:
 For example:
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.7.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.8.0 — Purring
 ( ^.^ )
  > ♫ <
 ```
@@ -675,7 +740,7 @@ For example:
 Pause it:
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.7.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.8.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -754,6 +819,9 @@ Music files
    ├── incremental scan
    ▼
 Cat Catalog (SQLite)
+   ├── cached tags
+   ├── Pawmarks
+   └── listening history
    │
    ▼
 Music Nest
@@ -774,7 +842,7 @@ Music Nest
           Audio output
 ```
 
-Python handles the interface, incremental library scanning, metadata-backed views, search, queue state, playlist files, keyboard controls, and all cat-related responsibilities. The **Cat Catalog** stores derived metadata in SQLite, **Mutagen** reads tags for new or modified files, and `mpv` handles the actual audio decoding and playback.
+Python handles the interface, incremental library scanning, metadata-backed views, drill-down navigation, search, queue state, playlist files, keyboard controls, and all cat-related responsibilities. The **Cat Catalog** stores cached metadata plus Pawmarks and listening history in SQLite, **Mutagen** reads tags for new or modified files, and `mpv` handles the actual audio decoding and playback.
 
 This means MeowPlayer does not need to implement MP3, FLAC, AAC, Opus, and other audio codecs itself.
 
