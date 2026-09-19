@@ -10,6 +10,7 @@ on:
       - "mpris_support.py"
       - "pyproject.toml"
       - "requirements.txt"
+      - "tests/**"
       - ".github/workflows/package-smoke.yml"
   pull_request:
     paths:
@@ -19,6 +20,7 @@ on:
       - "mpris_support.py"
       - "pyproject.toml"
       - "requirements.txt"
+      - "tests/**"
       - ".github/workflows/package-smoke.yml"
 
 jobs:
@@ -37,6 +39,9 @@ jobs:
       - name: Compile Python modules
         run: |
           python -m py_compile meowplayer.py meow_catalog.py meow_persistence.py mpris_support.py
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
 
       - name: Install build tooling
         run: python -m pip install --upgrade build
