@@ -5,7 +5,9 @@ on:
     branches: [main]
     paths:
       - "meowplayer.py"
+      - "album_art.py"
       - "meow_catalog.py"
+      - "meow_smart.py"
       - "meow_persistence.py"
       - "mpris_support.py"
       - "pyproject.toml"
@@ -15,7 +17,9 @@ on:
   pull_request:
     paths:
       - "meowplayer.py"
+      - "album_art.py"
       - "meow_catalog.py"
+      - "meow_smart.py"
       - "meow_persistence.py"
       - "mpris_support.py"
       - "pyproject.toml"
@@ -38,7 +42,7 @@ jobs:
 
       - name: Compile Python modules
         run: |
-          python -m py_compile meowplayer.py meow_catalog.py meow_persistence.py mpris_support.py
+          python -m py_compile meowplayer.py album_art.py meow_catalog.py meow_smart.py meow_persistence.py mpris_support.py
 
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
