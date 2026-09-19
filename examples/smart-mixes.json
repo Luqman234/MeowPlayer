@@ -1,0 +1,30 @@
+{
+  "mixes": [
+    {
+      "name": "Late Night Purrs",
+      "description": "Dreamy favorites with a little listening history behind them.",
+      "rule": "genre ~ \"Dream\" and favorite = true and play_count >= 3",
+      "sort": "-play_count",
+      "limit": 100
+    },
+    {
+      "name": "Long Unplayed Tracks",
+      "description": "Longer tracks that have never been played in MeowPlayer.",
+      "rule": "duration >= 300 and played = false",
+      "sort": "artist"
+    },
+    {
+      "name": "Modern Rock",
+      "description": "Rock-tagged music from 2015 onward.",
+      "rule": "genre ~ \"Rock\" and year >= 2015",
+      "sort": "album"
+    },
+    {
+      "name": "Not Unknown Artists",
+      "description": "Tagged tracks that are not assigned to Unknown Artist.",
+      "rule": "tagged = true and not artist = \"Unknown Artist\"",
+      "sort": "artist",
+      "limit": 250
+    }
+  ]
+}
