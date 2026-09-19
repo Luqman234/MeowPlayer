@@ -12,6 +12,7 @@ class FakeMPV:
         self.primed = []
         self.loaded = []
         self.play_calls = 0
+        self.advanced = 0
         self.trimmed = 0
         self.cleared = 0
 
@@ -30,6 +31,10 @@ class FakeMPV:
     def load(self, filename):
         self.loaded.append(Path(filename))
         self.path = None
+
+    def advance_playlist(self):
+        self.advanced += 1
+        return {"error": "success"}
 
     def play(self):
         self.play_calls += 1
@@ -136,7 +141,7 @@ class AudioEngineTests(unittest.TestCase):
 
         self.assertEqual(player.peek_next_index(), 3)
 
-    def test_manual_next_clears_preloaded_future_before_replace(self):
+    def test_manual_next_advances_already_primed_gapless_entry(self):
         player = self.make_player(current=0)
         player.gapless_next_index = 1
         player.mpv.primed = [Path("/music/1.flac")]
@@ -147,14 +152,31 @@ class AudioEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(player.current, 1)
-        self.assertEqual(player.mpv.cleared, 1)
-        self.assertEqual(
-            player.mpv.loaded,
-            [Path("/music/1.flac")],
-        )
+        self.assertEqual(player.mpv.advanced, 1)
+        self.assertEqual(player.mpv.cleared, 0)
+        self.assertEqual(player.mpv.loaded, [])
         self.assertEqual(player.mpv.play_calls, 1)
         self.assertTrue(player._awaiting_mpv_path)
         self.assertEqual(player.gapless_next_index, 2)
+
+    def test_unprimed_manual_load_still_replaces_current_track(self):
+        player = self.make_player(current=0)
+        player.gapless_next_index = None
+
+        player.play(
+            2,
+            preserve_sequence=True,
+        )
+
+        self.assertEqual(player.current, 2)
+        self.assertEqual(player.mpv.advanced, 0)
+        self.assertEqual(player.mpv.cleared, 1)
+        self.assertEqual(
+            player.mpv.loaded,
+            [Path("/music/2.flac")],
+        )
+        self.assertEqual(player.mpv.play_calls, 1)
+        self.assertTrue(player._awaiting_mpv_path)
 
     def test_gapless_priming_waits_for_manual_load_confirmation(self):
         player = self.make_player(current=1)
