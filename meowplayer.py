@@ -2352,6 +2352,171 @@ class MeowPlayer:
         stdscr.refresh()
         time.sleep(1.2 if self.maximum_meow else 0.8)
 
+    def load_current_lyrics(self, index):
+        if (
+            index is None
+            or index < 0
+            or index >= len(self.songs)
+        ):
+            self.current_lyrics = None
+            self.lyrics_track_index = None
+            return
+
+        self.current_lyrics = self.lyrics.load(self.songs[index])
+        self.lyrics_track_index = index
+        self.lyrics_follow = True
+        self.lyrics_scroll = 0
+
+    def current_lyric_text(self):
+        if (
+            self.current is None
+            or self.current_lyrics is None
+            or not self.current_lyrics.synced
+        ):
+            return ""
+
+        try:
+            position = float(
+                self.mpv.get_property("time-pos") or 0.0
+            )
+        except (TypeError, ValueError):
+            position = 0.0
+
+        return self.current_lyrics.current_line(position)
+
+    def toggle_lyrics_view(self):
+        if self.view == "lyrics":
+            self.view = self.previous_view
+            self.set_status(
+                "Returned from lyrics.",
+                "The cat closed the songbook."
+            )
+            return
+
+        self.previous_view = (
+            self.view
+            if self.view in {"library", "stash"}
+            else "library"
+        )
+        self.view = "lyrics"
+        self.lyrics_follow = True
+
+        if self.current_lyrics is None:
+            self.set_status(
+                "No lyrics found for the current track.",
+                "The cat found no words for this meow."
+            )
+        else:
+            source = self.current_lyrics.source
+            self.set_status(
+                f"Lyrics opened: {source}",
+                f"Songbook opened: {source}"
+            )
+
+    def draw_lyrics(
+        self,
+        stdscr,
+        width,
+        list_start,
+        list_height,
+    ):
+        document = self.current_lyrics
+
+        if self.current is None:
+            message = self.text(
+                "Play a track to view lyrics.",
+                "Pick a meow before opening the songbook."
+            )
+            try:
+                stdscr.addstr(
+                    list_start,
+                    2,
+                    message[:max(1, width - 4)],
+                    curses.A_DIM,
+                )
+            except curses.error:
+                pass
+            return
+
+        if document is None or not document.lines:
+            message = self.text(
+                "No sidecar or embedded lyrics found.",
+                "No lyrics found. The cat may be improvising."
+            )
+            try:
+                stdscr.addstr(
+                    list_start,
+                    2,
+                    message[:max(1, width - 4)],
+                    curses.A_DIM,
+                )
+            except curses.error:
+                pass
+            return
+
+        try:
+            position = float(
+                self.mpv.get_property("time-pos") or 0.0
+            )
+        except (TypeError, ValueError):
+            position = 0.0
+
+        current_index = (
+            document.current_index(position)
+            if document.synced
+            else None
+        )
+
+        if document.synced and self.lyrics_follow:
+            center = current_index or 0
+            start = max(0, center - list_height // 2)
+            start = min(
+                start,
+                max(0, len(document.lines) - list_height),
+            )
+            self.lyrics_scroll = start
+        else:
+            self.lyrics_scroll = max(
+                0,
+                min(
+                    self.lyrics_scroll,
+                    max(0, len(document.lines) - list_height),
+                ),
+            )
+
+        end = min(
+            len(document.lines),
+            self.lyrics_scroll + list_height,
+        )
+
+        for row, index in enumerate(
+            range(self.lyrics_scroll, end)
+        ):
+            line = document.lines[index]
+            selected = (
+                document.synced
+                and current_index is not None
+                and index == current_index
+            )
+
+            if selected and not self.serious_mode:
+                prefix = ">♫< "
+            elif selected:
+                prefix = "▶ "
+            else:
+                prefix = "   "
+
+            attr = curses.A_BOLD if selected else curses.A_DIM
+            try:
+                stdscr.addstr(
+                    list_start + row,
+                    2,
+                    (prefix + line.text)[:max(1, width - 4)],
+                    attr,
+                )
+            except curses.error:
+                pass
+
     def current_album_art(self):
         if (
             not self.album_art.supported
