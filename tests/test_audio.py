@@ -1,8 +1,9 @@
+import inspect
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from meowplayer import MeowPlayer, build_mpv_command
+from meowplayer import MPVController, MeowPlayer, build_mpv_command
 
 
 class FakeMPV:
@@ -65,6 +66,18 @@ class AudioEngineTests(unittest.TestCase):
             artist_title=f"Track {index}"
         )
         return player
+
+    def test_meowplayer_constructor_accepts_online_lyrics_flag(self):
+        parameters = inspect.signature(MeowPlayer.__init__).parameters
+
+        self.assertIn("lyrics_online_enabled", parameters)
+
+    def test_mpv_controller_does_not_own_ui_feature_flags(self):
+        parameters = inspect.signature(MPVController.__init__).parameters
+
+        self.assertNotIn("lyrics_online_enabled", parameters)
+        self.assertNotIn("visualizer_enabled", parameters)
+        self.assertNotIn("filesystem_watch_enabled", parameters)
 
     def test_mpv_command_enables_native_audio_features(self):
         command = build_mpv_command(
