@@ -315,10 +315,6 @@ class MPVController:
         gapless_mode="weak",
         replaygain_mode="track",
         replaygain_preamp=0.0,
-        lyrics_enabled=True,
-        lyrics_online_enabled=True,
-        visualizer_enabled=True,
-        filesystem_watch_enabled=True,
     ):
         self.socket_path = os.path.join(
             tempfile.gettempdir(),
