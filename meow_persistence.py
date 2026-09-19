@@ -19,6 +19,8 @@ DEFAULT_STATE = {
     "current_track": None,
     "position": 0.0,
     "catnip_stash": [],
+    "shuffle_bag": [],
+    "playback_history": [],
 }
 
 
