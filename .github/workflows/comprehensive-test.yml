@@ -32,7 +32,7 @@ concurrency:
 env:
   PYTHONUTF8: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  MEOW_CI_REVISION: "exact-primed-index-v8"
+  MEOW_CI_REVISION: "no-redundant-play-v9"
 
 jobs:
   source-integrity:
