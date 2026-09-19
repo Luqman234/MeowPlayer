@@ -364,6 +364,15 @@ class MeowPlayer:
             else "songs"
         )
         self.catnip_stash = []
+        for saved_path in self.saved_state.get("catnip_stash", []):
+            try:
+                resolved = Path(saved_path).expanduser().resolve()
+            except (OSError, RuntimeError, TypeError):
+                continue
+
+            saved_index = self.song_lookup.get(resolved)
+            if saved_index is not None:
+                self.catnip_stash.append(saved_index)
 
         self.search_query = ""
         self.search_active = False
@@ -464,6 +473,10 @@ class MeowPlayer:
                 else None
             ),
             "position": max(0.0, position),
+            "catnip_stash": [
+                str(self.songs[index].resolve())
+                for index in self.catnip_stash
+            ],
         }
 
     def persist_state(self, force=False):
