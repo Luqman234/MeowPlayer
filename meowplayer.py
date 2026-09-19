@@ -7,6 +7,7 @@ import os
 import queue
 import random
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,7 @@ try:
 except ImportError:
     MutagenFile = None
 
+from meow_catalog import LibraryCatalog
 from meow_persistence import (
     load_config,
     load_state,
@@ -29,7 +31,7 @@ from meow_persistence import (
 from mpris_support import MPRISBridge
 
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -367,6 +369,7 @@ class MeowPlayer:
         saved_state=None,
         restore_session=True,
         mpris_enabled=True,
+        rebuild_catalog=False,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.serious_mode = serious_mode
@@ -375,11 +378,16 @@ class MeowPlayer:
         self.restore_session_enabled = restore_session
         self.mpris_enabled = mpris_enabled and not _is_termux()
 
+        self.catalog = None
+        self.catalog_error = None
+        self.catalog_hits = 0
+        self.catalog_refreshed = 0
+        self.catalog_pruned = 0
+
         self.songs = self.find_songs()
-        self.metadata = [
-            self.read_metadata(path)
-            for path in self.songs
-        ]
+        self.metadata = self.load_library_metadata(
+            rebuild=rebuild_catalog
+        )
         self.song_lookup = {
             song.resolve(): index for index, song in enumerate(self.songs)
         }
@@ -420,22 +428,38 @@ class MeowPlayer:
         self.search_active = False
 
         tagged_count = sum(meta.tagged for meta in self.metadata)
-        if MutagenFile is None:
+        if self.catalog_error:
             initial_serious = (
-                "Mutagen is not installed; using filename/folder fallbacks."
+                f"Library ready without cache: {tagged_count}/"
+                f"{len(self.metadata)} track(s) tagged. "
+                f"Catalog error: {self.catalog_error}"
             )
             initial_cat = (
-                "No tag-reader detected. The cat is guessing from filenames."
+                f"The Cat Catalog fell off the shelf, but the nest still "
+                f"loaded {len(self.metadata)} meow(s): {self.catalog_error}"
             )
         else:
             initial_serious = (
-                f"Library ready: metadata found on {tagged_count}/"
-                f"{len(self.metadata)} track(s)."
+                f"Cat Catalog: {self.catalog_hits} cached, "
+                f"{self.catalog_refreshed} refreshed, "
+                f"{self.catalog_pruned} pruned; "
+                f"{tagged_count}/{len(self.metadata)} tagged."
             )
             initial_cat = (
-                f"The cat sniffed tags on {tagged_count}/"
-                f"{len(self.metadata)} meow(s)."
+                f"Cat Catalog checked: {self.catalog_hits} remembered, "
+                f"{self.catalog_refreshed} re-sniffed, "
+                f"{self.catalog_pruned} vanished; "
+                f"{tagged_count}/{len(self.metadata)} tagged meow(s)."
             )
+
+            if MutagenFile is None and self.catalog_refreshed:
+                initial_serious += (
+                    " Mutagen unavailable; refreshed files used fallbacks."
+                )
+                initial_cat += (
+                    " No tag-reader today, so fresh tracks were guessed "
+                    "from filenames."
+                )
 
         self.status_message = self.text(initial_serious, initial_cat)
         self.quote = random.choice(CAT_QUOTES)
@@ -676,6 +700,15 @@ class MeowPlayer:
     def shutdown(self):
         self.persist_state(force=True)
         self.mpris.stop()
+
+        if self.catalog is not None:
+            try:
+                self.catalog.commit()
+                self.catalog.close()
+            except sqlite3.Error:
+                pass
+            self.catalog = None
+
         self.mpv.quit()
 
     def text(self, serious, cat):
@@ -743,6 +776,79 @@ class MeowPlayer:
             if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
                 songs.append(path)
         return sorted(songs, key=lambda p: p.name.casefold())
+
+    def metadata_from_catalog(self, path, cached):
+        return TrackMetadata(
+            path=path,
+            title=cached["title"],
+            artist=cached["artist"],
+            album=cached["album"],
+            album_artist=cached["album_artist"],
+            track_number=int(cached["track_number"]),
+            track_text=cached["track_text"],
+            year=cached["year"],
+            folder=cached["folder"],
+            filename=cached["filename"],
+            tagged=bool(cached["tagged"]),
+        )
+
+    def load_library_metadata(self, rebuild=False):
+        try:
+            self.catalog = LibraryCatalog(self.music_dir)
+
+            if rebuild:
+                self.catalog_pruned += self.catalog.clear_root()
+
+            metadata = []
+            for path in self.songs:
+                try:
+                    stat_result = path.stat()
+                except OSError:
+                    metadata.append(self.read_metadata(path))
+                    self.catalog_refreshed += 1
+                    continue
+
+                cached = self.catalog.get(path, stat_result)
+                if cached is not None:
+                    metadata.append(
+                        self.metadata_from_catalog(path, cached)
+                    )
+                    self.catalog_hits += 1
+                    continue
+
+                parsed = self.read_metadata(path)
+                metadata.append(parsed)
+                self.catalog.put(path, stat_result, parsed)
+                self.catalog_refreshed += 1
+
+            self.catalog_pruned += self.catalog.prune(self.songs)
+            self.catalog.commit()
+            return metadata
+
+        except (
+            OSError,
+            RuntimeError,
+            sqlite3.Error,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            self.catalog_error = str(exc)
+
+            if self.catalog is not None:
+                try:
+                    self.catalog.close()
+                except sqlite3.Error:
+                    pass
+                self.catalog = None
+
+            self.catalog_hits = 0
+            self.catalog_refreshed = len(self.songs)
+            self.catalog_pruned = 0
+            return [
+                self.read_metadata(path)
+                for path in self.songs
+            ]
 
     def read_metadata(self, path):
         title = path.stem
@@ -2140,6 +2246,11 @@ def parse_args():
         action="store_true",
         help="do not restore the previous playback session"
     )
+    parser.add_argument(
+        "--rebuild-catalog",
+        action="store_true",
+        help="discard cached metadata for this library and rebuild it"
+    )
 
     return parser.parse_args()
 
@@ -2184,6 +2295,7 @@ def main():
             saved_state=state,
             restore_session=restore_session,
             mpris_enabled=mpris_enabled,
+            rebuild_catalog=args.rebuild_catalog,
         )
     except FileNotFoundError:
         print(
