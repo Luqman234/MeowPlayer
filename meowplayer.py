@@ -439,7 +439,17 @@ class MPVController:
         self.command("loadfile", str(filename), "append")
 
     def advance_playlist(self):
-        return self.command("playlist-next", "force")
+        try:
+            current = int(self.get_property("playlist-current-pos"))
+            count = int(self.get_property("playlist-count"))
+        except (TypeError, ValueError):
+            return None
+
+        target = current + 1
+        if current < 0 or target >= count:
+            return None
+
+        return self.command("playlist-play-index", target)
 
     def clear_future_playlist(self):
         try:
