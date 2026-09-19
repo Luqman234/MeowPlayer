@@ -413,7 +413,14 @@ class MeowPlayer:
 
         self.mpris = MPRISBridge(self.external_actions)
         if self.mpris_enabled:
+            requested_mpris = True
             self.mpris_enabled = self.mpris.start()
+            if requested_mpris and not self.mpris_enabled:
+                error = self.mpris.error or "unknown MPRIS startup error"
+                self.set_status(
+                    f"MPRIS unavailable: {error}",
+                    f"The media-key cat tripped over D-Bus: {error}"
+                )
 
     def restore_session(self, saved_state):
         track = saved_state.get("current_track")
