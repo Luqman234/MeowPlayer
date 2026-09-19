@@ -10,6 +10,9 @@ DEFAULT_CONFIG = {
     "restore_session": True,
     "mpris_enabled": True,
     "album_art_enabled": True,
+    "gapless_mode": "weak",
+    "replaygain_mode": "track",
+    "replaygain_preamp": 0.0,
 }
 
 DEFAULT_STATE = {
