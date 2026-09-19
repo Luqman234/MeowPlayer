@@ -73,7 +73,7 @@ Library state is remapped by **file path**, not by old numeric index, so queue e
 - Automatic next-track playback
 - **Gapless playback** with one-track-ahead mpv playlist priming
 - Native **ReplayGain** loudness normalization through mpv
-- Synchronized **LRC lyrics** plus embedded/plain lyrics support
+- Synchronized **LRC lyrics** with automatic LRCLIB download/cache plus embedded/plain lyrics support
 - Dedicated live-follow **Songbook** lyrics view
 - Optional **CAVA spectrum visualizer** with raw FFT bar integration
 - Persistent session state and paused resume
@@ -128,6 +128,7 @@ meowplayer --gapless-mode weak
 meowplayer --replaygain track
 meowplayer --replaygain album --replaygain-preamp -1.0
 meowplayer --no-lyrics
+meowplayer --no-online-lyrics
 meowplayer --no-visualizer
 meowplayer --no-watch
 meowplayer --version
@@ -669,7 +670,11 @@ Lyrics are resolved in this order:
 ```text
 same-name .lrc sidecar
         ↓
+downloaded LRCLIB cache
+        ↓
 embedded synchronized lyrics
+        ↓
+LRCLIB synchronized lookup (background)
         ↓
 same-name .txt sidecar
         ↓
@@ -694,6 +699,22 @@ A synchronized `.lrc` file can look like:
 ```
 
 Multiple timestamps on one line and standard `[offset:+/-milliseconds]` tags are supported.
+
+If no local synchronized lyric exists, MeowPlayer automatically asks **LRCLIB** for synchronized lyrics in the background. Playback and the TUI stay responsive while the request is running. Successful results are stored under:
+
+```text
+~/.cache/meowplayer/lyrics/
+```
+
+(or `$XDG_CACHE_HOME/meowplayer/lyrics/` when `XDG_CACHE_HOME` is set).
+
+The cache is reused on later plays, including offline runs. A user-provided same-name `.lrc` file always takes priority over downloaded lyrics.
+
+Disable only online lookup for one run while keeping local/embedded lyrics enabled:
+
+```bash
+meowplayer --no-online-lyrics
+```
 
 When synchronized lyrics are available, MeowPlayer also shows the current lyric directly in the normal player:
 
@@ -724,8 +745,11 @@ meowplayer --no-lyrics
 The persistent config supports:
 
 ```json
-"lyrics_enabled": true
+"lyrics_enabled": true,
+"lyrics_online_enabled": true
 ```
+
+Set `lyrics_online_enabled` to `false` to keep the Songbook fully local while still reading sidecar, cached, and embedded lyrics.
 
 ## Audio visualizer
 
@@ -1075,6 +1099,7 @@ Example:
   "filesystem_watch_enabled": true,
   "gapless_mode": "weak",
   "lyrics_enabled": true,
+  "lyrics_online_enabled": true,
   "mpris_enabled": true,
   "music_dir": "/home/you/Music",
   "replaygain_mode": "track",
