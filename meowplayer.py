@@ -463,6 +463,8 @@ class MeowPlayer:
         gapless_mode="weak",
         replaygain_mode="track",
         replaygain_preamp=0.0,
+        lyrics_enabled=True,
+        visualizer_enabled=True,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.serious_mode = serious_mode
