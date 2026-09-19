@@ -31,6 +31,10 @@ Music Nest — scent: 'space' (2 meows)
 - Save the stash as an `.m3u` playlist
 - Load `.m3u` / `.m3u8` playlists back into the stash
 - Previous-track history
+- Persistent XDG config and playback state
+- Restores volume, shuffle, repeat, library view, last track, and position
+- MPRIS D-Bus integration for desktop media controls
+- Playerctl, Waybar, and media-key friendly transport controls
 - Cat mascot in the header
 - Cat-themed startup splash
 - Random rotating cat quotes
@@ -76,7 +80,7 @@ If Mutagen is unavailable, MeowPlayer still runs using filename/folder fallbacks
 ### Arch Linux
 
 ```bash
-sudo pacman -S python mpv python-mutagen
+sudo pacman -S python mpv python-mutagen python-dbus-next
 ```
 
 ### Debian / Ubuntu
@@ -124,6 +128,8 @@ python meowplayer.py
 ```
 
 The Termux build of `mpv` is configured for Android audio output, so MeowPlayer continues to use the same mpv backend as on desktop Linux.
+
+Persistent config/state works normally in Termux. MPRIS is intentionally disabled there because a standard Linux desktop D-Bus session is normally not present.
 
 For smaller phone displays, MeowPlayer lowers its minimum supported width from 46 columns to 32 columns when Termux is detected. Long labels and footer hints are truncated automatically rather than preventing the player from opening.
 
@@ -311,6 +317,105 @@ Loaded playlist entries must point to songs that are already inside the current 
 
 > `Q` now opens The Catnip Stash, so quitting moved to `X`.
 
+## Persistent config and state
+
+MeowPlayer now follows the XDG base-directory layout.
+
+By default:
+
+```text
+~/.config/meowplayer/config.json
+~/.local/state/meowplayer/state.json
+```
+
+If `XDG_CONFIG_HOME` or `XDG_STATE_HOME` is set, MeowPlayer uses those locations instead.
+
+The config file is user-editable and currently stores:
+
+```json
+{
+  "mpris_enabled": true,
+  "music_dir": "/home/you/Music",
+  "restore_session": true
+}
+```
+
+The state file is managed automatically and remembers:
+
+- Meow Level / volume
+- Pounce Mode / shuffle
+- Tail-Chase / repeat
+- current Songs / Artists / Albums / Nests view
+- last track
+- last playback position
+
+State is written periodically and again on shutdown.
+
+When session restore is enabled, MeowPlayer loads the previous track at its saved position **paused**. It never auto-blasts audio just because the program was opened.
+
+You can bypass either feature for one launch:
+
+```bash
+python meowplayer.py --no-restore
+python meowplayer.py --no-mpris
+```
+
+## MPRIS and media keys
+
+On Linux desktops, MeowPlayer exports the standard MPRIS service:
+
+```text
+org.mpris.MediaPlayer2.meowplayer
+```
+
+MPRIS exposes:
+
+- Play / Pause / PlayPause
+- Next / Previous
+- Stop
+- seek and absolute position
+- current title / artist / album metadata
+- playback position and duration
+- volume
+- Pounce Mode as MPRIS Shuffle
+- Tail-Chase as MPRIS LoopStatus
+- remote Quit
+
+This makes MeowPlayer visible to MPRIS-aware desktop components and tools.
+
+### Test it with playerctl
+
+On Arch:
+
+```bash
+sudo pacman -S playerctl
+```
+
+Then, while MeowPlayer is running:
+
+```bash
+playerctl --player=meowplayer status
+playerctl --player=meowplayer metadata
+playerctl --player=meowplayer play-pause
+playerctl --player=meowplayer next
+playerctl --player=meowplayer previous
+```
+
+### Hyprland media-key example
+
+If your compositor does not bind hardware media keys automatically, route them through `playerctl`:
+
+```ini
+bindel = , XF86AudioPlay, exec, playerctl --player=meowplayer play-pause
+bindel = , XF86AudioNext, exec, playerctl --player=meowplayer next
+bindel = , XF86AudioPrev, exec, playerctl --player=meowplayer previous
+bindel = , XF86AudioStop, exec, playerctl --player=meowplayer stop
+```
+
+That means your keyboard's Play/Pause, Next, Previous, and Stop keys can control MeowPlayer even when its terminal is not focused.
+
+MPRIS requires a user D-Bus session plus the Python `dbus-next` package. If either is missing, MeowPlayer simply runs without MPRIS rather than failing to start.
+
 ## Cat modes
 
 Normal mode is already cat-themed:
@@ -403,6 +508,8 @@ This means MeowPlayer does not need to implement MP3, FLAC, AAC, Opus, and other
 ```text
 MeowPlayer/
 ├── meowplayer.py
+├── meow_persistence.py
+├── mpris_support.py
 ├── requirements.txt
 ├── README.md
 ├── LICENSE
@@ -426,9 +533,6 @@ git push
 Some possible future improvements:
 
 - Album-art support in compatible terminals
-- Persistent configuration and playback state
-- Media-key support
-- MPRIS integration
 - Better shuffle history
 - Packaging as a system command
 - Additional scientifically unnecessary cat behavior
