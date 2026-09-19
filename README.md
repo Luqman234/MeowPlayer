@@ -1,11 +1,11 @@
 # MeowPlayer 🐱🎵
 
-**MeowPlayer 0.10.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
+**MeowPlayer 0.11.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
 
 Python and `curses` provide the interface, `mpv` handles playback, Mutagen reads music metadata, SQLite powers the persistent **Cat Catalog**, and Linux desktops can control the player through MPRIS / D-Bus.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.10.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.11.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -41,6 +41,8 @@ Music Nest / Songs — 842 meow(s)
 - Persistent Previous-history with shuffle-aware back/forward behavior
 - Tail-Chase repeat
 - Automatic next-track playback
+- **Gapless playback** with one-track-ahead mpv playlist priming
+- Native **ReplayGain** loudness normalization through mpv
 - Persistent session state and paused resume
 - Linux MPRIS / D-Bus integration
 - `playerctl`, desktop media keys, and MPRIS-aware widget support
@@ -86,6 +88,9 @@ meowplayer --no-mpris
 meowplayer --no-restore
 meowplayer --rebuild-catalog
 meowplayer --no-album-art
+meowplayer --gapless-mode weak
+meowplayer --replaygain track
+meowplayer --replaygain album --replaygain-preamp -1.0
 meowplayer --version
 ```
 
@@ -455,11 +460,11 @@ to:
 
 The old database is migrated automatically.
 
-MeowPlayer 0.10.0 adds genre and duration to the catalog schema. Existing Pawmarks and listening history are preserved, but cached tracks are deliberately re-sniffed once so those new fields can be populated. Later launches return to normal incremental caching.
+MeowPlayer 0.9.0 added genre and duration to the catalog schema. Existing Pawmarks and listening history were preserved, but cached tracks were deliberately re-sniffed once so those fields could be populated. Later launches return to normal incremental caching.
 
 ## Album art
 
-MeowPlayer 0.10.0 can display real album artwork directly inside **Kitty terminals** using Kitty's terminal graphics protocol.
+MeowPlayer 0.11.0 can display real album artwork directly inside **Kitty terminals** using Kitty's terminal graphics protocol.
 
 Album art is enabled automatically when:
 
@@ -514,6 +519,111 @@ The persistent config also supports:
 If the terminal is unsupported, the window is too small, or no cover exists, MeowPlayer simply falls back to the normal text UI.
 
 Resolved covers are also exported over MPRIS as `mpris:artUrl`, allowing compatible desktop widgets and media controls to reuse the same cached image.
+
+## Gapless playback and ReplayGain
+
+MeowPlayer 0.11.0 upgrades the audio engine in two places.
+
+### Gapless playback
+
+MeowPlayer no longer waits for a song to reach EOF before deciding what comes next.
+
+While a track is playing, it resolves the next track using the same playback priority as the rest of the app:
+
+```text
+Catnip Stash
+      ↓
+Pounce Bag
+      ↓
+active Smart Mix
+      ↓
+normal sequential library
+```
+
+That next track is inserted into mpv's internal playlist **before the current track ends**:
+
+```text
+current decoder
+      │
+      ├──────────────┐
+      ▼              ▼
+ Track A          Track B already primed
+      │              │
+      └──── boundary ┘
+             ↓
+       mpv advances
+             ↓
+MeowPlayer commits queue/history state
+             ↓
+       Track C is primed
+```
+
+This lets mpv keep its audio output alive across compatible files instead of MeowPlayer tearing down one file and loading the next only after EOF.
+
+The default is:
+
+```json
+"gapless_mode": "weak"
+```
+
+Available modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `weak` | Default. Keeps the audio device open when mpv can safely reuse the output format; may reopen it when formats differ. |
+| `yes` | Strongest gapless behavior. Keeps the first output format for later tracks, which may require resampling. |
+| `no` | Disables MeowPlayer's gapless preload and mpv gapless output mode. |
+
+Override it for one launch:
+
+```bash
+meowplayer --gapless-mode weak
+meowplayer --gapless-mode yes
+meowplayer --gapless-mode no
+```
+
+Queue edits, Pounce Mode changes, Tail-Chase changes, and Smart Mix playback all re-prime the upcoming file so the internal mpv playlist remains consistent with MeowPlayer's own Next logic.
+
+### ReplayGain
+
+ReplayGain uses gain values already stored in the audio file's metadata. MeowPlayer delegates the actual gain calculation and clipping protection to mpv.
+
+The default mode is:
+
+```json
+"replaygain_mode": "track"
+```
+
+Modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `track` | Normalize each track independently. Good for shuffled libraries and mixed playlists. |
+| `album` | Prefer album gain for preserving intended loudness relationships within an album; falls back to track gain when album gain is unavailable. |
+| `no` | Disable ReplayGain adjustment. |
+
+MeowPlayer also defaults to:
+
+```json
+"replaygain_preamp": 0.0
+```
+
+and starts mpv with clipping protection enabled:
+
+```text
+--replaygain-clip=no
+```
+
+Examples:
+
+```bash
+meowplayer --replaygain track
+meowplayer --replaygain album
+meowplayer --replaygain no
+meowplayer --replaygain track --replaygain-preamp -1.5
+```
+
+ReplayGain only changes loudness when the file contains usable ReplayGain metadata. Files without those tags remain effectively unadjusted with the default preamp.
 
 ## Pounce Bag shuffle
 
@@ -648,8 +758,11 @@ Example:
 ```json
 {
   "album_art_enabled": true,
+  "gapless_mode": "weak",
   "mpris_enabled": true,
   "music_dir": "/home/you/Music",
+  "replaygain_mode": "track",
+  "replaygain_preamp": 0.0,
   "restore_session": true
 }
 ```
@@ -770,7 +883,7 @@ The mascot reacts to player state:
 | Catnip queued | Guarding Catnip |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.10.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.11.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -835,8 +948,11 @@ The mascot reacts to player state:
                    │
              mpv JSON IPC
                    │
+             next-track priming
+                   │
                    ▼
                   mpv
+          gapless + ReplayGain
                    │
                    ▼
               audio output
@@ -847,7 +963,7 @@ The mascot reacts to player state:
          playerctl / media keys
 ```
 
-Python owns the interface, library model, Smart Mix generation, search, persistence, queueing, shuffle logic, album-art resolution, and cat-related responsibilities. Mutagen reads metadata, embedded artwork, and stream duration. SQLite stores the persistent library model. Pillow normalizes artwork into cached PNG files. `mpv` handles decoding and audio playback.
+Python owns the interface, library model, Smart Mix generation, search, persistence, queueing, shuffle logic, one-track-ahead gapless scheduling, album-art resolution, and cat-related responsibilities. Mutagen reads metadata, embedded artwork, and stream duration. SQLite stores the persistent library model. Pillow normalizes artwork into cached PNG files. `mpv` handles decoding, ReplayGain, audio output, and the actual gapless handoff between primed playlist entries.
 
 ## Build packages
 
@@ -867,8 +983,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.10.0-py3-none-any.whl
-└── meowplayer_terminal-0.10.0.tar.gz
+├── meowplayer_terminal-0.11.0-py3-none-any.whl
+└── meowplayer_terminal-0.11.0.tar.gz
 ```
 
 The installed CLI is still:
@@ -893,6 +1009,7 @@ MeowPlayer/
 ├── LICENSE
 ├── tests/
 │   ├── test_album_art.py
+│   ├── test_audio.py
 │   ├── test_catalog.py
 │   ├── test_shuffle.py
 │   └── test_smart.py
@@ -942,8 +1059,8 @@ Potential next upgrades:
 
 - additional terminal graphics protocols beyond Kitty
 - user-defined Smart Mix rules
-- ReplayGain / loudness normalization
-- gapless playback improvements
+- ReplayGain tag inspection / loudness diagnostics
+- broader gapless stress testing across mixed sample rates and codecs
 - release automation and tagged GitHub releases
 - Arch `PKGBUILD` / AUR packaging
 - additional scientifically unnecessary cat behavior
