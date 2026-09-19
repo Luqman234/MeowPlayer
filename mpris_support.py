@@ -7,13 +7,14 @@ from copy import deepcopy
 MPRIS_AVAILABLE = False
 
 try:
-    from dbus_next import PropertyAccess, Variant
+    from dbus_next import PropertyAccess, RequestNameReply, Variant
     from dbus_next.aio import MessageBus
     from dbus_next.service import ServiceInterface, dbus_property, method, signal
 
     MPRIS_AVAILABLE = True
 except ImportError:
     PropertyAccess = None
+    RequestNameReply = None
     Variant = None
     MessageBus = None
     ServiceInterface = object
@@ -327,6 +328,7 @@ class MPRISBridge:
         self._player_interface = None
         self._started = False
         self._error = None
+        self._ready = threading.Event()
 
     @property
     def available(self):
@@ -347,14 +349,13 @@ class MPRISBridge:
         with self._snapshot_lock:
             return deepcopy(self._snapshot)
 
-    def start(self):
+    def start(self, timeout=1.5):
         if not MPRIS_AVAILABLE:
             self._error = "python-dbus-next is not installed"
             return False
 
-        if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
-            self._error = "no D-Bus session bus is available"
-            return False
+        self._ready.clear()
+        self._error = None
 
         self._thread = threading.Thread(
             target=self._thread_main,
@@ -362,14 +363,23 @@ class MPRISBridge:
             daemon=True,
         )
         self._thread.start()
-        return True
+
+        # Do not claim MPRIS is active until the service has actually
+        # connected to the user bus and acquired its well-known name.
+        self._ready.wait(timeout)
+        if not self._ready.is_set():
+            self._error = "timed out while registering on the D-Bus session bus"
+            return False
+
+        return self._started
 
     def _thread_main(self):
         try:
             asyncio.run(self._serve())
         except Exception as exc:
-            self._error = str(exc)
+            self._error = f"{type(exc).__name__}: {exc}"
             self._started = False
+            self._ready.set()
 
     async def _serve(self):
         self._loop = asyncio.get_running_loop()
@@ -381,8 +391,23 @@ class MPRISBridge:
         self._bus.export(OBJECT_PATH, root_interface)
         self._bus.export(OBJECT_PATH, self._player_interface)
 
-        await self._bus.request_name(BUS_NAME)
+        reply = await self._bus.request_name(BUS_NAME)
+
+        if reply not in (
+            RequestNameReply.PRIMARY_OWNER,
+            RequestNameReply.ALREADY_OWNER,
+        ):
+            self._error = (
+                f"could not own {BUS_NAME}: "
+                f"{getattr(reply, 'name', str(reply))}"
+            )
+            self._started = False
+            self._ready.set()
+            self._bus.disconnect()
+            return
+
         self._started = True
+        self._ready.set()
 
         await self._bus.wait_for_disconnect()
         self._started = False
