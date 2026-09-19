@@ -31,7 +31,7 @@ from meow_persistence import (
 from mpris_support import MPRISBridge
 
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -131,6 +131,8 @@ class TrackMetadata:
     track_number: int
     track_text: str
     year: str
+    genre: str
+    duration: float
     folder: str
     filename: str
     tagged: bool
@@ -811,6 +813,8 @@ class MeowPlayer:
             track_number=int(cached["track_number"]),
             track_text=cached["track_text"],
             year=cached["year"],
+            genre=cached["genre"],
+            duration=float(cached["duration"]),
             folder=cached["folder"],
             filename=cached["filename"],
             tagged=bool(cached["tagged"]),
@@ -882,6 +886,8 @@ class MeowPlayer:
         track_number = 0
         track_text = ""
         year = ""
+        genre = ""
+        duration = 0.0
         tagged = False
 
         try:
@@ -930,6 +936,19 @@ class MeowPlayer:
                     "year",
                     "©day",
                 )
+                raw_genre = _first_tag(
+                    tags,
+                    "genre",
+                    "©gen",
+                )
+
+                try:
+                    duration = float(
+                        getattr(getattr(audio, "info", None), "length", 0.0)
+                        or 0.0
+                    )
+                except (TypeError, ValueError):
+                    duration = 0.0
 
                 tagged = any(
                     (
@@ -939,6 +958,7 @@ class MeowPlayer:
                         raw_album_artist,
                         raw_track,
                         raw_year,
+                        raw_genre,
                     )
                 )
 
@@ -953,6 +973,7 @@ class MeowPlayer:
 
                 track_number, track_text = _parse_track_number(raw_track)
                 year = _clean_year(raw_year)
+                genre = raw_genre
 
             except Exception:
                 # Bad or unsupported tags should never break the library.
@@ -970,6 +991,8 @@ class MeowPlayer:
             track_number=track_number,
             track_text=track_text,
             year=year,
+            genre=genre,
+            duration=max(0.0, duration),
             folder=folder,
             filename=path.name,
             tagged=tagged,
@@ -988,6 +1011,7 @@ class MeowPlayer:
         fields = [
             meta.title,
             meta.year,
+            meta.genre,
             meta.folder,
             meta.filename,
             relative,
@@ -1156,19 +1180,27 @@ class MeowPlayer:
 
     def track_row_text(self, index):
         meta = self.meta(index)
+        duration = (
+            f" · {self.format_time(meta.duration)}"
+            if meta.duration > 0
+            else ""
+        )
+        genre = f" · {meta.genre}" if meta.genre else ""
 
         if self.library_view in ("songs", "pawmarks"):
             text = meta.artist_title
             if meta.album != "Unknown Album":
                 text += f" · {meta.album}"
+            if meta.genre:
+                text += genre
             if self.stats_for(index)["favorite"]:
                 text = f"★ {text}"
-            return text
+            return text + duration
 
         if self.library_view == "history":
             stats = self.stats_for(index)
             count = stats["play_count"]
-            return f"{meta.artist_title} · played {count}×"
+            return f"{meta.artist_title} · played {count}×{duration}"
 
         if self.library_view == "artists":
             text = meta.title
@@ -1176,7 +1208,9 @@ class MeowPlayer:
                 text += f" · {meta.album}"
             if meta.year:
                 text += f" ({meta.year})"
-            return text
+            if meta.genre:
+                text += genre
+            return text + duration
 
         if self.library_view == "albums":
             number = (
@@ -1184,9 +1218,9 @@ class MeowPlayer:
                 if meta.track_number
                 else "    "
             )
-            return f"{number}{meta.title} — {meta.artist}"
+            return f"{number}{meta.title} — {meta.artist}{duration}"
 
-        return meta.filename
+        return f"{meta.filename}{duration}"
 
     def library_rows(self):
         ordered = self.ordered_library_indices()
