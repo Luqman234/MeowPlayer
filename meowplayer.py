@@ -29,6 +29,9 @@ from meow_persistence import (
 from mpris_support import MPRISBridge
 
 
+__version__ = "0.6.0"
+
+
 SUPPORTED_EXTENSIONS = {
     ".mp3", ".flac", ".ogg", ".opus",
     ".wav", ".m4a", ".aac", ".wma"
@@ -52,6 +55,11 @@ CAT_QUOTES = [
     "Paws on the keyboard. Music in the speakers.",
     "The Catnip Stash is legally considered organized chaos.",
     "Metadata is just a cat reading the tiny label on the record.",
+    "The queue has been inspected. Several times. For quality control.",
+    "No keyboard is safe from paws.",
+    "The waveform has been judged acceptable by the cat.",
+    "Local files. Local cat. Maximum ownership.",
+    "A suspicious amount of engineering has gone into this meow.",
 ]
 
 CAT_MASCOT = (
@@ -59,6 +67,39 @@ CAT_MASCOT = (
     r"( o.o )",
     r" > ^ <",
 )
+
+CAT_MOOD_MASCOTS = {
+    "Waiting": (
+        " /\\_/\\",
+        r"( -.- )",
+        r" > ^ <  zZ",
+    ),
+    "Purring": (
+        " /\\_/\\",
+        r"( ^.^ )",
+        r" > ♫ <",
+    ),
+    "Loafing": (
+        " /\\_/\\",
+        r"( -.- )",
+        r" > ^ <  ...",
+    ),
+    "Zoomies": (
+        " /\\_/\\",
+        r"( >.< )",
+        r" > ~ <  !!",
+    ),
+    "Tail-Chasing": (
+        " /\\_/\\",
+        r"( @.@ )",
+        r" > ↻ <",
+    ),
+    "Guarding Catnip": (
+        " /\\_/\\",
+        r"( o.o )",
+        r" > ~ <",
+    ),
+}
 
 MAXIMUM_MEOW_MASCOT = (
     "  /\\_/\\      ♪",
@@ -642,6 +683,59 @@ class MeowPlayer:
 
     def set_status(self, serious, cat):
         self.status_message = self.text(serious, cat)
+
+    def cat_mood(self):
+        if self.current is None:
+            return "Waiting"
+
+        paused = bool(self.mpv.get_property("pause"))
+        if paused:
+            return "Loafing"
+        if self.repeat:
+            return "Tail-Chasing"
+        if self.shuffle:
+            return "Zoomies"
+        if self.catnip_stash:
+            return "Guarding Catnip"
+        return "Purring"
+
+    def live_cat_mascot(self):
+        if self.maximum_meow:
+            mood = self.cat_mood()
+            middle = {
+                "Waiting": r" ( =-.-=)   zZ",
+                "Purring": r" ( =^.^=)   ♫",
+                "Loafing": r" ( =-.-=)   ...",
+                "Zoomies": r" ( =>.<=)   !!",
+                "Tail-Chasing": r" ( =@.@=)   ↻",
+                "Guarding Catnip": r" ( =o.o=)   ~",
+            }[mood]
+            return (
+                "  /\\_/\\      ♪",
+                middle,
+                r'  (")_(")   ♪',
+            )
+
+        return CAT_MOOD_MASCOTS[self.cat_mood()]
+
+    def next_treat_label(self):
+        if not self.songs:
+            return "none"
+
+        if self.repeat and self.current is not None:
+            return f"{self.meta(self.current).title} ↻"
+
+        if self.catnip_stash:
+            return self.meta(self.catnip_stash[0]).artist_title
+
+        if self.shuffle:
+            return "mystery meow (Pounce Mode)"
+
+        if self.current is None:
+            return self.meta(0).artist_title
+
+        next_index = (self.current + 1) % len(self.songs)
+        return self.meta(next_index).artist_title
 
     def find_songs(self):
         songs = []
@@ -1280,8 +1374,9 @@ class MeowPlayer:
                 pass
             return 2
 
-        mascot = MAXIMUM_MEOW_MASCOT if self.maximum_meow else CAT_MASCOT
-        title = "♫ MEOWPLAYER — terminal purr engine"
+        mascot = self.live_cat_mascot()
+        mood = self.cat_mood()
+        title = f"♫ MEOWPLAYER v{__version__} — {mood}"
 
         for row, cat_line in enumerate(mascot):
             try:
@@ -1632,7 +1727,8 @@ class MeowPlayer:
                     f"Meow Level: {self.volume}%   "
                     f"Pounce: {'ON' if self.shuffle else 'OFF'}   "
                     f"Tail-Chase: {'ON' if self.repeat else 'OFF'}   "
-                    f"Catnip: {len(self.catnip_stash)}"
+                    f"Catnip: {len(self.catnip_stash)}   "
+                    f"Mood: {self.cat_mood()}"
                 )
 
             try:
@@ -1684,17 +1780,25 @@ class MeowPlayer:
                     mode_line = self.text(
                         (
                             f"Library / {current_view} — "
-                            f"{len(self.songs)} track(s)"
+                            f"{len(self.songs)} track(s) · "
+                            f"Next: {self.next_treat_label()}"
                         ),
                         (
                             f"Music Nest / {current_view} — "
-                            f"{len(self.songs)} meow(s)"
+                            f"{len(self.songs)} meow(s) · "
+                            f"Next Treat: {self.next_treat_label()}"
                         )
                     )
             else:
                 mode_line = self.text(
-                    f"Queue — {len(self.catnip_stash)} track(s)",
-                    f"THE CATNIP STASH — {len(self.catnip_stash)} treat(s)"
+                    (
+                        f"Queue — {len(self.catnip_stash)} track(s) · "
+                        f"Next: {self.next_treat_label()}"
+                    ),
+                    (
+                        f"THE CATNIP STASH — {len(self.catnip_stash)} treat(s) · "
+                        f"Next Treat: {self.next_treat_label()}"
+                    )
                 )
 
             try:
@@ -1998,6 +2102,11 @@ def parse_args():
         description=(
             "MeowPlayer — a cat-themed terminal music player powered by mpv."
         )
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"MeowPlayer {__version__}",
     )
     parser.add_argument(
         "music_dir",
