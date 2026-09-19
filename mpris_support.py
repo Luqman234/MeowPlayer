@@ -42,6 +42,7 @@ def _metadata_variants(metadata):
     album = metadata.get("album")
     album_artist = metadata.get("album_artist")
     genre = metadata.get("genre")
+    art_url = metadata.get("art_url")
     url = metadata.get("url")
     length = int(metadata.get("length_us") or 0)
 
@@ -55,6 +56,8 @@ def _metadata_variants(metadata):
         result["xesam:albumArtist"] = Variant("as", [album_artist])
     if genre:
         result["xesam:genre"] = Variant("as", [genre])
+    if art_url:
+        result["mpris:artUrl"] = Variant("s", art_url)
     if url:
         result["xesam:url"] = Variant("s", url)
     if length > 0:
