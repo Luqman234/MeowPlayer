@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _xdg_cache_home():
@@ -21,7 +21,7 @@ def catalog_path():
 
 
 class LibraryCatalog:
-    """Persistent metadata cache for MeowPlayer music libraries."""
+    """Persistent library database and metadata cache for MeowPlayer."""
 
     def __init__(self, music_dir, path=None):
         self.music_dir = Path(music_dir).expanduser().resolve()
@@ -40,10 +40,10 @@ class LibraryCatalog:
             "PRAGMA user_version"
         ).fetchone()[0]
 
-        if version not in (0, SCHEMA_VERSION):
+        if version not in (0, 1, SCHEMA_VERSION):
             raise RuntimeError(
                 f"Unsupported Cat Catalog schema version {version}; "
-                f"expected {SCHEMA_VERSION}."
+                f"expected <= {SCHEMA_VERSION}."
             )
 
         self.connection.execute(
@@ -63,14 +63,81 @@ class LibraryCatalog:
                 folder TEXT NOT NULL,
                 filename TEXT NOT NULL,
                 tagged INTEGER NOT NULL,
-                last_scanned_ns INTEGER NOT NULL
+                last_scanned_ns INTEGER NOT NULL,
+                favorite INTEGER NOT NULL DEFAULT 0,
+                play_count INTEGER NOT NULL DEFAULT 0,
+                last_played_ns INTEGER,
+                added_at_ns INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+
+        columns = {
+            row["name"]
+            for row in self.connection.execute(
+                "PRAGMA table_info(tracks)"
+            ).fetchall()
+        }
+        migrations = (
+            (
+                "favorite",
+                "ALTER TABLE tracks ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "play_count",
+                "ALTER TABLE tracks ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "last_played_ns",
+                "ALTER TABLE tracks ADD COLUMN last_played_ns INTEGER",
+            ),
+            (
+                "added_at_ns",
+                "ALTER TABLE tracks ADD COLUMN added_at_ns INTEGER NOT NULL DEFAULT 0",
+            ),
+        )
+        for name, statement in migrations:
+            if name not in columns:
+                self.connection.execute(statement)
+
+        # Existing v1 rows get a sensible migration timestamp. New rows receive
+        # their actual insertion timestamp in put().
+        self.connection.execute(
+            """
+            UPDATE tracks
+            SET added_at_ns = ?
+            WHERE added_at_ns = 0
+            """,
+            (time.time_ns(),),
+        )
+
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS listening_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT NOT NULL,
+                root TEXT NOT NULL,
+                played_at_ns INTEGER NOT NULL
+            )
+            """
+        )
+
         self.connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_tracks_root
             ON tracks(root)
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_tracks_root_favorite
+            ON tracks(root, favorite)
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_history_root_played
+            ON listening_history(root, played_at_ns DESC)
             """
         )
         self.connection.execute(
@@ -132,9 +199,10 @@ class LibraryCatalog:
                 folder,
                 filename,
                 tagged,
-                last_scanned_ns
+                last_scanned_ns,
+                added_at_ns
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 root = excluded.root,
                 size = excluded.size,
@@ -167,12 +235,17 @@ class LibraryCatalog:
                 metadata.filename,
                 int(bool(metadata.tagged)),
                 time.time_ns(),
+                time.time_ns(),
             ),
         )
 
-    def clear_root(self):
+    def invalidate_root(self):
         cursor = self.connection.execute(
-            "DELETE FROM tracks WHERE root = ?",
+            """
+            UPDATE tracks
+            SET size = -1, mtime_ns = -1
+            WHERE root = ?
+            """,
             (str(self.music_dir),),
         )
         return max(0, int(cursor.rowcount))
@@ -201,6 +274,125 @@ class LibraryCatalog:
             )
 
         return len(stale)
+
+    def favorite_paths(self):
+        rows = self.connection.execute(
+            """
+            SELECT path
+            FROM tracks
+            WHERE root = ? AND favorite = 1
+            """,
+            (str(self.music_dir),),
+        ).fetchall()
+        return {row["path"] for row in rows}
+
+    def is_favorite(self, path):
+        row = self.connection.execute(
+            """
+            SELECT favorite
+            FROM tracks
+            WHERE path = ? AND root = ?
+            """,
+            (str(Path(path).resolve()), str(self.music_dir)),
+        ).fetchone()
+        return bool(row["favorite"]) if row is not None else False
+
+    def toggle_favorite(self, path):
+        resolved = str(Path(path).resolve())
+        row = self.connection.execute(
+            """
+            SELECT favorite
+            FROM tracks
+            WHERE path = ? AND root = ?
+            """,
+            (resolved, str(self.music_dir)),
+        ).fetchone()
+        if row is None:
+            return False
+
+        favorite = not bool(row["favorite"])
+        self.connection.execute(
+            """
+            UPDATE tracks
+            SET favorite = ?
+            WHERE path = ? AND root = ?
+            """,
+            (int(favorite), resolved, str(self.music_dir)),
+        )
+        self.connection.commit()
+        return favorite
+
+    def record_play(self, path, played_at_ns=None):
+        resolved = str(Path(path).resolve())
+        played_at_ns = int(played_at_ns or time.time_ns())
+
+        cursor = self.connection.execute(
+            """
+            UPDATE tracks
+            SET play_count = play_count + 1,
+                last_played_ns = ?
+            WHERE path = ? AND root = ?
+            """,
+            (played_at_ns, resolved, str(self.music_dir)),
+        )
+        if cursor.rowcount <= 0:
+            return False
+
+        self.connection.execute(
+            """
+            INSERT INTO listening_history(path, root, played_at_ns)
+            VALUES (?, ?, ?)
+            """,
+            (resolved, str(self.music_dir), played_at_ns),
+        )
+        self.connection.commit()
+        return True
+
+    def play_stats(self):
+        rows = self.connection.execute(
+            """
+            SELECT path, favorite, play_count, last_played_ns, added_at_ns
+            FROM tracks
+            WHERE root = ?
+            """,
+            (str(self.music_dir),),
+        ).fetchall()
+        return {
+            row["path"]: {
+                "favorite": bool(row["favorite"]),
+                "play_count": int(row["play_count"]),
+                "last_played_ns": row["last_played_ns"],
+                "added_at_ns": int(row["added_at_ns"]),
+            }
+            for row in rows
+        }
+
+    def recent_history(self, limit=100):
+        rows = self.connection.execute(
+            """
+            SELECT path, played_at_ns
+            FROM listening_history
+            WHERE root = ?
+            ORDER BY played_at_ns DESC
+            LIMIT ?
+            """,
+            (str(self.music_dir), int(limit)),
+        ).fetchall()
+        return [
+            {
+                "path": row["path"],
+                "played_at_ns": int(row["played_at_ns"]),
+            }
+            for row in rows
+        ]
+
+    def clear_root(self):
+        """Compatibility helper: remove only cached track rows for this root."""
+        cursor = self.connection.execute(
+            "DELETE FROM tracks WHERE root = ?",
+            (str(self.music_dir),),
+        )
+        return max(0, int(cursor.rowcount))
 
     def commit(self):
         self.connection.commit()
