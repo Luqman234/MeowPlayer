@@ -31,7 +31,7 @@ from meow_persistence import (
 from mpris_support import MPRISBridge
 
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -39,12 +39,21 @@ SUPPORTED_EXTENSIONS = {
     ".wav", ".m4a", ".aac", ".wma"
 }
 
-LIBRARY_VIEWS = ("songs", "artists", "albums", "folders")
+LIBRARY_VIEWS = (
+    "songs",
+    "artists",
+    "albums",
+    "folders",
+    "pawmarks",
+    "history",
+)
 VIEW_LABELS = {
     "songs": ("Songs", "Songs"),
     "artists": ("Artists", "Artists"),
     "albums": ("Albums", "Albums"),
     "folders": ("Folders", "Nests"),
+    "pawmarks": ("Favorites", "Pawmarks"),
+    "history": ("Listening History", "Purr History"),
 }
 
 CAT_QUOTES = [
@@ -388,6 +397,13 @@ class MeowPlayer:
         self.metadata = self.load_library_metadata(
             rebuild=rebuild_catalog
         )
+        self.library_stats = (
+            self.catalog.play_stats()
+            if self.catalog is not None
+            else {}
+        )
+        self.drill_artist = None
+        self.drill_album = None
         self.song_lookup = {
             song.resolve(): index for index, song in enumerate(self.songs)
         }
@@ -666,14 +682,22 @@ class MeowPlayer:
                 if self.current is None:
                     self.play_selected_library_song()
                 elif bool(self.mpv.get_property("idle-active")):
-                    self.play(self.current, record_history=False)
+                    self.play(
+                        self.current,
+                        record_history=False,
+                        record_listen=False,
+                    )
                 else:
                     self.mpv.play()
             elif action == "play_pause":
                 if self.current is None:
                     self.play_selected_library_song()
                 elif bool(self.mpv.get_property("idle-active")):
-                    self.play(self.current, record_history=False)
+                    self.play(
+                        self.current,
+                        record_history=False,
+                        record_listen=False,
+                    )
                 else:
                     self.mpv.toggle_pause()
             elif action == "stop":
@@ -797,7 +821,7 @@ class MeowPlayer:
             self.catalog = LibraryCatalog(self.music_dir)
 
             if rebuild:
-                self.catalog_pruned += self.catalog.clear_root()
+                self.catalog.invalidate_root()
 
             metadata = []
             for path in self.songs:
@@ -981,6 +1005,21 @@ class MeowPlayer:
 
         return _normalize_search_text(" ".join(fields))
 
+    def stats_for(self, index):
+        return self.library_stats.get(
+            str(self.songs[index].resolve()),
+            {
+                "favorite": False,
+                "play_count": 0,
+                "last_played_ns": None,
+                "added_at_ns": 0,
+            },
+        )
+
+    def refresh_library_stats(self):
+        if self.catalog is not None:
+            self.library_stats = self.catalog.play_stats()
+
     def filtered_song_indices(self):
         indices = list(range(len(self.songs)))
         query = _normalize_search_text(self.search_query).strip()
@@ -992,12 +1031,53 @@ class MeowPlayer:
                 if query in self.search_haystack(index)
             ]
 
+        if self.drill_artist is not None:
+            indices = [
+                index
+                for index in indices
+                if self.meta(index).artist == self.drill_artist
+            ]
+
+        if self.drill_album is not None:
+            album_artist, album = self.drill_album
+            indices = [
+                index
+                for index in indices
+                if (
+                    self.meta(index).album_artist == album_artist
+                    and self.meta(index).album == album
+                )
+            ]
+
+        if self.library_view == "pawmarks":
+            indices = [
+                index
+                for index in indices
+                if self.stats_for(index)["favorite"]
+            ]
+
+        if self.library_view == "history":
+            indices = [
+                index
+                for index in indices
+                if self.stats_for(index)["last_played_ns"] is not None
+            ]
+
         return indices
 
-    def ordered_library_indices(self):
+    def ordered_track_indices(self):
         indices = self.filtered_song_indices()
 
-        if self.library_view == "songs":
+        if self.library_view == "history":
+            return sorted(
+                indices,
+                key=lambda i: (
+                    -(self.stats_for(i)["last_played_ns"] or 0),
+                    self.meta(i).title.casefold(),
+                ),
+            )
+
+        if self.library_view in ("songs", "pawmarks"):
             return sorted(
                 indices,
                 key=lambda i: (
@@ -1039,14 +1119,56 @@ class MeowPlayer:
             ),
         )
 
+    def ordered_library_indices(self):
+        indices = self.ordered_track_indices()
+
+        if self.library_view == "artists":
+            if self.drill_artist is None:
+                representatives = {}
+                for index in indices:
+                    representatives.setdefault(
+                        self.meta(index).artist,
+                        index,
+                    )
+                return list(representatives.values())
+
+            if self.drill_album is None:
+                representatives = {}
+                for index in indices:
+                    meta = self.meta(index)
+                    representatives.setdefault(
+                        (meta.album_artist, meta.album),
+                        index,
+                    )
+                return list(representatives.values())
+
+        if self.library_view == "albums" and self.drill_album is None:
+            representatives = {}
+            for index in indices:
+                meta = self.meta(index)
+                representatives.setdefault(
+                    (meta.album_artist, meta.album),
+                    index,
+                )
+            return list(representatives.values())
+
+        return indices
+
     def track_row_text(self, index):
         meta = self.meta(index)
 
-        if self.library_view == "songs":
+        if self.library_view in ("songs", "pawmarks"):
             text = meta.artist_title
             if meta.album != "Unknown Album":
                 text += f" · {meta.album}"
+            if self.stats_for(index)["favorite"]:
+                text = f"★ {text}"
             return text
+
+        if self.library_view == "history":
+            stats = self.stats_for(index)
+            count = stats["play_count"]
+            return f"{meta.artist_title} · played {count}×"
 
         if self.library_view == "artists":
             text = meta.title
@@ -1069,7 +1191,75 @@ class MeowPlayer:
     def library_rows(self):
         ordered = self.ordered_library_indices()
 
-        if self.library_view == "songs":
+        if self.library_view in ("songs", "pawmarks", "history"):
+            return [
+                ("track", self.track_row_text(index), index)
+                for index in ordered
+            ]
+
+        if self.library_view == "artists":
+            if self.drill_artist is None:
+                all_tracks = self.ordered_track_indices()
+                counts = {}
+                for index in all_tracks:
+                    artist = self.meta(index).artist
+                    counts[artist] = counts.get(artist, 0) + 1
+                return [
+                    (
+                        "track",
+                        f"{self.meta(index).artist} · "
+                        f"{counts[self.meta(index).artist]} track(s) ›",
+                        index,
+                    )
+                    for index in ordered
+                ]
+
+            if self.drill_album is None:
+                all_tracks = self.ordered_track_indices()
+                counts = {}
+                for index in all_tracks:
+                    meta = self.meta(index)
+                    key = (meta.album_artist, meta.album)
+                    counts[key] = counts.get(key, 0) + 1
+
+                rows = []
+                for index in ordered:
+                    meta = self.meta(index)
+                    key = (meta.album_artist, meta.album)
+                    label = meta.album
+                    if meta.year:
+                        label += f" ({meta.year})"
+                    label += f" · {counts[key]} track(s) ›"
+                    rows.append(("track", label, index))
+                return rows
+
+            return [
+                ("track", self.track_row_text(index), index)
+                for index in ordered
+            ]
+
+        if self.library_view == "albums":
+            if self.drill_album is None:
+                all_tracks = self.ordered_track_indices()
+                counts = {}
+                for index in all_tracks:
+                    meta = self.meta(index)
+                    key = (meta.album_artist, meta.album)
+                    counts[key] = counts.get(key, 0) + 1
+
+                rows = []
+                for index in ordered:
+                    meta = self.meta(index)
+                    key = (meta.album_artist, meta.album)
+                    label = meta.album
+                    if meta.album_artist != "Unknown Artist":
+                        label += f" — {meta.album_artist}"
+                    if meta.year:
+                        label += f" ({meta.year})"
+                    label += f" · {counts[key]} track(s) ›"
+                    rows.append(("track", label, index))
+                return rows
+
             return [
                 ("track", self.track_row_text(index), index)
                 for index in ordered
@@ -1077,31 +1267,12 @@ class MeowPlayer:
 
         rows = []
         last_group = None
-
         for index in ordered:
             meta = self.meta(index)
-
-            if self.library_view == "artists":
-                group_key = meta.artist
-                group_label = meta.artist
-            elif self.library_view == "albums":
-                group_key = (meta.album_artist, meta.album)
-                if meta.album_artist != "Unknown Artist":
-                    group_label = f"{meta.album} — {meta.album_artist}"
-                else:
-                    group_label = meta.album
-                if meta.year:
-                    group_label += f" ({meta.year})"
-            else:
-                group_key = meta.folder
-                group_label = meta.folder
-
-            if group_key != last_group:
-                rows.append(("header", group_label, None))
-                last_group = group_key
-
+            if meta.folder != last_group:
+                rows.append(("header", meta.folder, None))
+                last_group = meta.folder
             rows.append(("track", self.track_row_text(index), index))
-
         return rows
 
     def selected_library_song(self):
@@ -1117,6 +1288,8 @@ class MeowPlayer:
             return
 
         self.library_view = view
+        self.drill_artist = None
+        self.drill_album = None
         self.selected = 0
 
         serious_label, cat_label = VIEW_LABELS[view]
@@ -1131,7 +1304,100 @@ class MeowPlayer:
             LIBRARY_VIEWS[(position + 1) % len(LIBRARY_VIEWS)]
         )
 
-    def play(self, index, automatic=False, record_history=True):
+    def library_breadcrumb(self):
+        serious, cat = VIEW_LABELS[self.library_view]
+        label = serious if self.serious_mode else cat
+
+        if self.drill_artist is not None:
+            label += f" / {self.drill_artist}"
+        if self.drill_album is not None:
+            label += f" / {self.drill_album[1]}"
+
+        return label
+
+    def activate_library_selection(self):
+        index = self.selected_library_song()
+        if index is None:
+            return
+
+        meta = self.meta(index)
+
+        if self.library_view == "artists":
+            if self.drill_artist is None:
+                self.drill_artist = meta.artist
+                self.drill_album = None
+                self.selected = 0
+                self.set_status(
+                    f"Opened artist: {meta.artist}",
+                    f"Following {meta.artist}'s scent trail."
+                )
+                return
+
+            if self.drill_album is None:
+                self.drill_album = (meta.album_artist, meta.album)
+                self.selected = 0
+                self.set_status(
+                    f"Opened album: {meta.album}",
+                    f"Curled up inside the album: {meta.album}"
+                )
+                return
+
+        if self.library_view == "albums" and self.drill_album is None:
+            self.drill_album = (meta.album_artist, meta.album)
+            self.selected = 0
+            self.set_status(
+                f"Opened album: {meta.album}",
+                f"Curled up inside the album: {meta.album}"
+            )
+            return
+
+        self.play(index)
+
+    def go_back_library(self):
+        if self.library_view == "artists" and self.drill_album is not None:
+            self.drill_album = None
+        elif self.library_view == "artists" and self.drill_artist is not None:
+            self.drill_artist = None
+        elif self.library_view == "albums" and self.drill_album is not None:
+            self.drill_album = None
+        else:
+            return False
+
+        self.selected = 0
+        self.set_status(
+            "Went up one library level.",
+            "The cat backed out of this nest."
+        )
+        return True
+
+    def toggle_selected_pawmark(self):
+        index = self.selected_library_song()
+        if index is None:
+            return
+
+        if self.catalog is None:
+            self.set_status(
+                "Favorites unavailable without the Cat Catalog.",
+                "The cat cannot leave a Pawmark while the Catalog is missing."
+            )
+            return
+
+        favorite = self.catalog.toggle_favorite(self.songs[index])
+        self.refresh_library_stats()
+        meta = self.meta(index)
+
+        self.set_status(
+            (
+                f"{'Favorited' if favorite else 'Unfavorited'}: "
+                f"{meta.artist_title}"
+            ),
+            (
+                f"{'Pawmarked' if favorite else 'Pawmark removed'}: "
+                f"{meta.artist_title}"
+            )
+        )
+
+    def play(self, index, automatic=False, record_history=True, record_listen=True):
         if not self.songs:
             return
 
@@ -1149,6 +1415,10 @@ class MeowPlayer:
         self.current = index
         self.mpv.load(self.songs[index])
         self.mpv.play()
+
+        if record_listen and self.catalog is not None:
+            self.catalog.record_play(self.songs[index])
+            self.refresh_library_stats()
 
         ordered = self.ordered_library_indices()
         if index in ordered:
@@ -1857,8 +2127,7 @@ class MeowPlayer:
 
             if self.view == "library":
                 matches = len(self.filtered_song_indices())
-                serious_view, cat_view = VIEW_LABELS[self.library_view]
-                current_view = serious_view if self.serious_mode else cat_view
+                current_view = self.library_breadcrumb()
 
                 if self.search_active:
                     mode_line = self.text(
@@ -1950,14 +2219,14 @@ class MeowPlayer:
             if self.view == "library":
                 if self.serious_mode:
                     controls = (
-                        "↑↓ Select  ENTER Play  1-4 Views  TAB Next view  "
-                        "/ Search  A Queue  Q Queue view  X Quit"
+                        "↑↓ Select  ENTER Open/Play  1-6 Views  F Favorite  "
+                        "B Back  / Search  A Queue  Q Queue  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
-                        "↑↓ Choose  ENTER Purr  1-4 Views  TAB Next nest  "
-                        "/ Scent  A Stash  Q Catnip  X Escape"
+                        "↑↓ Choose  ENTER Open/Purr  1-6 Nests  F Pawmark  "
+                        "B Back  / Scent  A Stash  Q Catnip  X Escape"
                     )
                     quote = f"🐱 {self.quote}"
             else:
@@ -2113,7 +2382,13 @@ class MeowPlayer:
                         self.selected + 1
                     )
                 elif key in (10, 13, curses.KEY_ENTER):
-                    self.play_selected_library_song()
+                    self.activate_library_selection()
+                    library_scroll = 0
+                elif key in (ord("f"), ord("F")):
+                    self.toggle_selected_pawmark()
+                elif key in (ord("b"), ord("B"), curses.KEY_BACKSPACE, 127, 8):
+                    if self.go_back_library():
+                        library_scroll = 0
                 elif key in (ord("a"), ord("A")):
                     self.add_selected_to_stash()
                 elif key == ord("/"):
@@ -2145,6 +2420,8 @@ class MeowPlayer:
                     ord("2"),
                     ord("3"),
                     ord("4"),
+                    ord("5"),
+                    ord("6"),
                 ):
                     self.select_library_view(
                         LIBRARY_VIEWS[int(chr(key)) - 1]
