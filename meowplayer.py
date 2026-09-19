@@ -728,6 +728,7 @@ class MeowPlayer:
                     if meta.album_artist == "Unknown Artist"
                     else meta.album_artist
                 ),
+                "genre": meta.genre or None,
                 "url": self.songs[self.current].resolve().as_uri(),
                 "length_us": int(max(0.0, duration) * 1_000_000),
             }
