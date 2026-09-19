@@ -2,7 +2,7 @@
 
 A lightweight, aggressively cat-themed terminal music player written in Python, with `mpv` handling audio playback and `curses` providing the terminal UI.
 
-MeowPlayer recursively scans a music directory, lets you search it live, build a real playback queue called **The Catnip Stash**, and control everything from the keyboard.
+MeowPlayer recursively scans a music directory, reads audio metadata, lets you browse by songs/artists/albums/folders, search the library live, build a real playback queue called **The Catnip Stash**, and control everything from the keyboard.
 
 ```text
  /\_/\   ♫ MEOWPLAYER — terminal purr engine
@@ -21,7 +21,10 @@ Music Nest — scent: 'space' (2 meows)
 
 - Full-screen terminal interface
 - Recursive music-folder scanning
-- Live search/filtering across filenames and folder paths
+- Metadata parsing for title, artist, album, album artist, track number, and year
+- Filename/folder fallbacks for untagged or malformed audio files
+- Grouped library views for Songs, Artists, Albums, and Folders
+- Live search/filtering across metadata, filenames, and folder paths
 - **The Catnip Stash** queue
 - Queue-first playback: stashed tracks play before normal library playback
 - Reorder and remove queued tracks
@@ -63,21 +66,24 @@ MeowPlayer currently scans for:
 
 - Python 3
 - `mpv`
+- [Mutagen](https://mutagen.readthedocs.io/) for audio metadata parsing
 - A terminal with curses support
 - Linux or another Unix-like environment with Unix domain sockets
 
-No third-party Python packages are required.
+If Mutagen is unavailable, MeowPlayer still runs using filename/folder fallbacks, but tag-based artist/album/year data will not be available.
 
 ### Arch Linux
 
 ```bash
 sudo pacman -S python mpv
+python -m pip install -r requirements.txt
 ```
 
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install python3 mpv
+sudo apt install python3 mpv python3-pip
+python3 -m pip install -r requirements.txt
 ```
 
 ## Installation
@@ -117,11 +123,60 @@ To use another music directory, pass it as the first argument:
 
 The directory is scanned recursively, so music inside subdirectories is included automatically.
 
+## Metadata and library views
+
+MeowPlayer uses **Mutagen** to read tags from supported audio files. It currently looks for:
+
+- title
+- artist
+- album
+- album artist
+- track number
+- year/date
+
+When tags are missing or unreadable, MeowPlayer falls back safely to the filename, folder, and `Unknown Artist` / `Unknown Album` placeholders.
+
+The current song display and The Catnip Stash use parsed metadata instead of raw filenames whenever tags are available.
+
+### Switching views
+
+While in the Music Nest:
+
+| Key | Library view |
+| --- | --- |
+| `1` | Songs |
+| `2` | Artists |
+| `3` | Albums |
+| `4` | Folders / Nests |
+| `Tab` | Cycle to the next view |
+
+**Songs** is a flat metadata-aware track list.
+
+**Artists** groups tracks under artist headers.
+
+**Albums** groups tracks by album and album artist, respects track numbers when available, and shows the album year when tagged.
+
+**Folders / Nests** groups files by their physical directory inside the music library.
+
+Example:
+
+```text
+Music Nest / Albums — 128 meows
+
+▾ In Rainbows — Radiohead (2007)
+   01. 15 Step — Radiohead
+>^.^< 02. Bodysnatchers — Radiohead
+   03. Nude — Radiohead
+
+▾ Unknown Album
+   loose-recording.mp3
+```
+
 ## Search: Scent Search
 
 Press `/` while viewing the library to start searching.
 
-As you type, MeowPlayer filters the library immediately. The search checks both filenames and their relative folder paths, so a query can match a song, album folder, or playlist-style directory.
+As you type, MeowPlayer filters the library immediately. Search now checks parsed **title, artist, album, album artist, year, filename, and folder path**, so a query can match either tags or where the file lives.
 
 ```text
 SCENT SEARCH > space_   (2 meows)
@@ -185,6 +240,8 @@ Loaded playlist entries must point to songs that are already inside the current 
 | --- | --- |
 | `↑` / `↓` | Choose a track |
 | `Enter` | Play selected track |
+| `1` / `2` / `3` / `4` | Songs / Artists / Albums / Folders view |
+| `Tab` | Cycle library view |
 | `/` | Start Scent Search |
 | `A` | Add selected track to The Catnip Stash |
 | `Q` | Toggle Music Nest / Catnip Stash |
@@ -236,6 +293,7 @@ You can combine either mode with a music directory:
 | Conventional term | MeowPlayer term |
 | --- | --- |
 | Library | Music Nest |
+| Folders | Nests |
 | Search | Scent Search |
 | Queue | The Catnip Stash |
 | Now Playing | Now Purring |
@@ -281,7 +339,7 @@ Music Nest
           Audio output
 ```
 
-Python handles the interface, library scanning, search, queue state, playlist files, keyboard controls, and all cat-related responsibilities. `mpv` handles the actual audio decoding and playback.
+Python handles the interface, library scanning, metadata-backed views, search, queue state, playlist files, keyboard controls, and all cat-related responsibilities. **Mutagen** reads audio tags, while `mpv` handles the actual audio decoding and playback.
 
 This means MeowPlayer does not need to implement MP3, FLAC, AAC, Opus, and other audio codecs itself.
 
@@ -290,6 +348,7 @@ This means MeowPlayer does not need to implement MP3, FLAC, AAC, Opus, and other
 ```text
 MeowPlayer/
 ├── meowplayer.py
+├── requirements.txt
 ├── README.md
 ├── LICENSE
 └── .gitignore
@@ -311,9 +370,7 @@ git push
 
 Some possible future improvements:
 
-- Album and artist metadata
 - Album-art support in compatible terminals
-- Library views for songs / artists / albums / folders
 - Persistent configuration and playback state
 - Media-key support
 - MPRIS integration
