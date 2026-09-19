@@ -13,6 +13,7 @@ class ShuffleBagTests(unittest.TestCase):
         player.shuffle_bag = []
         player.catnip_stash = []
         player.history = []
+        player.playback_sequence = []
         player.played = []
 
         def fake_play(index, **kwargs):
@@ -63,6 +64,17 @@ class ShuffleBagTests(unittest.TestCase):
         player.next_song(automatic=True)
 
         self.assertEqual(player.current, 2)
+
+    def test_shuffle_bag_is_scoped_to_active_playback_sequence(self):
+        player = self.make_player(count=6, current=1)
+        player.playback_sequence = [1, 3, 5]
+
+        player.refill_shuffle_bag()
+
+        self.assertEqual(set(player.shuffle_bag), {3, 5})
+        self.assertNotIn(0, player.shuffle_bag)
+        self.assertNotIn(2, player.shuffle_bag)
+        self.assertNotIn(4, player.shuffle_bag)
 
     def test_single_track_shuffle_is_stable(self):
         player = self.make_player(count=1, current=0)
