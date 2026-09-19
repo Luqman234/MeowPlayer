@@ -21,7 +21,7 @@ Music Nest — scent: 'space' (2 meows)
 
 - Full-screen terminal interface
 - Recursive music-folder scanning
-- Metadata parsing for title, artist, album, album artist, track number, and year
+- Metadata parsing for title, artist, album, album artist, track number, year, genre, and duration
 - Persistent SQLite **Cat Catalog** library database
 - Incremental metadata cache: unchanged tracks reuse cached tags
 - Automatic cache invalidation for modified files and pruning for deleted files
@@ -54,7 +54,8 @@ Music Nest — scent: 'space' (2 meows)
 - Previous purr and next meow
 - Seek forward and backward
 - Meow Level volume control
-- Pounce Mode shuffle
+- Persistent no-repeat **Pounce Bag** shuffle
+- Persistent playback history with shuffle-aware Previous/Next behavior
 - Tail-Chase repeat
 - Playback progress and duration display
 - Automatic playback of the next track
@@ -160,7 +161,7 @@ chmod +x meowplayer.py
 
 ## Install as a real command
 
-MeowPlayer is now packaged as **MeowPlayer 0.8.0** with a standard `pyproject.toml`.
+MeowPlayer is now packaged as **MeowPlayer 0.9.0** with a standard `pyproject.toml`.
 
 The Python distribution is named:
 
@@ -241,8 +242,8 @@ This creates standard Python distribution artifacts in:
 
 ```text
 dist/
-├── meowplayer_terminal-0.8.0-py3-none-any.whl
-└── meowplayer_terminal-0.8.0.tar.gz
+├── meowplayer_terminal-0.9.0-py3-none-any.whl
+└── meowplayer_terminal-0.9.0.tar.gz
 ```
 
 You can install the wheel directly with `pip` or `pipx`.
@@ -319,6 +320,8 @@ play count
 last played time
 added-at time
 individual listening-history events
+genre
+duration
 ```
 
 ### How incremental scanning works
@@ -363,6 +366,8 @@ That means only three files needed metadata parsing instead of all 844.
 
 The same SQLite database can safely cache multiple music roots because every entry records which library root it belongs to.
 
+When upgrading from 0.8.0 to 0.9.0, MeowPlayer preserves Pawmarks and listening history but deliberately re-sniffs cached tracks once so the new genre and duration fields are populated. Subsequent launches return to normal incremental-cache behavior.
+
 ### Rebuild the catalog
 
 If you deliberately changed many tags, suspect stale metadata, or just want the cat to inspect everything again:
@@ -385,6 +390,8 @@ MeowPlayer uses **Mutagen** to read tags from supported audio files. It currentl
 - album artist
 - track number
 - year/date
+- genre
+- duration from the audio stream
 
 When tags are missing or unreadable, MeowPlayer falls back safely to the filename, folder, and `Unknown Artist` / `Unknown Album` placeholders.
 
@@ -479,7 +486,7 @@ The database also keeps individual history events internally, so later releases 
 
 Press `/` while viewing the library to start searching.
 
-As you type, MeowPlayer filters the library immediately. Search now checks parsed **title, artist, album, album artist, year, filename, and folder path**, so a query can match either tags or where the file lives.
+As you type, MeowPlayer filters the library immediately. Search checks parsed **title, artist, album, album artist, year, genre, filename, and folder path**, so a query such as `dream pop` can match genre tags as well as normal metadata or file locations.
 
 Scent Search accepts full Unicode input, including Japanese kana and kanji. It also applies Unicode NFKC normalization before matching, which makes compatibility variants such as half-width/full-width forms behave more consistently.
 
@@ -496,6 +503,40 @@ Japanese input uses your terminal's normal input method/IME; MeowPlayer reads th
 - `Enter` keeps the current filter and leaves typing mode.
 - `Esc` clears the search completely.
 - Press `Esc` later while a filter is active to return to the full library.
+
+## Pounce Bag shuffle
+
+Pounce Mode now uses a real no-repeat **Pounce Bag** instead of choosing a random track independently every time.
+
+When shuffle is enabled:
+
+```text
+all tracks except the current one
+        ↓
+randomize once
+        ↓
+Pounce Bag
+        ↓
+consume one track per Next / natural track end
+        ↓
+bag empty?
+        ↓
+refill, excluding the current track
+```
+
+That means every eligible song is visited once before a new shuffle cycle begins, and the track currently playing is never the immediate first repeat of a refill.
+
+The UI shows how many tracks remain:
+
+```text
+Pounce: ON (37 left)
+```
+
+The bag is persisted in MeowPlayer state, so restarting the player does not secretly reset your shuffle cycle.
+
+Playback history is persistent too. In Pounce Mode, pressing `Previous` returns to the actual previous song and places the song you just left on top of the Pounce Bag. Pressing `Next` can therefore take you forward to it again instead of choosing an unrelated random track.
+
+The Catnip Stash still has priority over the Pounce Bag: queued tracks are consumed first, and a queued/manual track is removed from the remaining shuffle bag so it will not unexpectedly repeat later in the same cycle.
 
 ## The Catnip Stash
 
@@ -599,6 +640,8 @@ The state file is managed automatically and remembers:
 - last track
 - last playback position
 - The Catnip Stash queue
+- remaining Pounce Bag
+- playback Previous-history
 
 State is written periodically and again on shutdown.
 
@@ -732,7 +775,7 @@ Typical moods include:
 For example:
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.8.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.9.0 — Purring
 ( ^.^ )
  > ♫ <
 ```
@@ -740,12 +783,12 @@ For example:
 Pause it:
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.8.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.9.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
 
-The Music Nest and Catnip Stash also expose **Next Treat**, giving a preview of what MeowPlayer expects to play next. With Pounce Mode enabled, the cat correctly admits that the next meow is a mystery.
+The Music Nest and Catnip Stash also expose **Next Treat**. With Pounce Mode enabled, the exact next song stays a mystery, but MeowPlayer shows how many tracks remain in the current Pounce Bag.
 
 Maximum Meow has its own reactive versions of the same moods because apparently a static ASCII cat was no longer sufficient.
 
@@ -842,7 +885,7 @@ Music Nest
           Audio output
 ```
 
-Python handles the interface, incremental library scanning, metadata-backed views, drill-down navigation, search, queue state, playlist files, keyboard controls, and all cat-related responsibilities. The **Cat Catalog** stores cached metadata plus Pawmarks and listening history in SQLite, **Mutagen** reads tags for new or modified files, and `mpv` handles the actual audio decoding and playback.
+Python handles the interface, incremental library scanning, metadata-backed views, drill-down navigation, search, queue state, shuffle-bag/history state, playlist files, keyboard controls, and all cat-related responsibilities. The **Cat Catalog** stores cached metadata—including genre and duration—plus Pawmarks and listening history in SQLite, **Mutagen** reads tags and stream information for new or modified files, and `mpv` handles the actual audio decoding and playback.
 
 This means MeowPlayer does not need to implement MP3, FLAC, AAC, Opus, and other audio codecs itself.
 
@@ -880,7 +923,7 @@ git push
 Some possible future improvements:
 
 - Album-art support in compatible terminals
-- Better shuffle history
+- Genre-focused smart views and playlists
 - Release automation and signed/tagged builds
 - Even more scientifically unnecessary cat behavior
 
