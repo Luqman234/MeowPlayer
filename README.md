@@ -35,9 +35,10 @@ Music Nest — scent: 'space' (2 meows)
 - Restores volume, shuffle, repeat, library view, last track, and position
 - MPRIS D-Bus integration for desktop media controls
 - Playerctl, Waybar, and media-key friendly transport controls
-- Cat mascot in the header
+- Reactive cat mascot and live **Cat Mood**
+- **Next Treat** preview for upcoming playback
 - Cat-themed startup splash
-- Random rotating cat quotes
+- Expanded random rotating cat quotes
 - Cat-flavored status messages
 - Animated tail progress marker
 - Pawprint marker for the currently playing track
@@ -147,6 +148,102 @@ Optionally make the script executable:
 
 ```bash
 chmod +x meowplayer.py
+```
+
+## Install as a real command
+
+MeowPlayer is now packaged as **MeowPlayer 0.6.0** with a standard `pyproject.toml`.
+
+The Python distribution is named:
+
+```text
+meowplayer-terminal
+```
+
+but the installed executable is simply:
+
+```text
+meowplayer
+```
+
+### Arch Linux: recommended local install
+
+Install the non-Python runtime dependency and `pipx`:
+
+```bash
+sudo pacman -S mpv python-pipx
+pipx ensurepath
+```
+
+From the cloned repository:
+
+```bash
+pipx install .
+```
+
+Then you can launch MeowPlayer from anywhere:
+
+```bash
+meowplayer
+meowplayer ~/Music
+meowplayer --maximum-meow
+meowplayer --version
+```
+
+`pipx` keeps the Python package dependencies isolated automatically; you do not need to create or manage a `.venv` yourself.
+
+To update an existing local pipx installation after pulling new code:
+
+```bash
+pipx reinstall meowplayer-terminal
+```
+
+To remove it:
+
+```bash
+pipx uninstall meowplayer-terminal
+```
+
+### Termux package install
+
+From the repository:
+
+```bash
+python -m pip install .
+```
+
+After installation:
+
+```bash
+meowplayer
+```
+
+Termux platform detection, Android shared-storage defaults, and the 32-column phone layout still work when launched through the installed command.
+
+### Build wheel and source packages
+
+For release builds:
+
+```bash
+python -m pip install build
+python -m build
+```
+
+This creates standard Python distribution artifacts in:
+
+```text
+dist/
+├── meowplayer_terminal-0.6.0-py3-none-any.whl
+└── meowplayer_terminal-0.6.0.tar.gz
+```
+
+You can install the wheel directly with `pip` or `pipx`.
+
+The old development entry points remain valid, so these still work from a clone:
+
+```bash
+python meowplayer.py
+./meowplayer.py
 ```
 
 ## Usage
@@ -465,6 +562,41 @@ meowplayer
 
 MeowPlayer does not require `DBUS_SESSION_BUS_ADDRESS` to be manually exported. The D-Bus library is allowed to resolve the normal user session bus itself.
 
+## Cat-specific polish
+
+The mascot is no longer purely decorative. Its face and the header react to player state.
+
+Typical moods include:
+
+| State | Cat Mood |
+| --- | --- |
+| Nothing playing | **Waiting** |
+| Normal playback | **Purring** |
+| Paused | **Loafing** |
+| Pounce Mode | **Zoomies** |
+| Tail-Chase | **Tail-Chasing** |
+| Catnip Stash waiting | **Guarding Catnip** |
+
+For example:
+
+```text
+ /\_/\   ♫ MEOWPLAYER v0.6.0 — Purring
+( ^.^ )
+ > ♫ <
+```
+
+Pause it:
+
+```text
+ /\_/\   ♫ MEOWPLAYER v0.6.0 — Loafing
+( -.- )
+ > ^ <  ...
+```
+
+The Music Nest and Catnip Stash also expose **Next Treat**, giving a preview of what MeowPlayer expects to play next. With Pounce Mode enabled, the cat correctly admits that the next meow is a mystery.
+
+Maximum Meow has its own reactive versions of the same moods because apparently a static ASCII cat was no longer sufficient.
+
 ## Cat modes
 
 Normal mode is already cat-themed:
@@ -559,6 +691,7 @@ MeowPlayer/
 ├── meowplayer.py
 ├── meow_persistence.py
 ├── mpris_support.py
+├── pyproject.toml
 ├── requirements.txt
 ├── README.md
 ├── LICENSE
@@ -583,8 +716,8 @@ Some possible future improvements:
 
 - Album-art support in compatible terminals
 - Better shuffle history
-- Packaging as a system command
-- Additional scientifically unnecessary cat behavior
+- Release automation and signed/tagged builds
+- Even more scientifically unnecessary cat behavior
 
 ## License
 
