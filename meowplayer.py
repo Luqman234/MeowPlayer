@@ -471,6 +471,7 @@ class MeowPlayer:
         replaygain_preamp=0.0,
         lyrics_enabled=True,
         visualizer_enabled=True,
+        filesystem_watch_enabled=True,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.serious_mode = serious_mode
