@@ -38,7 +38,9 @@ class LyricsDocument:
             for line in self.lines
         ]
         index = bisect.bisect_right(times, max(0.0, float(position))) - 1
-        return max(0, min(index, len(self.lines) - 1))
+        if index < 0:
+            return None
+        return min(index, len(self.lines) - 1)
 
     def current_line(self, position):
         index = self.current_index(position)
@@ -243,13 +245,19 @@ class LyricsManager:
 
     def _cache_identity(self, path):
         path = Path(path).expanduser()
-        try:
-            return (
-                str(path.resolve()),
-                int(path.stat().st_mtime_ns),
-            )
-        except OSError:
-            return (str(path), 0)
+
+        def mtime(candidate):
+            try:
+                return int(candidate.stat().st_mtime_ns)
+            except OSError:
+                return 0
+
+        return (
+            str(path.resolve()),
+            mtime(path),
+            mtime(path.with_suffix(".lrc")),
+            mtime(path.with_suffix(".txt")),
+        )
 
     def load(self, track_path):
         if not self.enabled:
