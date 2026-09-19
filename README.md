@@ -1297,6 +1297,7 @@ MeowPlayer/
 │   ├── test_audio.py
 │   ├── test_catalog.py
 │   ├── test_lyrics.py
+│   ├── test_rescan.py
 │   ├── test_shuffle.py
 │   ├── test_smart.py
 │   ├── test_visualizer.py
