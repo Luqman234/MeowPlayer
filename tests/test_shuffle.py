@@ -76,6 +76,15 @@ class ShuffleBagTests(unittest.TestCase):
         self.assertNotIn(2, player.shuffle_bag)
         self.assertNotIn(4, player.shuffle_bag)
 
+    def test_single_track_smart_sequence_is_stable(self):
+        player = self.make_player(count=5, current=3)
+        player.playback_sequence = [3]
+
+        player.next_song(automatic=True)
+
+        self.assertEqual(player.current, 3)
+        self.assertEqual(player.played, [3])
+
     def test_single_track_shuffle_is_stable(self):
         player = self.make_player(count=1, current=0)
 
