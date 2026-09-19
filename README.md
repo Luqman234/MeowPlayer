@@ -1,108 +1,115 @@
 # MeowPlayer 🐱🎵
 
-A lightweight, aggressively cat-themed terminal music player written in Python, with `mpv` handling audio playback and `curses` providing the terminal UI.
+**MeowPlayer 0.9.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
 
-MeowPlayer recursively scans a music directory, reads audio metadata, lets you browse by songs/artists/albums/folders, search the library live, build a real playback queue called **The Catnip Stash**, and control everything from the keyboard.
+Python and `curses` provide the interface, `mpv` handles playback, Mutagen reads music metadata, SQLite powers the persistent **Cat Catalog**, and Linux desktops can control the player through MPRIS / D-Bus.
 
 ```text
- /\_/\   ♫ MEOWPLAYER — terminal purr engine
-( o.o )
- > ^ <
+ /\_/\   ♫ MEOWPLAYER v0.9.0 — Purring
+( ^.^ )
+ > ♫ <
 
-Now Purring: Space Song.flac
-00:42 ━━━━━━━∿──────────── 03:28
+▶  Now Purring: Space Song — Beach House
+00:42 ━━━━━━━∿──────────── 05:20
 
-Meow Level: 70%   Pounce: OFF   Tail-Chase: ON   Catnip: 4
+Meow Level: 70%   Pounce: ON (37 left)
+Tail-Chase: OFF   Catnip: 4   Mood: Zoomies
 
-Music Nest — scent: 'space' (2 meows)
+Music Nest / Songs — 842 meow(s)
+★ Space Song — Beach House · Depression Cherry · Dream Pop · 05:20
 ```
 
-## Features
+## Highlights
 
-- Full-screen terminal interface
-- Recursive music-folder scanning
-- Metadata parsing for title, artist, album, album artist, track number, year, genre, and duration
-- Persistent SQLite **Cat Catalog** library database
-- Incremental metadata cache: unchanged tracks reuse cached tags
-- Automatic cache invalidation for modified files and pruning for deleted files
-- Persistent **Pawmarks** favorites
-- Persistent play counts and listening history
-- **Purr History** view sorted by most recently played
+- Full-screen terminal UI with keyboard-first controls
+- Recursive local music-library scanning
+- MP3, FLAC, OGG, Opus, WAV, M4A, AAC, and WMA discovery
+- Metadata for title, artist, album, album artist, track number, year, **genre**, and **duration**
+- Persistent SQLite **Cat Catalog**
+- Incremental metadata caching for fast warm startups
+- Automatic invalidation for modified files and pruning for deleted files
+- Songs, Artists, Albums, Folders/Nests, Pawmarks, and Purr History views
 - Artist → album → track drill-down navigation
 - Album → track drill-down navigation
-- Filename/folder fallbacks for untagged or malformed audio files
-- Grouped library views for Songs, Artists, Albums, and Folders
-- Live search/filtering across metadata, filenames, and folder paths
-- **The Catnip Stash** queue
-- Queue-first playback: stashed tracks play before normal library playback
-- Reorder and remove queued tracks
-- Save the stash as an `.m3u` playlist
-- Load `.m3u` / `.m3u8` playlists back into the stash
-- Previous-track history
-- Persistent XDG config and playback state
-- Restores volume, shuffle, repeat, library view, last track, and position
-- MPRIS D-Bus integration for desktop media controls
-- Playerctl, Waybar, and media-key friendly transport controls
-- Reactive cat mascot and live **Cat Mood**
-- **Next Treat** preview for upcoming playback
-- Cat-themed startup splash
-- Expanded random rotating cat quotes
-- Cat-flavored status messages
-- Animated tail progress marker
-- Pawprint marker for the currently playing track
-- Play and paws
-- Previous purr and next meow
-- Seek forward and backward
-- Meow Level volume control
+- Unicode **Scent Search**, including Japanese input and NFKC normalization
+- Persistent **Pawmarks** favorites
+- Persistent play counts and listening history
+- Real queueing through **The Catnip Stash**
+- Save/load Catnip Stash playlists as `.m3u` / `.m3u8`
 - Persistent no-repeat **Pounce Bag** shuffle
-- Persistent playback history with shuffle-aware Previous/Next behavior
+- Persistent Previous-history with shuffle-aware back/forward behavior
 - Tail-Chase repeat
-- Playback progress and duration display
-- Automatic playback of the next track
-- Serious mode for people who temporarily require professionalism
-- Maximum Meow mode for people who absolutely do not
-- Uses `mpv` as the audio backend
+- Automatic next-track playback
+- Persistent session state and paused resume
+- Linux MPRIS / D-Bus integration
+- `playerctl`, desktop media keys, and MPRIS-aware widget support
+- Native Termux defaults and a narrower phone-friendly layout
+- Reactive cat moods, rotating cat quotes, paw markers, and Maximum Meow mode
+- Proper Python packaging with `pyproject.toml`
+- Package smoke tests and unit tests through GitHub Actions
 
-### Supported formats
-
-MeowPlayer currently scans for:
-
-- MP3
-- FLAC
-- OGG
-- Opus
-- WAV
-- M4A
-- AAC
-- WMA
-
-## Requirements
-
-- Python 3
-- `mpv`
-- [Mutagen](https://mutagen.readthedocs.io/) for audio metadata parsing
-- `dbus-next` for optional Linux MPRIS integration
-- A terminal with curses support
-- Linux, or Termux on Android
-- Unix domain socket support
-
-If Mutagen is unavailable, MeowPlayer still runs using filename/folder fallbacks, but tag-based artist/album/year/genre data and cached audio duration will not be available for newly scanned files.
+## Quick start
 
 ### Arch Linux
 
+Install the system runtime dependency and `pipx`:
+
 ```bash
-sudo pacman -S python mpv python-mutagen python-dbus-next
+sudo pacman -S mpv python-pipx
+pipx ensurepath
+```
+
+Clone and install MeowPlayer:
+
+```bash
+git clone https://github.com/Luqman234/MeowPlayer.git
+cd MeowPlayer
+pipx install .
+```
+
+Then launch it from anywhere:
+
+```bash
+meowplayer
+```
+
+Useful examples:
+
+```bash
+meowplayer ~/Music
+meowplayer --maximum-meow
+meowplayer --serious-mode
+meowplayer --no-mpris
+meowplayer --no-restore
+meowplayer --rebuild-catalog
+meowplayer --version
+```
+
+To update an existing local `pipx` installation:
+
+```bash
+cd MeowPlayer
+git pull
+pipx reinstall meowplayer-terminal
 ```
 
 ### Debian / Ubuntu
 
+Install the system runtime dependency:
+
 ```bash
-sudo apt install python3 mpv python3-mutagen python3-dbus-next
+sudo apt install python3 mpv
+```
+
+Then install from the repository:
+
+```bash
+git clone https://github.com/Luqman234/MeowPlayer.git
+cd MeowPlayer
+python3 -m pip install .
 ```
 
 ### Termux / Android
-
-MeowPlayer has first-class Termux support.
 
 Install the runtime packages:
 
@@ -111,358 +118,132 @@ pkg update
 pkg install python python-pip mpv git
 ```
 
-Grant Termux access to Android shared storage:
+Grant access to Android shared storage:
 
 ```bash
 termux-setup-storage
 ```
 
-After permission is granted, Android's normal Music directory is typically exposed to Termux as:
-
-```text
-~/storage/music
-```
-
-MeowPlayer detects Termux automatically. If no music directory is supplied, it prefers `~/storage/music`, then `/storage/emulated/0/Music`, and finally `~/Music`.
-
-Keep the **MeowPlayer repository itself inside Termux's private home directory**, such as `~/MeowPlayer`. Shared Android storage is fine for the music library, but it does not behave like a normal Unix filesystem and is not a good location for executable project files.
-
-Example setup:
+Then:
 
 ```bash
 cd ~
 git clone https://github.com/Luqman234/MeowPlayer.git
 cd MeowPlayer
-python -m pip install -r requirements.txt
-termux-setup-storage
-python meowplayer.py
-```
-
-The Termux build of `mpv` is configured for Android audio output, so MeowPlayer continues to use the same mpv backend as on desktop Linux.
-
-Persistent config/state works normally in Termux. MPRIS is intentionally disabled there because a standard Linux desktop D-Bus session is normally not present.
-
-For smaller phone displays, MeowPlayer lowers its minimum supported width from 46 columns to 32 columns when Termux is detected. Long labels and footer hints are truncated automatically rather than preventing the player from opening.
-
-## Installation
-
-Clone the repository:
-
-```bash
-git clone https://github.com/Luqman234/MeowPlayer.git
-cd MeowPlayer
-```
-
-Optionally make the script executable:
-
-```bash
-chmod +x meowplayer.py
-```
-
-## Install as a real command
-
-MeowPlayer is now packaged as **MeowPlayer 0.9.0** with a standard `pyproject.toml`.
-
-The Python distribution is named:
-
-```text
-meowplayer-terminal
-```
-
-but the installed executable is simply:
-
-```text
-meowplayer
-```
-
-### Arch Linux: recommended local install
-
-Install the non-Python runtime dependency and `pipx`:
-
-```bash
-sudo pacman -S mpv python-pipx
-pipx ensurepath
-```
-
-From the cloned repository:
-
-```bash
-pipx install .
-```
-
-Then you can launch MeowPlayer from anywhere:
-
-```bash
-meowplayer
-meowplayer ~/Music
-meowplayer --maximum-meow
-meowplayer --version
-```
-
-`pipx` keeps the Python package dependencies isolated automatically; you do not need to create or manage a `.venv` yourself.
-
-To update an existing local pipx installation after pulling new code:
-
-```bash
-pipx reinstall meowplayer-terminal
-```
-
-To remove it:
-
-```bash
-pipx uninstall meowplayer-terminal
-```
-
-### Termux package install
-
-From the repository:
-
-```bash
 python -m pip install .
-```
-
-After installation:
-
-```bash
 meowplayer
 ```
 
-Termux platform detection, Android shared-storage defaults, and the 32-column phone layout still work when launched through the installed command.
-
-### Build wheel and source packages
-
-For release builds:
-
-```bash
-python -m pip install build
-python -m build
-```
-
-This creates standard Python distribution artifacts in:
+MeowPlayer detects Termux automatically. With no explicit music directory it prefers:
 
 ```text
-dist/
-├── meowplayer_terminal-0.9.0-py3-none-any.whl
-└── meowplayer_terminal-0.9.0.tar.gz
+~/storage/music
+/storage/emulated/0/Music
+~/Music
 ```
 
-You can install the wheel directly with `pip` or `pipx`.
+Keep the MeowPlayer repository itself in Termux's private home directory. Shared storage is appropriate for music files, but not ideal for executable project files.
 
-The old development entry points remain valid, so these still work from a clone:
+MPRIS is intentionally disabled on Termux because a normal Linux desktop D-Bus session is usually unavailable there.
 
-```bash
-python meowplayer.py
-./meowplayer.py
-```
+## Requirements
 
-## Usage
+- Python **3.10+**
+- `mpv`
+- Mutagen
+- `dbus-next` for Linux MPRIS integration
+- A terminal with curses support
+- Unix-domain socket support
 
-By default, MeowPlayer scans `~/Music` on desktop Linux. In Termux it automatically prefers Android's shared `~/storage/music` directory:
+Python dependencies are declared in `pyproject.toml` and installed automatically when using `pip` or `pipx`.
 
-```bash
-./meowplayer.py
-```
+If Mutagen cannot be imported, MeowPlayer can still fall back to filenames/folders for newly scanned music, but rich tags such as artist, album, year, genre, and cached duration will be unavailable for those files.
 
-or:
+## Music library views
 
-```bash
-python3 meowplayer.py
-```
+Press the corresponding key from the Music Nest:
 
-To use another music directory, pass it as the first argument:
-
-```bash
-./meowplayer.py ~/Downloads/Music
-```
-
-The directory is scanned recursively, so music inside subdirectories is included automatically.
-
-On Termux, you can still override the Android music directory explicitly:
-
-```bash
-python meowplayer.py ~/storage/downloads/Music
-```
-
-If MeowPlayer detects Termux but cannot find shared music storage, it prints a Termux-specific hint telling you to run `termux-setup-storage`.
-
-## The Cat Catalog
-
-MeowPlayer 0.7.0 introduced the persistent SQLite **Cat Catalog**; MeowPlayer 0.8.0 expands it into a real library database with Pawmarks and listening history.
-
-By default it lives at:
-
-```text
-~/.local/share/meowplayer/library.sqlite3
-```
-
-If `XDG_DATA_HOME` is set, MeowPlayer respects it instead.
-
-MeowPlayer 0.8.0 automatically migrates the old 0.7.0 database from `~/.cache/meowplayer/library.sqlite3` the first time it opens the new version.
-
-Your music files remain the source of truth for audio and tags. The Cat Catalog stores both derived metadata for faster startup **and** persistent library data such as Pawmarks and listening history:
-
-```text
-absolute path
-music-library root
-file size
-nanosecond modification time
-title
-artist
-album
-album artist
-track number
-year
-folder
-filename
-tagged / fallback status
-favorite / Pawmark
-play count
-last played time
-added-at time
-individual listening-history events
-genre
-duration
-```
-
-### How incremental scanning works
-
-On the first launch after upgrading:
-
-```text
-scan filenames
-     ↓
-no cached entry
-     ↓
-Mutagen reads tags
-     ↓
-store metadata in SQLite
-```
-
-On later launches:
-
-```text
-scan filenames
-     ↓
-compare path + size + mtime
-     ↓
-unchanged? ── yes ──→ load metadata from Cat Catalog
-     │
-     no
-     ↓
-re-read only that file with Mutagen
-     ↓
-update Cat Catalog
-```
-
-Deleted files are automatically pruned from the catalog for that music-library root.
-
-A normal warm startup may report something like:
-
-```text
-Cat Catalog checked: 842 remembered, 3 re-sniffed, 1 vanished; 821/844 tagged meow(s).
-```
-
-That means only three files needed metadata parsing instead of all 844.
-
-The same SQLite database can safely cache multiple music roots because every entry records which library root it belongs to.
-
-When upgrading from 0.8.0 to 0.9.0, MeowPlayer preserves Pawmarks and listening history but deliberately re-sniffs cached tracks once so the new genre and duration fields are populated. Subsequent launches return to normal incremental-cache behavior.
-
-### Rebuild the catalog
-
-If you deliberately changed many tags, suspect stale metadata, or just want the cat to inspect everything again:
-
-```bash
-meowplayer --rebuild-catalog
-```
-
-This invalidates cached metadata for the current music root and rebuilds it from the actual files. It does **not** delete or modify any music, and it preserves Pawmarks, play counts, and listening history.
-
-Do **not** treat `library.sqlite3` as disposable cache anymore. Deleting it will not affect your music files, but it **will erase MeowPlayer-specific data** such as Pawmarks and listening history.
-
-## Metadata and library views
-
-MeowPlayer uses **Mutagen** to read tags from supported audio files. It currently looks for:
-
-- title
-- artist
-- album
-- album artist
-- track number
-- year/date
-- genre
-- duration from the audio stream
-
-When tags are missing or unreadable, MeowPlayer falls back safely to the filename, folder, and `Unknown Artist` / `Unknown Album` placeholders.
-
-The current song display and The Catnip Stash use parsed metadata instead of raw filenames whenever tags are available.
-
-### Switching views
-
-While in the Music Nest:
-
-| Key | Library view |
+| Key | View |
 | --- | --- |
 | `1` | Songs |
 | `2` | Artists |
 | `3` | Albums |
 | `4` | Folders / Nests |
-| `5` | Favorites / Pawmarks |
-| `6` | Listening History / Purr History |
-| `Tab` | Cycle to the next view |
+| `5` | Pawmarks |
+| `6` | Purr History |
+| `Tab` | Cycle views |
 
-**Songs** is a flat metadata-aware track list.
+### Songs
 
-**Artists** is now navigable. Select an artist and press `Enter` to open that artist, select an album and press `Enter` again, then choose an individual track to play.
-
-**Albums** is also navigable. Select an album and press `Enter` to drill into its track list.
-
-**Folders / Nests** groups files by their physical directory inside the music library.
-
-**Pawmarks** contains only tracks you marked with `F`.
-
-**Purr History** shows tracks you have played, most recently played first, and includes their persistent play counts.
-
-Use `B` or `Backspace` to move up one artist/album level.
-
-Example:
+A flat metadata-aware track list.
 
 ```text
-Music Nest / Artists — 128 meows
+★ Space Song — Beach House · Depression Cherry · Dream Pop · 05:20
+  Nude — Radiohead · In Rainbows · Art Rock · 04:15
+```
+
+### Artists
+
+Artists are navigable rather than decorative group headers.
+
+```text
+Music Nest / Artists
 
 >^.^< Radiohead · 42 track(s) ›
       YOASOBI · 18 track(s) ›
       宇多田ヒカル · 27 track(s) ›
+```
 
-ENTER
+Press `Enter`:
 
+```text
 Music Nest / Artists / Radiohead
 
 >^.^< In Rainbows (2007) · 10 track(s) ›
       Kid A (2000) · 10 track(s) ›
-
-ENTER
-
-Music Nest / Artists / Radiohead / In Rainbows
-
->^.^< 01. 15 Step — Radiohead
-      02. Bodysnatchers — Radiohead
-      03. Nude — Radiohead
+      OK Computer (1997) · 12 track(s) ›
 ```
 
-## Pawmarks and listening history
-
-Press `F` on an individual track to toggle its **Pawmark**.
-
-A Pawmarked track is stored persistently in the Cat Catalog and is shown with a star in normal track lists:
+Press `Enter` again:
 
 ```text
-★ Nude — Radiohead · In Rainbows
+Music Nest / Artists / Radiohead / In Rainbows
+
+>^.^< 01. 15 Step — Radiohead · 03:57
+      02. Bodysnatchers — Radiohead · 04:02
+      03. Nude — Radiohead · 04:15
 ```
 
-Open view `5` to see only Pawmarked tracks.
+Use `B` or `Backspace` to move up one level.
 
-Every time MeowPlayer deliberately starts a track, the Cat Catalog records:
+### Albums
+
+Album view opens directly into the selected album's track list.
+
+```text
+Music Nest / Albums
+
+>^.^< In Rainbows — Radiohead (2007) · 10 track(s) ›
+      Kid A — Radiohead (2000) · 10 track(s) ›
+```
+
+### Folders / Nests
+
+Groups tracks by their physical directory under the selected music root.
+
+### Pawmarks
+
+Press `F` on an individual track to toggle its persistent favorite state.
+
+```text
+★ Nude — Radiohead · In Rainbows · Art Rock · 04:15
+```
+
+View `5` shows only Pawmarked tracks.
+
+### Purr History
+
+Every deliberate track start records:
 
 ```text
 play_count += 1
@@ -470,158 +251,285 @@ last_played = now
 history event = now
 ```
 
-Session restore and simply resuming a stopped/paused current track do not create a fake new listen.
+Session restoration and simply resuming the current track do not create fake listens.
 
-View `6`, **Purr History**, shows listened-to tracks ordered by their latest play time:
-
-```text
-Nude — Radiohead · played 14×
-夜に駆ける — YOASOBI · played 9×
-Space Song — Beach House · played 6×
-```
-
-The database also keeps individual history events internally, so later releases can build richer statistics without starting the history over.
-
-## Search: Scent Search
-
-Press `/` while viewing the library to start searching.
-
-As you type, MeowPlayer filters the library immediately. Search checks parsed **title, artist, album, album artist, year, genre, filename, and folder path**, so a query such as `dream pop` can match genre tags as well as normal metadata or file locations.
-
-Scent Search accepts full Unicode input, including Japanese kana and kanji. It also applies Unicode NFKC normalization before matching, which makes compatibility variants such as half-width/full-width forms behave more consistently.
+View `6` is ordered by most recently played:
 
 ```text
-SCENT SEARCH > 宇多田ヒカル_   (8 meows)
-SCENT SEARCH > 夜に駆ける_     (1 meow)
-SCENT SEARCH > 東京_           (4 meows)
+Nude — Radiohead · played 14× · 04:15
+夜に駆ける — YOASOBI · played 9× · 04:21
+Space Song — Beach House · played 6× · 05:20
 ```
 
-Japanese input uses your terminal's normal input method/IME; MeowPlayer reads the resulting wide characters directly through `curses`.
+## Scent Search
 
-- Type normally to refine the search.
-- `Backspace` deletes characters.
-- `Enter` keeps the current filter and leaves typing mode.
-- `Esc` clears the search completely.
-- Press `Esc` later while a filter is active to return to the full library.
+Press `/` in the Music Nest.
+
+Search checks:
+
+- title
+- artist
+- album
+- album artist
+- year
+- genre
+- filename
+- folder/path
+
+For example:
+
+```text
+SCENT SEARCH > dream pop_       (18 meows)
+SCENT SEARCH > 宇多田ヒカル_     (8 meows)
+SCENT SEARCH > 夜に駆ける_       (1 meow)
+```
+
+Search accepts full Unicode input through `curses.get_wch()` and normalizes text with Unicode NFKC + case folding.
+
+Controls while searching:
+
+| Key | Action |
+| --- | --- |
+| Type | Refine the scent |
+| `Backspace` | Delete a character |
+| `Enter` | Keep the current filter |
+| `Esc` | Clear the filter |
+
+## The Cat Catalog
+
+The **Cat Catalog** is MeowPlayer's persistent SQLite library database.
+
+Default location:
+
+```text
+~/.local/share/meowplayer/library.sqlite3
+```
+
+If `XDG_DATA_HOME` is set, MeowPlayer uses that instead.
+
+It stores both cacheable metadata and MeowPlayer-specific library data:
+
+```text
+path
+library root
+size
+mtime
+title
+artist
+album
+album artist
+track number
+year
+genre
+duration
+folder
+filename
+tagged/fallback status
+
+Pawmark
+play count
+last played
+added-at time
+individual listening-history events
+```
+
+### Incremental metadata caching
+
+First scan:
+
+```text
+music file
+   ↓
+Mutagen reads tags + duration
+   ↓
+Cat Catalog stores metadata
+```
+
+Warm scan:
+
+```text
+path + size + mtime
+        ↓
+   unchanged?
+   /       \
+ yes       no
+  ↓         ↓
+SQLite    Mutagen
+ cache    re-sniff
+```
+
+A normal warm launch may report:
+
+```text
+Cat Catalog checked: 842 remembered, 3 re-sniffed, 1 vanished; 821/844 tagged meow(s).
+```
+
+### Rebuild metadata
+
+If tags were changed externally or you suspect stale metadata:
+
+```bash
+meowplayer --rebuild-catalog
+```
+
+This forces metadata refresh for the current music root while preserving:
+
+- Pawmarks
+- play counts
+- last-played values
+- listening history
+
+It does **not** modify the music files.
+
+Do not treat `library.sqlite3` as disposable cache. Deleting it leaves your audio files untouched, but erases MeowPlayer-specific Pawmarks and history.
+
+### Upgrading from older Cat Catalog versions
+
+MeowPlayer 0.8.0 moved the catalog from:
+
+```text
+~/.cache/meowplayer/library.sqlite3
+```
+
+to:
+
+```text
+~/.local/share/meowplayer/library.sqlite3
+```
+
+The old database is migrated automatically.
+
+MeowPlayer 0.9.0 adds genre and duration to the catalog schema. Existing Pawmarks and listening history are preserved, but cached tracks are deliberately re-sniffed once so those new fields can be populated. Later launches return to normal incremental caching.
 
 ## Pounce Bag shuffle
 
-Pounce Mode now uses a real no-repeat **Pounce Bag** instead of choosing a random track independently every time.
+Pounce Mode is not independent `random.choice()` selection anymore.
 
-When shuffle is enabled:
+It uses a real no-repeat **Pounce Bag**:
 
 ```text
-all tracks except the current one
-        ↓
-randomize once
-        ↓
-Pounce Bag
-        ↓
-consume one track per Next / natural track end
-        ↓
-bag empty?
-        ↓
-refill, excluding the current track
+all tracks except current
+          ↓
+      shuffle once
+          ↓
+     Pounce Bag
+          ↓
+  consume one by one
+          ↓
+        empty?
+          ↓
+refill excluding current
 ```
 
-That means every eligible song is visited once before a new shuffle cycle begins, and the track currently playing is never the immediate first repeat of a refill.
+Every eligible track gets one turn before a new shuffle cycle starts.
 
-The UI shows how many tracks remain:
+The UI shows the remaining bag:
 
 ```text
 Pounce: ON (37 left)
 ```
 
-The bag is persisted in MeowPlayer state, so restarting the player does not secretly reset your shuffle cycle.
+The exact next song stays a mystery:
 
-Playback history is persistent too. In Pounce Mode, pressing `Previous` returns to the actual previous song and places the song you just left on top of the Pounce Bag. Pressing `Next` can therefore take you forward to it again instead of choosing an unrelated random track.
+```text
+Next Treat: mystery meow (37 left in Pounce Bag)
+```
 
-The Catnip Stash still has priority over the Pounce Bag: queued tracks are consumed first, and a queued/manual track is removed from the remaining shuffle bag so it will not unexpectedly repeat later in the same cycle.
+The bag is persisted in the state file, so restarting MeowPlayer does not reset the shuffle cycle.
+
+Playback Previous-history is also persistent. In Pounce Mode:
+
+```text
+A → B → C → D
+
+Previous
+   ↓
+   C
+
+Previous
+   ↓
+   B
+
+Next
+ ↓
+ C
+```
+
+When going backward, the track you leave is placed at the top of the Pounce Bag so forward navigation remains natural.
+
+The Catnip Stash always has priority over the Pounce Bag.
 
 ## The Catnip Stash
 
-The queue is officially called **The Catnip Stash** because dignity was never a project requirement.
+The queue is officially called **The Catnip Stash**.
 
-From the library, highlight a song and press:
+From a leaf-level track, press `A` to stash it.
 
-```text
-A
-```
+Press `Q` to switch between the Music Nest and Catnip Stash.
 
-to stash it.
-
-Press:
+Queue playback has priority:
 
 ```text
-Q
+Catnip Stash
+     ↓
+Pounce Bag / sequential library
 ```
 
-to switch between the Music Nest and The Catnip Stash.
-
-The stash behaves as a real **up-next queue**. When a track ends — or when you press `N` — queued tracks are consumed from the top of the stash before MeowPlayer returns to normal sequential or shuffled library playback.
-
-Inside The Catnip Stash:
+Inside the stash:
 
 | Key | Action |
 | --- | --- |
-| `↑` / `↓` | Choose a queued track |
-| `Enter` | Play and consume selected stash item now |
-| `D` | Remove selected item |
-| `K` | Move selected item up |
-| `J` | Move selected item down |
-| `C` | Clear the entire stash |
-| `W` | Save stash as an `.m3u` playlist |
-| `O` | Load an `.m3u` / `.m3u8` playlist |
-| `Q` | Return to the Music Nest |
+| `↑` / `↓` | Select queued track |
+| `Enter` | Play and consume selected item |
+| `D` | Remove |
+| `K` | Move up |
+| `J` | Move down |
+| `C` | Clear stash |
+| `W` | Save as `.m3u` |
+| `O` | Load `.m3u` / `.m3u8` |
+| `Q` | Return to Music Nest |
 
 The default playlist path is:
 
 ```text
-~/Music/catnip-stash.m3u
+<current music root>/catnip-stash.m3u
 ```
 
-or the equivalent path inside whichever music directory you launched MeowPlayer with. You can type another path when prompted.
-
-Loaded playlist entries must point to songs that are already inside the current MeowPlayer library. Entries that cannot be found are skipped and reported.
+Loaded playlist entries must resolve to tracks already indexed in the current library.
 
 ## Main controls
 
-| Key | MeowPlayer action |
+| Key | Action |
 | --- | --- |
-| `↑` / `↓` | Choose a track |
-| `Enter` | Open artist/album group, or play a track at leaf level |
-| `1`–`6` | Songs / Artists / Albums / Folders / Pawmarks / Purr History |
+| `↑` / `↓` | Choose |
+| `Enter` | Open artist/album group or play track |
+| `1`–`6` | Select library view |
 | `Tab` | Cycle library view |
-| `B` / `Backspace` | Go up one artist/album level |
-| `F` | Toggle Pawmark on the selected track |
-| `/` | Start Scent Search |
-| `A` | Add selected track to The Catnip Stash |
+| `B` / `Backspace` | Go up one drill-down level |
+| `/` | Scent Search |
+| `F` | Toggle Pawmark |
+| `A` | Add track to Catnip Stash |
 | `Q` | Toggle Music Nest / Catnip Stash |
 | `Space` | Paws / resume |
 | `←` / `→` | Scritch backward / forward 5 seconds |
-| `N` | Next meow; consumes stash first |
+| `N` | Next meow |
 | `P` | Previous purr |
-| `+` / `-` | Raise / lower Meow Level |
-| `S` | Toggle Pounce Mode (shuffle) |
-| `R` | Toggle Tail-Chase (repeat) |
-| `X` | Escape before the cat notices |
-
-> `Q` now opens The Catnip Stash, so quitting moved to `X`.
+| `+` / `-` | Adjust Meow Level |
+| `S` | Toggle Pounce Mode |
+| `R` | Toggle Tail-Chase |
+| `X` | Quit |
 
 ## Persistent config and state
 
-MeowPlayer now follows the XDG base-directory layout.
+MeowPlayer follows the XDG base-directory layout.
 
-By default:
+### Config
 
 ```text
 ~/.config/meowplayer/config.json
-~/.local/state/meowplayer/state.json
 ```
 
-If `XDG_CONFIG_HOME` or `XDG_STATE_HOME` is set, MeowPlayer uses those locations instead.
-
-The config file is user-editable and currently stores:
+Example:
 
 ```json
 {
@@ -631,63 +539,63 @@ The config file is user-editable and currently stores:
 }
 ```
 
-The state file is managed automatically and remembers:
+### Runtime state
 
-- Meow Level / volume
-- Pounce Mode / shuffle
-- Tail-Chase / repeat
-- current Songs / Artists / Albums / Nests / Pawmarks / Purr History view
-- last track
-- last playback position
-- The Catnip Stash queue
-- remaining Pounce Bag
-- playback Previous-history
-
-State is written periodically and again on shutdown.
-
-When session restore is enabled, MeowPlayer loads the previous track at its saved position **paused**. It never auto-blasts audio just because the program was opened.
-
-You can bypass either feature for one launch:
-
-```bash
-python meowplayer.py --no-restore
-python meowplayer.py --no-mpris
+```text
+~/.local/state/meowplayer/state.json
 ```
+
+It remembers:
+
+- volume
+- Pounce Mode
+- Tail-Chase
+- current library view
+- last track
+- playback position
+- Catnip Stash
+- remaining Pounce Bag
+- Previous-history
+
+State is written periodically and again during shutdown.
+
+Session restore loads the last track at the saved position **paused**. Opening MeowPlayer never intentionally blasts yesterday's track immediately.
 
 ## MPRIS and media keys
 
-On Linux desktops, MeowPlayer exports the standard MPRIS service:
+On Linux desktops, MeowPlayer exposes:
 
 ```text
 org.mpris.MediaPlayer2.meowplayer
 ```
 
-MPRIS exposes:
+Supported controls include:
 
 - Play / Pause / PlayPause
 - Next / Previous
 - Stop
-- seek and absolute position
-- current title / artist / album / genre metadata
-- playback position and duration
+- relative and absolute seek
 - volume
-- Pounce Mode as MPRIS Shuffle
-- Tail-Chase as MPRIS LoopStatus
+- Shuffle / Pounce Mode
+- LoopStatus / Tail-Chase
 - remote Quit
 
-This makes MeowPlayer visible to MPRIS-aware desktop components and tools.
+MPRIS metadata includes:
 
-### Test it with playerctl
+- title
+- artist
+- album
+- album artist
+- genre
+- file URI
+- duration
 
-On Arch:
+Test with `playerctl`:
 
 ```bash
 sudo pacman -S playerctl
-```
 
-Then, while MeowPlayer is running:
-
-```bash
+playerctl -l
 playerctl --player=meowplayer status
 playerctl --player=meowplayer metadata
 playerctl --player=meowplayer play-pause
@@ -695,92 +603,54 @@ playerctl --player=meowplayer next
 playerctl --player=meowplayer previous
 ```
 
-### Hyprland media-key example
-
-If your compositor does not bind hardware media keys automatically, route them through `playerctl`.
-
-Current Hyprland Lua-style configuration:
-
-```lua
-hl.bind("XF86AudioPlay", hl.dsp.exec_cmd("playerctl --player=meowplayer play-pause"), { locked = true })
-hl.bind("XF86AudioNext", hl.dsp.exec_cmd("playerctl --player=meowplayer next"), { locked = true })
-hl.bind("XF86AudioPrev", hl.dsp.exec_cmd("playerctl --player=meowplayer previous"), { locked = true })
-hl.bind("XF86AudioStop", hl.dsp.exec_cmd("playerctl --player=meowplayer stop"), { locked = true })
-```
-
-On older Hyprland releases using hyprlang syntax:
-
-```ini
-bindl = , XF86AudioPlay, exec, playerctl --player=meowplayer play-pause
-bindl = , XF86AudioNext, exec, playerctl --player=meowplayer next
-bindl = , XF86AudioPrev, exec, playerctl --player=meowplayer previous
-bindl = , XF86AudioStop, exec, playerctl --player=meowplayer stop
-```
-
-That means your keyboard's Play/Pause, Next, Previous, and Stop keys can control MeowPlayer even when its terminal is not focused.
-
-MPRIS requires a user D-Bus session plus the Python `dbus-next` package. If registration fails, MeowPlayer stays usable and now shows the exact MPRIS startup error in its status line.
-
-### If playerctl says "No players found"
-
-First make sure the Python D-Bus binding is installed:
+If `playerctl` says no players were found:
 
 ```bash
-pacman -Q python-dbus-next playerctl
 python -c 'import dbus_next; print("dbus-next: OK")'
-```
-
-Check that your user D-Bus is reachable:
-
-```bash
 busctl --user list >/dev/null && echo "user D-Bus: OK"
+busctl --user list | grep org.mpris.MediaPlayer2.meowplayer
 ```
 
-With MeowPlayer running, check whether it actually owns its MPRIS name:
+MeowPlayer stays usable if MPRIS registration fails and displays the startup error in its status line.
+
+## Cat modes
+
+### Normal mode
 
 ```bash
-busctl --user list | grep org.mpris.MediaPlayer2.meowplayer
-playerctl -l
-```
-
-A healthy session should show:
-
-```text
-org.mpris.MediaPlayer2.meowplayer
-```
-
-and `playerctl -l` should include:
-
-```text
 meowplayer
 ```
 
-MeowPlayer does not require `DBUS_SESSION_BUS_ADDRESS` to be manually exported. The D-Bus library is allowed to resolve the normal user session bus itself.
+### Serious Mode
 
-## Cat-specific polish
-
-The mascot is no longer purely decorative. Its face and the header react to player state.
-
-Typical moods include:
-
-| State | Cat Mood |
-| --- | --- |
-| Nothing playing | **Waiting** |
-| Normal playback | **Purring** |
-| Paused | **Loafing** |
-| Pounce Mode | **Zoomies** |
-| Tail-Chase | **Tail-Chasing** |
-| Catnip Stash waiting | **Guarding Catnip** |
-
-For example:
-
-```text
- /\_/\   ♫ MEOWPLAYER v0.9.0 — Purring
-( ^.^ )
- > ♫ <
+```bash
+meowplayer --serious-mode
 ```
 
-Pause it:
+Uses conventional labels and removes most feline presentation.
+
+### Maximum Meow
+
+```bash
+meowplayer --maximum-meow
+```
+
+For situations where the existing quantity of cat is scientifically insufficient.
+
+The two modes are mutually exclusive.
+
+## Cat moods
+
+The mascot reacts to player state:
+
+| State | Mood |
+| --- | --- |
+| Nothing playing | Waiting |
+| Normal playback | Purring |
+| Paused | Loafing |
+| Pounce Mode | Zoomies |
+| Tail-Chase | Tail-Chasing |
+| Catnip queued | Guarding Catnip |
 
 ```text
  /\_/\   ♫ MEOWPLAYER v0.9.0 — Loafing
@@ -788,106 +658,102 @@ Pause it:
  > ^ <  ...
 ```
 
-The Music Nest and Catnip Stash also expose **Next Treat**. With Pounce Mode enabled, the exact next song stays a mystery, but MeowPlayer shows how many tracks remain in the current Pounce Bag.
-
-Maximum Meow has its own reactive versions of the same moods because apparently a static ASCII cat was no longer sufficient.
-
-## Cat modes
-
-Normal mode is already cat-themed:
-
-```bash
-./meowplayer.py
-```
-
-If you need MeowPlayer to behave itself for a moment:
-
-```bash
-./meowplayer.py --serious-mode
-```
-
-Serious Mode removes the cat jokes, mascot splash, feline labels, quotes, paw markers, and animated tail in favor of conventional music-player wording.
-
-If normal MeowPlayer does not contain enough cat:
-
-```bash
-./meowplayer.py --maximum-meow
-```
-
-Maximum Meow increases the mascot energy and turns the quote line into a full feline emergency.
-
-You can combine either mode with a music directory:
-
-```bash
-./meowplayer.py --maximum-meow ~/Music
-```
-
-`--serious-mode` and `--maximum-meow` are mutually exclusive, for obvious philosophical reasons.
-
 ## Feline vocabulary
 
-| Conventional term | MeowPlayer term |
+| Conventional | MeowPlayer |
 | --- | --- |
 | Library | Music Nest |
 | Folders | Nests |
 | Search | Scent Search |
 | Queue | The Catnip Stash |
+| Favorites | Pawmarks |
+| Listening history | Purr History |
 | Now Playing | Now Purring |
 | Volume | Meow Level |
 | Shuffle | Pounce Mode |
+| Shuffle pool | Pounce Bag |
 | Repeat | Tail-Chase |
 | Pause | Paws |
-| Seek | Scritch seek |
+| Seek | Scritch |
 | Save playlist | Bury stash |
 | Load playlist | Dig up stash |
-| Current track marker | 🐾 |
 
-Action feedback is equally important. Expect messages such as:
-
-```text
-The cat has chosen a song.
-Stashed the meow: Space Song.flac
-Opened THE CATNIP STASH.
-The cat pulled the next treat from The Catnip Stash.
-Pawsed. The cat is loafing.
-Purr resumed. The loaf has awakened.
-Scent locked: 3 possible meow(s).
-```
-
-## How it works
+## Architecture
 
 ```text
-Music files
-   │
-   ├── incremental scan
-   ▼
-Cat Catalog (SQLite)
-   ├── cached tags
-   ├── Pawmarks
-   └── listening history
-   │
-   ▼
-Music Nest
-   │
-   ├── Scent Search
-   │
-   └── A → The Catnip Stash
-              │
-              │ queue-first playback
-              ▼
-        MeowPlayer terminal UI
-              │
-              │ JSON IPC over a Unix socket
-              ▼
-             mpv
-              │
-              ▼
-          Audio output
+                     Music files
+                         │
+                    recursive scan
+                         │
+                         ▼
+                ┌─────────────────┐
+                │   Cat Catalog   │
+                │     SQLite      │
+                ├─────────────────┤
+                │ cached metadata │
+                │ genre/duration  │
+                │ Pawmarks        │
+                │ Purr History    │
+                └────────┬────────┘
+                         │
+            ┌────────────┼─────────────┐
+            ▼            ▼             ▼
+         Artists       Albums       Scent Search
+            │            │
+            └──────┬─────┘
+                   ▼
+              Music Nest
+                   │
+            ┌──────┴────────┐
+            ▼               ▼
+      Catnip Stash      Pounce Bag
+            └──────┬────────┘
+                   ▼
+             MeowPlayer TUI
+                   │
+             mpv JSON IPC
+                   │
+                   ▼
+                  mpv
+                   │
+                   ▼
+              audio output
+
+                   ↕
+              MPRIS / D-Bus
+                   ↕
+         playerctl / media keys
 ```
 
-Python handles the interface, incremental library scanning, metadata-backed views, drill-down navigation, search, queue state, shuffle-bag/history state, playlist files, keyboard controls, and all cat-related responsibilities. The **Cat Catalog** stores cached metadata—including genre and duration—plus Pawmarks and listening history in SQLite, **Mutagen** reads tags and stream information for new or modified files, and `mpv` handles the actual audio decoding and playback.
+Python owns the interface, library model, search, persistence, queueing, shuffle logic, and cat-related responsibilities. Mutagen reads metadata and stream duration. SQLite stores the persistent library model. `mpv` handles decoding and audio playback.
 
-This means MeowPlayer does not need to implement MP3, FLAC, AAC, Opus, and other audio codecs itself.
+## Build packages
+
+Install the build frontend:
+
+```bash
+python -m pip install build
+```
+
+Build wheel + source distribution:
+
+```bash
+python -m build
+```
+
+Output:
+
+```text
+dist/
+├── meowplayer_terminal-0.9.0-py3-none-any.whl
+└── meowplayer_terminal-0.9.0.tar.gz
+```
+
+The installed CLI is still:
+
+```text
+meowplayer
+```
 
 ## Project structure
 
@@ -902,34 +768,63 @@ MeowPlayer/
 ├── README.md
 ├── LICENSE
 ├── tests/
-│   └── test_catalog.py
-└── .gitignore
+│   ├── test_catalog.py
+│   └── test_shuffle.py
+└── .github/
+    └── workflows/
+        └── package-smoke.yml
 ```
 
-## Development
+## Development and tests
 
-After making changes:
+Compile the modules:
 
 ```bash
-git status
-git diff
-git add .
-git commit -m "Describe your change"
-git push
+python -m py_compile   meowplayer.py   meow_catalog.py   meow_persistence.py   mpris_support.py
+```
+
+Run tests:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Build-test the package:
+
+```bash
+python -m build
+```
+
+The GitHub Actions package-smoke workflow automatically checks relevant pushes and pull requests by:
+
+```text
+compile Python modules
+        ↓
+run unit tests
+        ↓
+build wheel + source distribution
+        ↓
+install wheel in a clean venv
+        ↓
+meowplayer --version
+meowplayer --help
 ```
 
 ## Roadmap
 
-Some possible future improvements:
+Potential next upgrades:
 
-- Album-art support in compatible terminals
-- Genre-focused smart views and playlists
-- Release automation and signed/tagged builds
-- Even more scientifically unnecessary cat behavior
+- album art in compatible terminals
+- genre-focused smart views and smart playlists
+- ReplayGain / loudness normalization
+- gapless playback improvements
+- release automation and tagged GitHub releases
+- Arch `PKGBUILD` / AUR packaging
+- additional scientifically unnecessary cat behavior
 
 ## License
 
-MeowPlayer is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE) for the full license text.
+MeowPlayer is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
 
 ## Why "MeowPlayer"?
 
