@@ -170,6 +170,13 @@ class LibraryCatalog:
             ),
         )
 
+    def clear_root(self):
+        cursor = self.connection.execute(
+            "DELETE FROM tracks WHERE root = ?",
+            (str(self.music_dir),),
+        )
+        return max(0, int(cursor.rowcount))
+
     def prune(self, existing_paths):
         existing = {
             str(Path(path).resolve())
