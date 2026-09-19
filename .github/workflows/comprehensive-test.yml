@@ -32,7 +32,7 @@ concurrency:
 env:
   PYTHONUTF8: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  MEOW_CI_REVISION: "wait-for-primed-playlist-v7"
+  MEOW_CI_REVISION: "exact-primed-index-v8"
 
 jobs:
   source-integrity:
@@ -460,10 +460,37 @@ jobs:
               assert duration > 1.0, duration
 
               mpv.prime_next(second)
-              playlist_count = int(
-                  mpv.get_property("playlist-count") or 0
-              )
+
+              deadline = time.monotonic() + 5.0
+              playlist_count = 0
+              playlist_pos = -1
+              while time.monotonic() < deadline:
+                  playlist_count = int(
+                      mpv.get_property("playlist-count") or 0
+                  )
+                  playlist_pos = int(
+                      mpv.get_property("playlist-current-pos") or 0
+                  )
+                  if playlist_count >= 2 and playlist_pos == 0:
+                      break
+                  time.sleep(0.05)
+
               assert playlist_count >= 2, playlist_count
+              assert playlist_pos == 0, playlist_pos
+
+              response = mpv.advance_playlist()
+              assert response and response.get("error") == "success", response
+              current = wait_for_path(mpv, second)
+
+              deadline = time.monotonic() + 5.0
+              while time.monotonic() < deadline:
+                  playlist_pos = mpv.get_property(
+                      "playlist-current-pos"
+                  )
+                  if playlist_pos is not None and int(playlist_pos) == 1:
+                      break
+                  time.sleep(0.05)
+              assert int(playlist_pos) == 1, playlist_pos
 
               mpv.seek_absolute(0.5)
               time.sleep(0.1)
@@ -481,6 +508,8 @@ jobs:
                   duration,
                   "playlist-count=",
                   playlist_count,
+                  "playlist-pos=",
+                  playlist_pos,
               )
           finally:
               mpv.quit()
