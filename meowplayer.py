@@ -2956,7 +2956,11 @@ class MeowPlayer:
             progress_y = content_start + 2
             visualizer_y = content_start + 3
             inline_lyric = self.current_lyric_text()
-            lyric_shift = 1 if inline_lyric else 0
+            has_synced_lyrics = bool(
+                self.current_lyrics is not None
+                and self.current_lyrics.synced
+            )
+            lyric_shift = 1 if has_synced_lyrics else 0
             lyric_y = content_start + 4
             info_y = content_start + 4 + lyric_shift
             status_y = content_start + 5 + lyric_shift
