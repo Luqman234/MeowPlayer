@@ -225,6 +225,7 @@ class MPVController:
                 "mpv",
                 "--no-video",
                 "--idle=yes",
+                "--keep-open=yes",
                 "--really-quiet",
                 f"--input-ipc-server={self.socket_path}",
             ],
@@ -948,6 +949,10 @@ class MeowPlayer:
         self.current = index
         self.mpv.load(self.songs[index])
         self.mpv.play()
+
+        ordered = self.ordered_library_indices()
+        if index in ordered:
+            self.selected = ordered.index(index)
 
         meta = self.meta(index)
         if automatic:
