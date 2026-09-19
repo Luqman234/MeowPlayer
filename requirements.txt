@@ -1,3 +1,4 @@
 mutagen>=1.47,<2
 dbus-next>=0.2.3,<1
 pillow>=10,<13
+watchdog>=6,<7
