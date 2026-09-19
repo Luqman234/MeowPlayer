@@ -593,6 +593,15 @@ class MeowPlayer:
                     "from filenames."
                 )
 
+        initial_serious += (
+            f" Audio: gapless={self.gapless_mode}, "
+            f"ReplayGain={self.replaygain_mode}."
+        )
+        initial_cat += (
+            f" Audio paws: gapless={self.gapless_mode}, "
+            f"ReplayGain={self.replaygain_mode}."
+        )
+
         self.status_message = self.text(initial_serious, initial_cat)
         self.quote = random.choice(CAT_QUOTES)
         self.last_quote_change = time.monotonic()
@@ -3298,6 +3307,27 @@ def parse_args():
         action="store_true",
         help="disable terminal album-art rendering for this run"
     )
+    parser.add_argument(
+        "--gapless-mode",
+        choices=("no", "weak", "yes"),
+        default=None,
+        help=(
+            "mpv gapless mode: weak preserves quality across differing "
+            "formats when needed; yes keeps one output format; no disables it"
+        )
+    )
+    parser.add_argument(
+        "--replaygain",
+        choices=("no", "track", "album"),
+        default=None,
+        help="ReplayGain mode for this run"
+    )
+    parser.add_argument(
+        "--replaygain-preamp",
+        type=float,
+        default=None,
+        help="ReplayGain preamp in dB for this run"
+    )
 
     return parser.parse_args()
 
@@ -3338,6 +3368,43 @@ def main():
         and not args.no_album_art
     )
 
+    configured_gapless = str(
+        config.get("gapless_mode", "weak")
+    ).lower()
+    gapless_mode = (
+        args.gapless_mode
+        or (
+            configured_gapless
+            if configured_gapless in {"no", "weak", "yes"}
+            else "weak"
+        )
+    )
+
+    configured_replaygain = str(
+        config.get("replaygain_mode", "track")
+    ).lower()
+    replaygain_mode = (
+        args.replaygain
+        or (
+            configured_replaygain
+            if configured_replaygain in {"no", "track", "album"}
+            else "track"
+        )
+    )
+
+    try:
+        configured_preamp = float(
+            config.get("replaygain_preamp", 0.0)
+        )
+    except (TypeError, ValueError):
+        configured_preamp = 0.0
+
+    replaygain_preamp = (
+        args.replaygain_preamp
+        if args.replaygain_preamp is not None
+        else configured_preamp
+    )
+
     try:
         player = MeowPlayer(
             music_dir,
@@ -3348,6 +3415,9 @@ def main():
             mpris_enabled=mpris_enabled,
             rebuild_catalog=args.rebuild_catalog,
             album_art_enabled=album_art_enabled,
+            gapless_mode=gapless_mode,
+            replaygain_mode=replaygain_mode,
+            replaygain_preamp=replaygain_preamp,
         )
     except FileNotFoundError:
         print(
