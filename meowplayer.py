@@ -823,6 +823,7 @@ class MeowPlayer:
                 self.history.pop(0)
 
         self.current = mpv_index
+        self.load_current_lyrics(mpv_index)
 
         if self.catalog is not None:
             self.catalog.record_play(self.songs[mpv_index])
@@ -863,6 +864,7 @@ class MeowPlayer:
             position = 0.0
 
         self.current = index
+        self.load_current_lyrics(index)
         self.mpv.pause()
         self.mpv.load(self.songs[index])
         self._awaiting_mpv_path = True
@@ -1951,6 +1953,7 @@ class MeowPlayer:
             self.shuffle_bag.remove(index)
 
         self.current = index
+        self.load_current_lyrics(index)
         if reset_shuffle_bag:
             self.refill_shuffle_bag()
 
