@@ -127,6 +127,45 @@ class AudioEngineTests(unittest.TestCase):
 
         self.assertEqual(player.peek_next_index(), 3)
 
+    def test_gapless_priming_waits_for_manual_load_confirmation(self):
+        player = self.make_player(current=1)
+        player.playback_sequence = [1, 2, 3]
+        player._awaiting_mpv_path = True
+
+        player.prime_gapless_next()
+
+        self.assertEqual(player.gapless_next_index, 2)
+        self.assertEqual(player.mpv.primed, [])
+
+        player.mpv.path = str(player.songs[1])
+        changed = player.sync_gapless_transition()
+
+        self.assertFalse(changed)
+        self.assertFalse(player._awaiting_mpv_path)
+        self.assertEqual(
+            player.mpv.primed,
+            [Path("/music/2.flac")],
+        )
+
+    def test_playlist_cleanup_never_removes_entries_while_mpv_position_is_minus_one(self):
+        controller = MPVController.__new__(MPVController)
+        commands = []
+
+        def fake_get_property(name):
+            if name == "playlist-current-pos":
+                return -1
+            if name == "playlist-count":
+                return 3
+            return None
+
+        controller.get_property = fake_get_property
+        controller.command = lambda *args: commands.append(args)
+
+        controller.clear_future_playlist()
+        controller.trim_playlist_before_current()
+
+        self.assertEqual(commands, [])
+
     def test_prime_gapless_appends_reserved_next_track(self):
         player = self.make_player(current=1)
         player.playback_sequence = [1, 2, 3]
