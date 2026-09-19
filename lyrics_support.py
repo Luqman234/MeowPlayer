@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -431,6 +432,8 @@ class LyricsManager:
         except (TypeError, ValueError):
             self.request_timeout = 3.0
         self._cache = {}
+        self._pending = {}
+        self._pending_lock = threading.Lock()
 
     def _cache_identity(self, path):
         path = Path(path).expanduser()
@@ -475,6 +478,65 @@ class LyricsManager:
         except OSError:
             return None
 
+    def _start_online_fetch(self, identity, metadata):
+        if not self.online_enabled:
+            return
+
+        with self._pending_lock:
+            if identity in self._pending:
+                return
+            state = {
+                "done": False,
+                "text": "",
+                "metadata": metadata,
+            }
+            self._pending[identity] = state
+
+        def worker():
+            text = _fetch_lrclib(
+                metadata,
+                timeout=self.request_timeout,
+            )
+            with self._pending_lock:
+                current = self._pending.get(identity)
+                if current is state:
+                    state["text"] = text
+                    state["done"] = True
+
+        threading.Thread(
+            target=worker,
+            name="meowplayer-lyrics",
+            daemon=True,
+        ).start()
+
+    def poll(self, track_path):
+        if not self.enabled or not self.online_enabled:
+            return None
+
+        track_path = Path(track_path).expanduser()
+        identity = self._cache_identity(track_path)
+
+        with self._pending_lock:
+            state = self._pending.get(identity)
+            if state is None or not state.get("done"):
+                return None
+            self._pending.pop(identity, None)
+
+        synced_text = state.get("text", "")
+        if not synced_text:
+            return None
+
+        document = parse_lrc(
+            synced_text,
+            source="LRCLIB · downloaded",
+        )
+        if document is None or not document.synced:
+            return None
+
+        self._save_cached_lrc(state["metadata"], synced_text)
+        self._cache[identity] = document
+        return document
+
     def load(self, track_path):
         if not self.enabled:
             return None
@@ -513,23 +575,10 @@ class LyricsManager:
                 return embedded_synced
             embedded_plain = _embedded_plain(tags)
 
-        # 4. Fetch synchronized lyrics automatically, then persist the LRC.
-        if self.online_enabled:
-            synced_text = _fetch_lrclib(
-                metadata,
-                timeout=self.request_timeout,
-            )
-            if synced_text:
-                document = parse_lrc(
-                    synced_text,
-                    source="LRCLIB · downloaded",
-                )
-                if document is not None and document.synced:
-                    self._save_cached_lrc(metadata, synced_text)
-                    self._cache[identity] = document
-                    return document
+        # 4. Ask LRCLIB in the background. poll() promotes the result later.
+        self._start_online_fetch(identity, metadata)
 
-        # 5. Plain sidecar / embedded lyrics remain useful fallbacks.
+        # 5. Plain sidecar / embedded lyrics remain useful while fetching.
         text_path = track_path.with_suffix(".txt")
         if text_path.is_file():
             document = parse_plain_lyrics(
