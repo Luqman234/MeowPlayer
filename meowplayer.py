@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -137,6 +138,10 @@ def _clean_year(value):
         if len(token) == 4 and token.isdigit():
             return token
     return text[:12]
+
+
+def _normalize_search_text(value):
+    return unicodedata.normalize("NFKC", str(value)).casefold()
 
 
 class MPVController:
@@ -435,11 +440,11 @@ class MeowPlayer:
         ):
             fields.append(meta.album_artist)
 
-        return " ".join(fields).casefold()
+        return _normalize_search_text(" ".join(fields))
 
     def filtered_song_indices(self):
         indices = list(range(len(self.songs)))
-        query = self.search_query.casefold().strip()
+        query = _normalize_search_text(self.search_query).strip()
 
         if query:
             indices = [
@@ -988,14 +993,14 @@ class MeowPlayer:
         return value or default
 
     def handle_search_key(self, key):
-        if key in (27,):
+        if key in ("\x1b", 27):
             self.search_active = False
             self.search_query = ""
             self.selected = 0
             self.set_status("Search cleared.", "Scent trail cleared.")
             return
 
-        if key in (10, 13, curses.KEY_ENTER):
+        if key in ("\n", "\r", 10, 13, curses.KEY_ENTER):
             self.search_active = False
             matches = len(self.filtered_song_indices())
             self.set_status(
@@ -1004,12 +1009,18 @@ class MeowPlayer:
             )
             return
 
-        if key in (curses.KEY_BACKSPACE, 127, 8):
+        if key in ("\b", "\x7f", curses.KEY_BACKSPACE, 127, 8):
             self.search_query = self.search_query[:-1]
             self.selected = 0
             return
 
-        if 32 <= key <= 126:
+        if isinstance(key, str):
+            if key.isprintable():
+                self.search_query += key
+                self.selected = 0
+            return
+
+        if isinstance(key, int) and 32 <= key <= 126:
             self.search_query += chr(key)
             self.selected = 0
 
@@ -1413,7 +1424,14 @@ class MeowPlayer:
                 if eof:
                     self.next_song(automatic=True)
 
-            key = stdscr.getch()
+            try:
+                if self.search_active:
+                    key = stdscr.get_wch()
+                else:
+                    key = stdscr.getch()
+            except curses.error:
+                continue
+
             if key == -1:
                 continue
 
