@@ -1,8 +1,16 @@
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from meow_smart import build_smart_playlists
+from meow_smart import (
+    SmartRuleError,
+    build_smart_playlists,
+    compile_rule,
+    load_custom_mix_definitions,
+    rule_matches,
+)
 
 
 def meta(
@@ -12,6 +20,9 @@ def meta(
     album="Album",
     genre="",
     track_number=1,
+    year="2020",
+    duration=240.0,
+    tagged=True,
 ):
     return SimpleNamespace(
         path=Path(f"/music/{index}.flac"),
@@ -20,6 +31,12 @@ def meta(
         album=album,
         genre=genre,
         track_number=track_number,
+        year=year,
+        duration=duration,
+        tagged=tagged,
+        album_artist=artist,
+        filename=f"{index}.flac",
+        folder="Music",
     )
 
 
@@ -82,6 +99,92 @@ class SmartPlaylistTests(unittest.TestCase):
             playlists["fresh"].indices,
             (1, 2, 3, 0),
         )
+
+    def test_rule_engine_supports_text_numeric_boolean_and_parentheses(self):
+        expression = compile_rule(
+            '(genre ~ "dream" and favorite = true) '
+            'or play_count >= 9'
+        )
+
+        self.assertTrue(
+            rule_matches(expression, self.metadata, self.stats, 0)
+        )
+        self.assertFalse(
+            rule_matches(expression, self.metadata, self.stats, 1)
+        )
+        self.assertTrue(
+            rule_matches(expression, self.metadata, self.stats, 2)
+        )
+
+    def test_rule_engine_supports_not_and_aliases(self):
+        expression = compile_rule(
+            'not pawmarked = true and plays = 0'
+        )
+
+        self.assertTrue(
+            rule_matches(expression, self.metadata, self.stats, 3)
+        )
+        self.assertFalse(
+            rule_matches(expression, self.metadata, self.stats, 0)
+        )
+
+    def test_invalid_field_is_rejected(self):
+        with self.assertRaises(SmartRuleError):
+            compile_rule('mood = "sleepy"')
+
+    def test_custom_mix_file_builds_sorted_limited_playlist(self):
+        payload = {
+            "mixes": [
+                {
+                    "name": "Dream Favorites",
+                    "rule": 'genre ~ "Dream" and favorite = true',
+                    "sort": "-play_count",
+                    "limit": 1,
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "smart-mixes.json"
+            path.write_text(
+                json.dumps(payload),
+                encoding="utf-8",
+            )
+            definitions, errors = load_custom_mix_definitions(path)
+
+        self.assertEqual(errors, [])
+        playlists = {
+            playlist.key: playlist
+            for playlist in build_smart_playlists(
+                self.metadata,
+                self.stats,
+                definitions,
+            )
+        }
+
+        custom = next(
+            playlist
+            for key, playlist in playlists.items()
+            if key.startswith("custom:dream-favorites")
+        )
+        self.assertEqual(custom.indices, (2,))
+
+    def test_bad_custom_rule_does_not_break_other_mixes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "smart-mixes.json"
+            path.write_text(
+                json.dumps([
+                    {
+                        "name": "Broken",
+                        "rule": "genre ??? rock",
+                    }
+                ]),
+                encoding="utf-8",
+            )
+            definitions, errors = load_custom_mix_definitions(path)
+
+        self.assertEqual(definitions, [])
+        self.assertEqual(len(errors), 1)
 
     def test_genre_mixes_are_created_from_real_library_genres(self):
         playlists = self.playlists()
