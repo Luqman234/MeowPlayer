@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -111,7 +112,13 @@ class LyricsTests(unittest.TestCase):
                     cache_dir=cache_dir,
                     request_timeout=0.25,
                 )
-                document = manager.load(track)
+                self.assertIsNone(manager.load(track))
+                document = None
+                for _ in range(100):
+                    document = manager.poll(track)
+                    if document is not None:
+                        break
+                    time.sleep(0.01)
 
             self.assertIsNotNone(document)
             self.assertTrue(document.synced)
@@ -148,10 +155,15 @@ class LyricsTests(unittest.TestCase):
                     online_enabled=True,
                     cache_dir=cache_dir,
                 )
-                self.assertEqual(
-                    online.load(track).current_line(2.0),
-                    "Remote lyric",
-                )
+                self.assertIsNone(online.load(track))
+                remote = None
+                for _ in range(100):
+                    remote = online.poll(track)
+                    if remote is not None:
+                        break
+                    time.sleep(0.01)
+                self.assertIsNotNone(remote)
+                self.assertEqual(remote.current_line(2.0), "Remote lyric")
 
             (root / "song.lrc").write_text(
                 "[00:01.00]Local lyric\n",
