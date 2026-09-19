@@ -144,6 +144,61 @@ def _normalize_search_text(value):
     return unicodedata.normalize("NFKC", str(value)).casefold()
 
 
+def _is_termux():
+    prefix = os.environ.get("PREFIX", "")
+    return bool(
+        os.environ.get("TERMUX_VERSION")
+        or "com.termux" in prefix
+        or "/termux/" in prefix
+    )
+
+
+def _default_music_dir():
+    if not _is_termux():
+        return Path("~/Music").expanduser()
+
+    candidates = [
+        Path("~/storage/music").expanduser(),
+        Path("/storage/emulated/0/Music"),
+        Path("~/Music").expanduser(),
+    ]
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+
+    # This is the path termux-setup-storage normally creates.
+    return candidates[0]
+
+
+def _platform_install_hint():
+    if _is_termux():
+        return (
+            "Install mpv in Termux with:\n\n"
+            "    pkg install mpv\n"
+        )
+
+    return (
+        "Install mpv on Arch Linux with:\n\n"
+        "    sudo pacman -S mpv\n"
+    )
+
+
+def _missing_music_dir_message(path):
+    message = f"Music directory doesn't exist: {path}"
+
+    if _is_termux():
+        message += (
+            "\n\nTermux detected. To access Android's shared Music folder, run:\n\n"
+            "    termux-setup-storage\n\n"
+            "Then allow the storage permission and try again. "
+            "MeowPlayer will prefer ~/storage/music automatically.\n"
+            "You can also pass any readable music directory explicitly."
+        )
+
+    return message
+
+
 class MPVController:
     def __init__(self):
         self.socket_path = os.path.join(
@@ -1634,8 +1689,11 @@ def parse_args():
     parser.add_argument(
         "music_dir",
         nargs="?",
-        default="~/Music",
-        help="music directory to scan recursively (default: ~/Music)"
+        default=None,
+        help=(
+            "music directory to scan recursively "
+            "(default: ~/Music, or ~/storage/music in Termux)"
+        )
     )
 
     mode = parser.add_mutually_exclusive_group()
@@ -1655,10 +1713,14 @@ def parse_args():
 
 def main():
     args = parse_args()
-    music_dir = Path(args.music_dir).expanduser()
+    music_dir = (
+        Path(args.music_dir).expanduser()
+        if args.music_dir
+        else _default_music_dir()
+    )
 
     if not music_dir.exists():
-        print(f"Music directory doesn't exist: {music_dir}")
+        print(_missing_music_dir_message(music_dir))
         sys.exit(1)
 
     try:
@@ -1670,8 +1732,7 @@ def main():
     except FileNotFoundError:
         print(
             "MPV was not found.\n"
-            "Install it with:\n\n"
-            "    sudo pacman -S mpv"
+            + _platform_install_hint()
         )
         sys.exit(1)
 
