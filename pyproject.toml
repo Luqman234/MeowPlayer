@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meowplayer-terminal"
+version = "0.6.0"
+description = "A lightweight, aggressively cat-themed terminal music player powered by mpv."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-only"
+authors = [
+    { name = "Luqman234" }
+]
+keywords = [
+    "music",
+    "music-player",
+    "terminal",
+    "tui",
+    "mpv",
+    "mpris",
+    "linux",
+    "termux",
+    "cat",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console :: Curses",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+]
+dependencies = [
+    "mutagen>=1.47,<2",
+    "dbus-next>=0.2.3,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/Luqman234/MeowPlayer"
+Repository = "https://github.com/Luqman234/MeowPlayer"
+Issues = "https://github.com/Luqman234/MeowPlayer/issues"
+
+[project.scripts]
+meowplayer = "meowplayer:main"
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+]
+
+[tool.setuptools]
+py-modules = [
+    "meowplayer",
+    "meow_persistence",
+    "mpris_support",
+]
