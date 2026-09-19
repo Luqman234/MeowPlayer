@@ -143,6 +143,16 @@ class LibraryCatalog:
             if name not in columns:
                 self.connection.execute(statement)
 
+        if version < 3:
+            # v3 adds genre and duration. Preserve Pawmarks/history/stats, but
+            # force one metadata refresh so old cache rows gain real values.
+            self.connection.execute(
+                """
+                UPDATE tracks
+                SET size = -1, mtime_ns = -1
+                """
+            )
+
         # Existing v1 rows get a sensible migration timestamp. New rows receive
         # their actual insertion timestamp in put().
         self.connection.execute(
