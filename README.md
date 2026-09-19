@@ -176,9 +176,15 @@ Press `/` while viewing the library to start searching.
 
 As you type, MeowPlayer filters the library immediately. Search now checks parsed **title, artist, album, album artist, year, filename, and folder path**, so a query can match either tags or where the file lives.
 
+Scent Search accepts full Unicode input, including Japanese kana and kanji. It also applies Unicode NFKC normalization before matching, which makes compatibility variants such as half-width/full-width forms behave more consistently.
+
 ```text
-SCENT SEARCH > space_   (2 meows)
+SCENT SEARCH > 宇多田ヒカル_   (8 meows)
+SCENT SEARCH > 夜に駆ける_     (1 meow)
+SCENT SEARCH > 東京_           (4 meows)
 ```
+
+Japanese input uses your terminal's normal input method/IME; MeowPlayer reads the resulting wide characters directly through `curses`.
 
 - Type normally to refine the search.
 - `Backspace` deletes characters.
