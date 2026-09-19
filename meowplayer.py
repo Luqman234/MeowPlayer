@@ -22,6 +22,7 @@ except ImportError:
     MutagenFile = None
 
 from album_art import AlbumArtManager
+from lyrics_support import LyricsManager
 from meow_catalog import LibraryCatalog
 from meow_smart import build_smart_playlists
 from meow_persistence import (
@@ -31,9 +32,10 @@ from meow_persistence import (
     save_state,
 )
 from mpris_support import MPRISBridge
+from visualizer import AudioVisualizer
 
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -308,6 +310,8 @@ class MPVController:
         gapless_mode="weak",
         replaygain_mode="track",
         replaygain_preamp=0.0,
+        lyrics_enabled=True,
+        visualizer_enabled=True,
     ):
         self.socket_path = os.path.join(
             tempfile.gettempdir(),
@@ -469,6 +473,13 @@ class MeowPlayer:
         self.album_art = AlbumArtManager(
             enabled=album_art_enabled and not _is_termux()
         )
+        self.lyrics = LyricsManager(enabled=lyrics_enabled)
+        self.visualizer = AudioVisualizer(enabled=visualizer_enabled)
+        self.current_lyrics = None
+        self.lyrics_track_index = None
+        self.lyrics_follow = True
+        self.lyrics_scroll = 0
+        self.previous_view = "library"
         self.gapless_mode = (
             gapless_mode
             if gapless_mode in {"no", "weak", "yes"}
@@ -1087,6 +1098,7 @@ class MeowPlayer:
         self.persist_state(force=True)
         self.mpris.stop()
         self.album_art.clear(free_data=True)
+        self.visualizer.stop()
 
         if self.catalog is not None:
             try:
