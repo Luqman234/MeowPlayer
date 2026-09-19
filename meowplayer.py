@@ -2346,6 +2346,14 @@ class MeowPlayer:
         if reset_shuffle_bag:
             self.refill_shuffle_bag()
 
+        # An explicit/manual load replaces mpv's current item. If we already
+        # primed a future track for gapless playback, remove that reservation
+        # before loadfile replace begins. Leaving the same target both queued
+        # and being loaded can leave mpv between playlist entries with no
+        # current path.
+        self.mpv.clear_future_playlist()
+        self.gapless_next_index = None
+
         self.mpv.load(self.songs[index])
         self._awaiting_mpv_path = True
         self.mpv.play()
