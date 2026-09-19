@@ -414,6 +414,7 @@ class MeowPlayer:
         self.stash_selected = 0
         self.current = None
         self.history = []
+        self.shuffle_bag = []
 
         try:
             restored_volume = int(self.saved_state.get("volume", 70))
@@ -441,6 +442,16 @@ class MeowPlayer:
             saved_index = self.song_lookup.get(resolved)
             if saved_index is not None:
                 self.catnip_stash.append(saved_index)
+
+        self.history = self.restore_saved_index_list(
+            self.saved_state.get("playback_history", []),
+            unique=False,
+            limit=200,
+        )
+        self.shuffle_bag = self.restore_saved_index_list(
+            self.saved_state.get("shuffle_bag", []),
+            unique=True,
+        )
 
         self.search_query = ""
         self.search_active = False
@@ -495,6 +506,10 @@ class MeowPlayer:
         if self.restore_session_enabled:
             self.restore_session(self.saved_state)
 
+        self.sanitize_shuffle_bag()
+        if self.shuffle and not self.shuffle_bag and len(self.songs) > 1:
+            self.refill_shuffle_bag()
+
         self.mpris = MPRISBridge(self.external_actions)
         if self.mpris_enabled:
             requested_mpris = True
@@ -505,6 +520,69 @@ class MeowPlayer:
                     f"MPRIS unavailable: {error}",
                     f"The media-key cat tripped over D-Bus: {error}"
                 )
+
+    def restore_saved_index_list(self, saved_paths, unique=False, limit=None):
+        indices = []
+        seen = set()
+
+        if not isinstance(saved_paths, list):
+            return indices
+
+        for saved_path in saved_paths:
+            try:
+                resolved = Path(saved_path).expanduser().resolve()
+            except (OSError, RuntimeError, TypeError):
+                continue
+
+            index = self.song_lookup.get(resolved)
+            if index is None:
+                continue
+            if unique and index in seen:
+                continue
+
+            indices.append(index)
+            seen.add(index)
+
+        if limit is not None:
+            indices = indices[-limit:]
+
+        return indices
+
+    def sanitize_shuffle_bag(self):
+        cleaned = []
+        seen = set()
+
+        for index in self.shuffle_bag:
+            if not isinstance(index, int):
+                continue
+            if index < 0 or index >= len(self.songs):
+                continue
+            if index == self.current:
+                continue
+            if index in seen:
+                continue
+            cleaned.append(index)
+            seen.add(index)
+
+        self.shuffle_bag = cleaned
+
+    def refill_shuffle_bag(self):
+        self.shuffle_bag = [
+            index
+            for index in range(len(self.songs))
+            if index != self.current
+        ]
+        random.shuffle(self.shuffle_bag)
+
+    def set_shuffle_enabled(self, enabled):
+        enabled = bool(enabled)
+        changed = enabled != self.shuffle
+        self.shuffle = enabled
+
+        if not enabled:
+            self.shuffle_bag.clear()
+        elif changed or not self.shuffle_bag:
+            self.refill_shuffle_bag()
 
     def restore_session(self, saved_state):
         track = saved_state.get("current_track")
@@ -568,6 +646,16 @@ class MeowPlayer:
             "catnip_stash": [
                 str(self.songs[index].resolve())
                 for index in self.catnip_stash
+            ],
+            "shuffle_bag": [
+                str(self.songs[index].resolve())
+                for index in self.shuffle_bag
+                if 0 <= index < len(self.songs)
+            ],
+            "playback_history": [
+                str(self.songs[index].resolve())
+                for index in self.history[-200:]
+                if 0 <= index < len(self.songs)
             ],
         }
 
@@ -715,7 +803,7 @@ class MeowPlayer:
             elif action == "set_volume":
                 self.set_volume_absolute(args[0] * 100.0)
             elif action == "set_shuffle":
-                self.shuffle = bool(args[0])
+                self.set_shuffle_enabled(args[0])
             elif action == "set_repeat":
                 self.repeat = bool(args[0])
                 self.mpv.set_repeat(self.repeat)
@@ -788,7 +876,8 @@ class MeowPlayer:
             return self.meta(self.catnip_stash[0]).artist_title
 
         if self.shuffle:
-            return "mystery meow (Pounce Mode)"
+            remaining = len(self.shuffle_bag)
+            return f"mystery meow ({remaining} left in Pounce Bag)"
 
         if self.current is None:
             return self.meta(0).artist_title
@@ -1460,8 +1549,11 @@ class MeowPlayer:
             and self.current != index
         ):
             self.history.append(self.current)
-            if len(self.history) > 100:
+            if len(self.history) > 200:
                 self.history.pop(0)
+
+        if self.shuffle and index in self.shuffle_bag:
+            self.shuffle_bag.remove(index)
 
         self.current = index
         self.mpv.load(self.songs[index])
@@ -1552,14 +1644,13 @@ class MeowPlayer:
             return
 
         if self.shuffle:
-            if len(self.songs) > 1 and self.current is not None:
-                choices = [
-                    i for i in range(len(self.songs))
-                    if i != self.current
-                ]
-                index = random.choice(choices)
+            if len(self.songs) == 1:
+                index = 0
             else:
-                index = random.randrange(len(self.songs))
+                self.sanitize_shuffle_bag()
+                if not self.shuffle_bag:
+                    self.refill_shuffle_bag()
+                index = self.shuffle_bag.pop()
         elif self.current is None:
             index = 0
         else:
@@ -1576,6 +1667,8 @@ class MeowPlayer:
         if not self.songs:
             return
 
+        departed = self.current
+
         if self.history:
             index = self.history.pop()
         elif self.current is None:
@@ -1584,6 +1677,15 @@ class MeowPlayer:
             index = (self.current - 1) % len(self.songs)
 
         self.play(index, record_history=False)
+
+        if (
+            self.shuffle
+            and departed is not None
+            and departed != index
+        ):
+            if departed in self.shuffle_bag:
+                self.shuffle_bag.remove(departed)
+            self.shuffle_bag.append(departed)
         self.set_status(
             "Returned to previous track.",
             "Back to the previous purr."
@@ -2413,10 +2515,25 @@ class MeowPlayer:
                 continue
 
             if key in (ord("s"), ord("S")):
-                self.shuffle = not self.shuffle
+                self.set_shuffle_enabled(not self.shuffle)
+                remaining = len(self.shuffle_bag)
                 self.set_status(
-                    f"Shuffle {'enabled' if self.shuffle else 'disabled'}.",
-                    f"Pounce Mode {'ENGAGED' if self.shuffle else 'disengaged'}."
+                    (
+                        f"Shuffle {'enabled' if self.shuffle else 'disabled'}"
+                        + (
+                            f" with {remaining} track(s) in the bag."
+                            if self.shuffle
+                            else "."
+                        )
+                    ),
+                    (
+                        f"Pounce Mode {'ENGAGED' if self.shuffle else 'disengaged'}"
+                        + (
+                            f" — {remaining} meow(s) in the Pounce Bag."
+                            if self.shuffle
+                            else "."
+                        )
+                    )
                 )
                 continue
 
