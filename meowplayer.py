@@ -413,7 +413,7 @@ class MeowPlayer:
 
         self.mpris = MPRISBridge(self.external_actions)
         if self.mpris_enabled:
-            self.mpris.start()
+            self.mpris_enabled = self.mpris.start()
 
     def restore_session(self, saved_state):
         track = saved_state.get("current_track")
@@ -437,6 +437,7 @@ class MeowPlayer:
         self.current = index
         self.mpv.pause()
         self.mpv.load(self.songs[index])
+        self.mpv.pause()
 
         if position > 0:
             time.sleep(0.03)
@@ -569,11 +570,15 @@ class MeowPlayer:
         self.last_mpris_sync = now
 
     def process_external_actions(self):
+        handled = False
+
         while True:
             try:
                 action, args = self.external_actions.get_nowait()
             except queue.Empty:
                 break
+
+            handled = True
 
             if action == "quit":
                 self.remote_quit_requested = True
@@ -612,7 +617,8 @@ class MeowPlayer:
                 self.repeat = bool(args[0])
                 self.mpv.set_repeat(self.repeat)
 
-        self.sync_mpris(force=True)
+        if handled:
+            self.sync_mpris(force=True)
 
     def shutdown(self):
         self.persist_state(force=True)
@@ -930,6 +936,7 @@ class MeowPlayer:
 
         self.current = index
         self.mpv.load(self.songs[index])
+        self.mpv.play()
 
         meta = self.meta(index)
         if automatic:
