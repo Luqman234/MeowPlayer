@@ -445,6 +445,11 @@ class MPVController:
         except (TypeError, ValueError):
             return
 
+        # During loadfile transitions mpv can temporarily report -1.
+        # Treat that as "not ready", never as "remove everything".
+        if current < 0:
+            return
+
         for index in range(count - 1, current, -1):
             self.command("playlist-remove", index)
 
@@ -452,6 +457,10 @@ class MPVController:
         try:
             current = int(self.get_property("playlist-current-pos"))
         except (TypeError, ValueError):
+            return
+
+        # -1 means mpv is between playlist entries / still loading.
+        if current < 0:
             return
 
         while current > 0:
@@ -832,6 +841,15 @@ class MeowPlayer:
         return (self.current + 1) % len(self.songs)
 
     def prime_gapless_next(self):
+        # A manual loadfile replace is asynchronous inside mpv. Until mpv
+        # reports the requested file as current, playlist-current-pos may be
+        # -1. Mutating the playlist in that window can delete the song that is
+        # still loading. Record the intended reservation, but defer actual
+        # priming until sync_gapless_transition() confirms the current path.
+        if self._awaiting_mpv_path:
+            self.gapless_next_index = self.peek_next_index()
+            return
+
         if (
             self.gapless_mode == "no"
             or self.current is None
@@ -885,6 +903,7 @@ class MeowPlayer:
         if self._awaiting_mpv_path:
             if mpv_index == self.current:
                 self._awaiting_mpv_path = False
+                self.prime_gapless_next()
             return False
 
         if mpv_index == self.current:
