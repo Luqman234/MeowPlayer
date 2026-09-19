@@ -18,6 +18,8 @@ def fake_metadata(path):
         track_number=1,
         track_text="1/9",
         year="2026",
+        genre="Dream Pop",
+        duration=243.5,
         folder="Album",
         filename=path.name,
         tagged=True,
@@ -65,6 +67,8 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual(cached["artist"], "Test Cat")
         self.assertEqual(cached["album"], "Nine Lives")
         self.assertEqual(cached["track_number"], 1)
+        self.assertEqual(cached["genre"], "Dream Pop")
+        self.assertAlmostEqual(cached["duration"], 243.5)
         self.assertTrue(cached["tagged"])
 
     def test_changed_file_invalidates_cache_entry(self):
@@ -215,6 +219,30 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertIn(str(song.resolve()), stats)
         self.assertFalse(stats[str(song.resolve())]["favorite"])
         self.assertEqual(stats[str(song.resolve())]["play_count"], 0)
+
+    def test_v2_migration_preserves_stats_and_invalidates_metadata(self):
+        song = self.make_song()
+        original_stat = song.stat()
+        self.cache_song(song)
+        self.catalog.toggle_favorite(song)
+        self.catalog.record_play(song, played_at_ns=321)
+        self.catalog.close()
+
+        legacy = sqlite3.connect(self.database)
+        legacy.execute("PRAGMA user_version = 2")
+        legacy.commit()
+        legacy.close()
+
+        self.catalog = LibraryCatalog(
+            self.music,
+            path=self.database,
+        )
+
+        self.assertIsNone(self.catalog.get(song, original_stat))
+        stats = self.catalog.play_stats()[str(song.resolve())]
+        self.assertTrue(stats["favorite"])
+        self.assertEqual(stats["play_count"], 1)
+        self.assertEqual(stats["last_played_ns"], 321)
 
     def test_legacy_cache_database_moves_to_xdg_data(self):
         self.catalog.close()
