@@ -53,6 +53,9 @@ frame_delimiter = 10
             return False
         if self.process is not None and self.process.poll() is None:
             return True
+        if self.process is not None:
+            self.stop()
+            self.visible = True
 
         self._stop.clear()
 
@@ -160,6 +163,11 @@ frame_delimiter = 10
 
     def render(self, width):
         if not self.visible:
+            return ""
+
+        if self.process is not None and self.process.poll() is not None:
+            self.stop()
+            self.visible = False
             return ""
 
         values = self.values()
