@@ -45,6 +45,14 @@ class AudioEngineTests(unittest.TestCase):
         player.gapless_next_index = None
         player._awaiting_mpv_path = False
         player.catalog = None
+        player.lyrics = SimpleNamespace(
+            load=lambda path: None,
+            poll=lambda path: None,
+        )
+        player.current_lyrics = None
+        player.lyrics_track_index = None
+        player.lyrics_follow = True
+        player.lyrics_scroll = 0
         player.mpv = FakeMPV(
             str(player.songs[current])
             if current is not None
