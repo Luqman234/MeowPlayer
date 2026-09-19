@@ -2611,6 +2611,20 @@ class MeowPlayer:
         self.lyrics_follow = True
         self.lyrics_scroll = 0
 
+    def refresh_current_lyrics(self):
+        if self.current is None:
+            return False
+
+        document = self.lyrics.poll(self.songs[self.current])
+        if document is None:
+            return False
+
+        self.current_lyrics = document
+        self.lyrics_track_index = self.current
+        self.lyrics_follow = True
+        self.lyrics_scroll = 0
+        return True
+
     def current_lyric_text(self):
         if (
             self.current is None
@@ -3508,6 +3522,7 @@ class MeowPlayer:
             else:
                 self.album_art.clear(free_data=False)
 
+            self.refresh_current_lyrics()
             transitioned = self.sync_gapless_transition()
 
             if (
