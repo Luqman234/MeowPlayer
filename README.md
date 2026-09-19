@@ -75,15 +75,13 @@ If Mutagen is unavailable, MeowPlayer still runs using filename/folder fallbacks
 ### Arch Linux
 
 ```bash
-sudo pacman -S python mpv
-python -m pip install -r requirements.txt
+sudo pacman -S python mpv python-mutagen
 ```
 
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install python3 mpv python3-pip
-python3 -m pip install -r requirements.txt
+sudo apt install python3 mpv python3-mutagen
 ```
 
 ## Installation
