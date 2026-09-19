@@ -21,12 +21,10 @@ except ImportError:
     MutagenFile = None
 
 from meow_persistence import (
-    config_path,
     load_config,
     load_state,
     save_config,
     save_state,
-    state_path,
 )
 from mpris_support import MPRISBridge
 
