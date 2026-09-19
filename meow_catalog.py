@@ -1,4 +1,5 @@
 import os
+import shutil
 import sqlite3
 import time
 from pathlib import Path
@@ -16,8 +17,21 @@ def _xdg_cache_home():
     return Path.home() / ".cache"
 
 
-def catalog_path():
+def _xdg_data_home():
+    value = os.environ.get("XDG_DATA_HOME")
+    if value:
+        path = Path(value).expanduser()
+        if path.is_absolute():
+            return path
+    return Path.home() / ".local" / "share"
+
+
+def _legacy_catalog_path():
     return _xdg_cache_home() / "meowplayer" / "library.sqlite3"
+
+
+def catalog_path():
+    return _xdg_data_home() / "meowplayer" / "library.sqlite3"
 
 
 class LibraryCatalog:
@@ -28,12 +42,31 @@ class LibraryCatalog:
         self.path = Path(path).expanduser() if path else catalog_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
+        if path is None:
+            self._migrate_legacy_cache()
+
         self.connection = sqlite3.connect(self.path)
         self.connection.row_factory = sqlite3.Row
 
         self.connection.execute("PRAGMA journal_mode = WAL")
         self.connection.execute("PRAGMA synchronous = NORMAL")
         self._ensure_schema()
+
+    def _migrate_legacy_cache(self):
+        legacy = _legacy_catalog_path()
+        if self.path.exists() or not legacy.exists():
+            return
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(legacy), str(self.path))
+
+        for suffix in ("-wal", "-shm"):
+            legacy_sidecar = Path(str(legacy) + suffix)
+            if legacy_sidecar.exists():
+                shutil.move(
+                    str(legacy_sidecar),
+                    str(Path(str(self.path) + suffix)),
+                )
 
     def _ensure_schema(self):
         version = self.connection.execute(
