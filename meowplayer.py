@@ -810,6 +810,7 @@ class MeowPlayer:
                         self.current,
                         record_history=False,
                         record_listen=False,
+                        preserve_sequence=True,
                     )
                 else:
                     self.mpv.play()
@@ -821,6 +822,7 @@ class MeowPlayer:
                         self.current,
                         record_history=False,
                         record_listen=False,
+                        preserve_sequence=True,
                     )
                 else:
                     self.mpv.toggle_pause()
@@ -1679,10 +1681,10 @@ class MeowPlayer:
 
         index %= len(self.songs)
 
+        reset_shuffle_bag = False
         if not preserve_sequence:
             self.playback_sequence = list(sequence or [])
-            if self.shuffle:
-                self.refill_shuffle_bag()
+            reset_shuffle_bag = self.shuffle
 
         if (
             record_history
@@ -1693,10 +1695,17 @@ class MeowPlayer:
             if len(self.history) > 200:
                 self.history.pop(0)
 
-        if self.shuffle and index in self.shuffle_bag:
+        if (
+            self.shuffle
+            and not reset_shuffle_bag
+            and index in self.shuffle_bag
+        ):
             self.shuffle_bag.remove(index)
 
         self.current = index
+        if reset_shuffle_bag:
+            self.refill_shuffle_bag()
+
         self.mpv.load(self.songs[index])
         self.mpv.play()
 
@@ -1722,7 +1731,14 @@ class MeowPlayer:
 
     def play_selected_library_song(self):
         index = self.selected_library_song()
-        if index is not None:
+        if index is None:
+            return
+
+        if self.library_view == "smart":
+            playlist = self.current_smart_playlist()
+            sequence = list(playlist.indices) if playlist is not None else []
+            self.play(index, sequence=sequence)
+        else:
             self.play(index)
 
     def add_selected_to_stash(self):
@@ -2061,6 +2077,32 @@ class MeowPlayer:
         stdscr.refresh()
         time.sleep(1.2 if self.maximum_meow else 0.8)
 
+    def current_album_art(self):
+        if (
+            not self.album_art.supported
+            or self.current is None
+            or self.current < 0
+            or self.current >= len(self.songs)
+        ):
+            return None
+        return self.album_art.cover_for(self.songs[self.current])
+
+    def album_art_layout(self, height, width, image_path):
+        if image_path is None or width < 88 or height < 18:
+            return None
+
+        columns = min(22, max(16, width // 5))
+        rows = min(9, max(6, height // 3))
+        column = max(0, width - columns - 2)
+
+        return {
+            "row": 1,
+            "column": column,
+            "columns": columns,
+            "rows": rows,
+            "text_width": max(46, column - 2),
+        }
+
     def draw_header(self, stdscr, width):
         if self.serious_mode:
             try:
@@ -2179,8 +2221,68 @@ class MeowPlayer:
         list_height,
         scroll,
     ):
-        ordered = self.ordered_library_indices()
         rows = self.library_rows()
+
+        if self.smart_top_level():
+            if rows:
+                self.selected = max(
+                    0,
+                    min(self.selected, len(rows) - 1),
+                )
+            else:
+                self.selected = 0
+
+            if self.selected < scroll:
+                scroll = self.selected
+            if self.selected >= scroll + list_height:
+                scroll = self.selected - list_height + 1
+
+            if not rows:
+                message = self.text(
+                    "No smart playlists are available.",
+                    "The cat could not assemble any Smart Mixes."
+                )
+                try:
+                    stdscr.addstr(
+                        list_start,
+                        2,
+                        message[:width - 4],
+                        curses.A_DIM,
+                    )
+                except curses.error:
+                    pass
+                return scroll
+
+            for screen_row, row_index in enumerate(
+                range(
+                    scroll,
+                    min(len(rows), scroll + list_height),
+                )
+            ):
+                _, label, _ = rows[row_index]
+                selected = row_index == self.selected
+                prefix = (
+                    ">^.^< "
+                    if selected and not self.serious_mode
+                    else "▶  "
+                    if selected
+                    else "   "
+                )
+                attr = curses.A_REVERSE if selected else curses.A_NORMAL
+
+                try:
+                    stdscr.addstr(
+                        list_start + screen_row,
+                        2,
+                        (prefix + label)[:width - 4],
+                        attr,
+                    )
+                except curses.error:
+                    pass
+
+            return scroll
+
+        ordered = self.ordered_library_indices()
 
         if ordered:
             self.selected = max(
@@ -2380,7 +2482,19 @@ class MeowPlayer:
                     break
                 continue
 
-            content_start = self.draw_header(stdscr, width)
+            album_art_path = self.current_album_art()
+            art_layout = self.album_art_layout(
+                height,
+                width,
+                album_art_path,
+            )
+            top_width = (
+                art_layout["text_width"]
+                if art_layout is not None
+                else width
+            )
+
+            content_start = self.draw_header(stdscr, top_width)
 
             if self.current is not None:
                 meta = self.meta(self.current)
@@ -2404,13 +2518,13 @@ class MeowPlayer:
                 stdscr.addstr(
                     content_start,
                     2,
-                    now_playing[:width - 4],
+                    now_playing[:top_width - 4],
                     curses.A_BOLD | curses.color_pair(2)
                 )
                 stdscr.addstr(
                     progress_y,
                     2,
-                    self.progress_bar(width - 4)[:width - 4]
+                    self.progress_bar(top_width - 4)[:top_width - 4]
                 )
             except curses.error:
                 pass
@@ -2445,13 +2559,13 @@ class MeowPlayer:
                 stdscr.addstr(
                     info_y,
                     2,
-                    info[:width - 4],
+                    info[:top_width - 4],
                     curses.color_pair(3)
                 )
                 stdscr.addstr(
                     status_y,
                     2,
-                    self.status_message[:width - 4],
+                    self.status_message[:top_width - 4],
                     curses.color_pair(4)
                     if not self.serious_mode
                     else curses.A_DIM
@@ -2460,10 +2574,24 @@ class MeowPlayer:
                 pass
 
             if self.view == "library":
-                matches = len(self.filtered_song_indices())
                 current_view = self.library_breadcrumb()
 
-                if self.search_active:
+                if self.smart_top_level():
+                    mix_count = len(self.smart_playlists())
+                    mode_line = self.text(
+                        (
+                            f"Library / {current_view} — "
+                            f"{mix_count} smart playlist(s) · Enter to open"
+                        ),
+                        (
+                            f"Music Nest / {current_view} — "
+                            f"{mix_count} Smart Mix(es) · Enter to inspect"
+                        )
+                    )
+                else:
+                    matches = len(self.filtered_song_indices())
+
+                    if self.search_active:
                     mode_line = self.text(
                         (
                             f"SEARCH > {self.search_query}_   "
@@ -2474,30 +2602,30 @@ class MeowPlayer:
                             f"({matches} meow(s)) · {current_view}"
                         )
                     )
-                elif self.search_query:
-                    mode_line = self.text(
-                        (
-                            f"Library / {current_view} — filter: "
-                            f"{self.search_query!r} ({matches})"
-                        ),
-                        (
-                            f"Music Nest / {current_view} — scent: "
-                            f"{self.search_query!r} ({matches})"
+                    elif self.search_query:
+                        mode_line = self.text(
+                            (
+                                f"Library / {current_view} — filter: "
+                                f"{self.search_query!r} ({matches})"
+                            ),
+                            (
+                                f"Music Nest / {current_view} — scent: "
+                                f"{self.search_query!r} ({matches})"
+                            )
                         )
-                    )
-                else:
-                    mode_line = self.text(
-                        (
-                            f"Library / {current_view} — "
-                            f"{matches} track(s) · "
-                            f"Next: {self.next_treat_label()}"
-                        ),
-                        (
-                            f"Music Nest / {current_view} — "
-                            f"{matches} meow(s) · "
-                            f"Next Treat: {self.next_treat_label()}"
+                    else:
+                        mode_line = self.text(
+                            (
+                                f"Library / {current_view} — "
+                                f"{matches} track(s) · "
+                                f"Next: {self.next_treat_label()}"
+                            ),
+                            (
+                                f"Music Nest / {current_view} — "
+                                f"{matches} meow(s) · "
+                                f"Next Treat: {self.next_treat_label()}"
+                            )
                         )
-                    )
             else:
                 mode_line = self.text(
                     (
@@ -2514,7 +2642,7 @@ class MeowPlayer:
                 stdscr.addstr(
                     mode_y,
                     2,
-                    mode_line[:width - 4],
+                    mode_line[:top_width - 4],
                     curses.A_BOLD
                 )
             except curses.error:
@@ -2553,13 +2681,13 @@ class MeowPlayer:
             if self.view == "library":
                 if self.serious_mode:
                     controls = (
-                        "↑↓ Select  ENTER Open/Play  1-6 Views  F Favorite  "
+                        "↑↓ Select  ENTER Open/Play  1-7 Views  F Favorite  "
                         "B Back  / Search  A Queue  Q Queue  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
-                        "↑↓ Choose  ENTER Open/Purr  1-6 Nests  F Pawmark  "
+                        "↑↓ Choose  ENTER Open/Purr  1-7 Nests  F Pawmark  "
                         "B Back  / Scent  A Stash  Q Catnip  X Escape"
                     )
                     quote = f"🐱 {self.quote}"
@@ -2598,6 +2726,17 @@ class MeowPlayer:
                 pass
 
             stdscr.refresh()
+
+            if art_layout is not None:
+                self.album_art.render(
+                    album_art_path,
+                    art_layout["row"],
+                    art_layout["column"],
+                    art_layout["columns"],
+                    art_layout["rows"],
+                )
+            else:
+                self.album_art.clear(free_data=False)
 
             if self.current is not None and not self.repeat:
                 eof = self.mpv.get_property("eof-reached")
@@ -2721,13 +2860,16 @@ class MeowPlayer:
                 continue
 
             if self.view == "library":
-                visible = self.ordered_library_indices()
+                if self.smart_top_level():
+                    navigation_count = len(self.smart_playlists())
+                else:
+                    navigation_count = len(self.ordered_library_indices())
 
-                if key == curses.KEY_UP and visible:
+                if key == curses.KEY_UP and navigation_count:
                     self.selected = max(0, self.selected - 1)
-                elif key == curses.KEY_DOWN and visible:
+                elif key == curses.KEY_DOWN and navigation_count:
                     self.selected = min(
-                        len(visible) - 1,
+                        navigation_count - 1,
                         self.selected + 1
                     )
                 elif key in (10, 13, curses.KEY_ENTER):
@@ -2741,19 +2883,25 @@ class MeowPlayer:
                 elif key in (ord("a"), ord("A")):
                     self.add_selected_to_stash()
                 elif key == ord("/"):
-                    self.search_active = True
-                    self.search_query = ""
-                    self.selected = 0
-                    self.set_status(
-                        (
-                            "Type to search tags and paths. "
-                            "Enter keeps filter; Esc clears it."
-                        ),
-                        (
-                            "Sniff tags, albums, artists, and folders. "
-                            "Enter locks scent; Esc forgets it."
+                    if self.smart_top_level():
+                        self.set_status(
+                            "Open a smart playlist before searching it.",
+                            "Open a Smart Mix first, then follow a scent."
                         )
-                    )
+                    else:
+                        self.search_active = True
+                        self.search_query = ""
+                        self.selected = 0
+                        self.set_status(
+                            (
+                                "Type to search tags and paths. "
+                                "Enter keeps filter; Esc clears it."
+                            ),
+                            (
+                                "Sniff tags, albums, artists, genres, and folders. "
+                                "Enter locks scent; Esc forgets it."
+                            )
+                        )
                 elif key == 27 and self.search_query:
                     self.search_query = ""
                     self.selected = 0
@@ -2771,6 +2919,7 @@ class MeowPlayer:
                     ord("4"),
                     ord("5"),
                     ord("6"),
+                    ord("7"),
                 ):
                     self.select_library_view(
                         LIBRARY_VIEWS[int(chr(key)) - 1]
