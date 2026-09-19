@@ -22,6 +22,9 @@ Music Nest — scent: 'space' (2 meows)
 - Full-screen terminal interface
 - Recursive music-folder scanning
 - Metadata parsing for title, artist, album, album artist, track number, and year
+- Persistent SQLite **Cat Catalog** metadata cache
+- Incremental rescanning: unchanged tracks reuse cached metadata
+- Automatic cache invalidation for modified files and pruning for deleted files
 - Filename/folder fallbacks for untagged or malformed audio files
 - Grouped library views for Songs, Artists, Albums, and Folders
 - Live search/filtering across metadata, filenames, and folder paths
@@ -152,7 +155,7 @@ chmod +x meowplayer.py
 
 ## Install as a real command
 
-MeowPlayer is now packaged as **MeowPlayer 0.6.0** with a standard `pyproject.toml`.
+MeowPlayer is now packaged as **MeowPlayer 0.7.0** with a standard `pyproject.toml`.
 
 The Python distribution is named:
 
@@ -233,8 +236,8 @@ This creates standard Python distribution artifacts in:
 
 ```text
 dist/
-├── meowplayer_terminal-0.6.0-py3-none-any.whl
-└── meowplayer_terminal-0.6.0.tar.gz
+├── meowplayer_terminal-0.7.0-py3-none-any.whl
+└── meowplayer_terminal-0.7.0.tar.gz
 ```
 
 You can install the wheel directly with `pip` or `pipx`.
@@ -275,6 +278,90 @@ python meowplayer.py ~/storage/downloads/Music
 ```
 
 If MeowPlayer detects Termux but cannot find shared music storage, it prints a Termux-specific hint telling you to run `termux-setup-storage`.
+
+## The Cat Catalog
+
+MeowPlayer 0.7.0 adds a persistent SQLite library database/cache called **The Cat Catalog**.
+
+By default it lives at:
+
+```text
+~/.cache/meowplayer/library.sqlite3
+```
+
+If `XDG_CACHE_HOME` is set, MeowPlayer respects it instead.
+
+The music files remain the source of truth. The database stores derived metadata for faster future startups:
+
+```text
+absolute path
+music-library root
+file size
+nanosecond modification time
+title
+artist
+album
+album artist
+track number
+year
+folder
+filename
+tagged / fallback status
+```
+
+### How incremental scanning works
+
+On the first launch after upgrading:
+
+```text
+scan filenames
+     ↓
+no cached entry
+     ↓
+Mutagen reads tags
+     ↓
+store metadata in SQLite
+```
+
+On later launches:
+
+```text
+scan filenames
+     ↓
+compare path + size + mtime
+     ↓
+unchanged? ── yes ──→ load metadata from Cat Catalog
+     │
+     no
+     ↓
+re-read only that file with Mutagen
+     ↓
+update Cat Catalog
+```
+
+Deleted files are automatically pruned from the catalog for that music-library root.
+
+A normal warm startup may report something like:
+
+```text
+Cat Catalog checked: 842 remembered, 3 re-sniffed, 1 vanished; 821/844 tagged meow(s).
+```
+
+That means only three files needed metadata parsing instead of all 844.
+
+The same SQLite database can safely cache multiple music roots because every entry records which library root it belongs to.
+
+### Rebuild the catalog
+
+If you deliberately changed many tags, suspect stale metadata, or just want the cat to inspect everything again:
+
+```bash
+meowplayer --rebuild-catalog
+```
+
+This discards cached metadata for the current music root and rebuilds it from the actual files. It does **not** delete or modify any music.
+
+Because the Cat Catalog is derived cache data, deleting `library.sqlite3` is also safe; MeowPlayer will recreate it on the next launch.
 
 ## Metadata and library views
 
@@ -580,7 +667,7 @@ Typical moods include:
 For example:
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.6.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.7.0 — Purring
 ( ^.^ )
  > ♫ <
 ```
@@ -588,7 +675,7 @@ For example:
 Pause it:
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.6.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.7.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -662,6 +749,13 @@ Scent locked: 3 possible meow(s).
 ## How it works
 
 ```text
+Music files
+   │
+   ├── incremental scan
+   ▼
+Cat Catalog (SQLite)
+   │
+   ▼
 Music Nest
    │
    ├── Scent Search
@@ -680,7 +774,7 @@ Music Nest
           Audio output
 ```
 
-Python handles the interface, library scanning, metadata-backed views, search, queue state, playlist files, keyboard controls, and all cat-related responsibilities. **Mutagen** reads audio tags, while `mpv` handles the actual audio decoding and playback.
+Python handles the interface, incremental library scanning, metadata-backed views, search, queue state, playlist files, keyboard controls, and all cat-related responsibilities. The **Cat Catalog** stores derived metadata in SQLite, **Mutagen** reads tags for new or modified files, and `mpv` handles the actual audio decoding and playback.
 
 This means MeowPlayer does not need to implement MP3, FLAC, AAC, Opus, and other audio codecs itself.
 
@@ -689,12 +783,15 @@ This means MeowPlayer does not need to implement MP3, FLAC, AAC, Opus, and other
 ```text
 MeowPlayer/
 ├── meowplayer.py
+├── meow_catalog.py
 ├── meow_persistence.py
 ├── mpris_support.py
 ├── pyproject.toml
 ├── requirements.txt
 ├── README.md
 ├── LICENSE
+├── tests/
+│   └── test_catalog.py
 └── .gitignore
 ```
 
