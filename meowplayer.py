@@ -3129,6 +3129,7 @@ class MeowPlayer:
 
         while True:
             self.process_external_actions()
+            self.process_filesystem_watch()
             self.persist_state()
             self.sync_mpris()
 
@@ -3545,6 +3546,10 @@ class MeowPlayer:
                 self.toggle_lyrics_view()
                 continue
 
+            if key in (ord("m"), ord("M")):
+                self.reload_custom_smart_mixes()
+                continue
+
             if key in (ord("v"), ord("V")):
                 if not self.visualizer.available:
                     self.set_status(
@@ -3890,6 +3895,11 @@ def parse_args():
         action="store_true",
         help="disable the optional CAVA spectrum visualizer"
     )
+    parser.add_argument(
+        "--no-watch",
+        action="store_true",
+        help="disable live filesystem watching for the music library"
+    )
 
     return parser.parse_args()
 
@@ -3974,6 +3984,10 @@ def main():
         bool(config.get("visualizer_enabled", True))
         and not args.no_visualizer
     )
+    filesystem_watch_enabled = (
+        bool(config.get("filesystem_watch_enabled", True))
+        and not args.no_watch
+    )
 
     try:
         player = MeowPlayer(
@@ -3990,6 +4004,7 @@ def main():
             replaygain_preamp=replaygain_preamp,
             lyrics_enabled=lyrics_enabled,
             visualizer_enabled=visualizer_enabled,
+            filesystem_watch_enabled=filesystem_watch_enabled,
         )
     except FileNotFoundError:
         print(
