@@ -33,7 +33,7 @@ from meow_persistence import (
 from mpris_support import MPRISBridge
 
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -266,8 +266,49 @@ def _missing_music_dir_message(path):
     return message
 
 
+def build_mpv_command(
+    socket_path,
+    gapless_mode="weak",
+    replaygain_mode="track",
+    replaygain_preamp=0.0,
+):
+    gapless_mode = (
+        gapless_mode
+        if gapless_mode in {"no", "weak", "yes"}
+        else "weak"
+    )
+    replaygain_mode = (
+        replaygain_mode
+        if replaygain_mode in {"no", "track", "album"}
+        else "track"
+    )
+
+    try:
+        replaygain_preamp = float(replaygain_preamp)
+    except (TypeError, ValueError):
+        replaygain_preamp = 0.0
+
+    return [
+        "mpv",
+        "--no-video",
+        "--idle=yes",
+        "--keep-open=yes",
+        "--really-quiet",
+        f"--gapless-audio={gapless_mode}",
+        f"--replaygain={replaygain_mode}",
+        f"--replaygain-preamp={replaygain_preamp}",
+        "--replaygain-clip=no",
+        f"--input-ipc-server={socket_path}",
+    ]
+
+
 class MPVController:
-    def __init__(self):
+    def __init__(
+        self,
+        gapless_mode="weak",
+        replaygain_mode="track",
+        replaygain_preamp=0.0,
+    ):
         self.socket_path = os.path.join(
             tempfile.gettempdir(),
             f"meowplayer-{os.getpid()}.sock"
@@ -279,14 +320,12 @@ class MPVController:
             pass
 
         self.process = subprocess.Popen(
-            [
-                "mpv",
-                "--no-video",
-                "--idle=yes",
-                "--keep-open=yes",
-                "--really-quiet",
-                f"--input-ipc-server={self.socket_path}",
-            ],
+            build_mpv_command(
+                self.socket_path,
+                gapless_mode=gapless_mode,
+                replaygain_mode=replaygain_mode,
+                replaygain_preamp=replaygain_preamp,
+            ),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -338,6 +377,37 @@ class MPVController:
     def load(self, filename):
         self.command("loadfile", str(filename), "replace")
 
+    def append(self, filename):
+        self.command("loadfile", str(filename), "append")
+
+    def clear_future_playlist(self):
+        try:
+            current = int(self.get_property("playlist-current-pos"))
+            count = int(self.get_property("playlist-count"))
+        except (TypeError, ValueError):
+            return
+
+        for index in range(count - 1, current, -1):
+            self.command("playlist-remove", index)
+
+    def trim_playlist_before_current(self):
+        try:
+            current = int(self.get_property("playlist-current-pos"))
+        except (TypeError, ValueError):
+            return
+
+        while current > 0:
+            self.command("playlist-remove", 0)
+            current -= 1
+
+    def prime_next(self, filename):
+        self.clear_future_playlist()
+        self.append(filename)
+
+    def current_path(self):
+        value = self.get_property("path")
+        return str(value) if value else None
+
     def pause(self):
         self.set_property("pause", True)
 
@@ -386,6 +456,9 @@ class MeowPlayer:
         mpris_enabled=True,
         rebuild_catalog=False,
         album_art_enabled=True,
+        gapless_mode="weak",
+        replaygain_mode="track",
+        replaygain_preamp=0.0,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.serious_mode = serious_mode
@@ -396,6 +469,20 @@ class MeowPlayer:
         self.album_art = AlbumArtManager(
             enabled=album_art_enabled and not _is_termux()
         )
+        self.gapless_mode = (
+            gapless_mode
+            if gapless_mode in {"no", "weak", "yes"}
+            else "weak"
+        )
+        self.replaygain_mode = (
+            replaygain_mode
+            if replaygain_mode in {"no", "track", "album"}
+            else "track"
+        )
+        try:
+            self.replaygain_preamp = float(replaygain_preamp)
+        except (TypeError, ValueError):
+            self.replaygain_preamp = 0.0
 
         self.catalog = None
         self.catalog_error = None
@@ -425,6 +512,8 @@ class MeowPlayer:
         self.history = []
         self.shuffle_bag = []
         self.playback_sequence = []
+        self.gapless_next_index = None
+        self._awaiting_mpv_path = False
 
         try:
             restored_volume = int(self.saved_state.get("volume", 70))
@@ -513,7 +602,11 @@ class MeowPlayer:
         self.external_actions = queue.SimpleQueue()
         self.remote_quit_requested = False
 
-        self.mpv = MPVController()
+        self.mpv = MPVController(
+            gapless_mode=self.gapless_mode,
+            replaygain_mode=self.replaygain_mode,
+            replaygain_preamp=self.replaygain_preamp,
+        )
         self.mpv.set_property("volume", self.volume)
         self.mpv.set_repeat(self.repeat)
 
