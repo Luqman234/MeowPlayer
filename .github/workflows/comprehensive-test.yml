@@ -1,0 +1,785 @@
+name: Comprehensive MeowPlayer Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "*.py"
+      - "tests/**"
+      - "examples/**"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "README.md"
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - "*.py"
+      - "tests/**"
+      - "examples/**"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "README.md"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: meowplayer-comprehensive-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  source-integrity:
+    name: Source / config / version integrity
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project and validation tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install build twine coverage
+
+      - name: Compile every first-party module
+        run: |
+          python -m py_compile \
+            meowplayer.py \
+            album_art.py \
+            lyrics_support.py \
+            library_watcher.py \
+            meow_catalog.py \
+            meow_smart.py \
+            meow_persistence.py \
+            mpris_support.py \
+            visualizer.py
+
+      - name: Import every first-party module
+        run: |
+          python - <<'PY'
+          modules = [
+              "meowplayer",
+              "album_art",
+              "lyrics_support",
+              "library_watcher",
+              "meow_catalog",
+              "meow_smart",
+              "meow_persistence",
+              "mpris_support",
+              "visualizer",
+          ]
+
+          for module in modules:
+              __import__(module)
+              print(f"import OK: {module}")
+          PY
+
+      - name: Verify project, runtime and README versions agree
+        run: |
+          python - <<'PY'
+          import pathlib
+          import re
+          import tomllib
+
+          import meowplayer
+
+          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          package_version = project["project"]["version"]
+          runtime_version = meowplayer.__version__
+          readme = pathlib.Path("README.md").read_text(encoding="utf-8")
+
+          assert runtime_version == package_version, (
+              runtime_version,
+              package_version,
+          )
+          assert re.search(
+              rf"MeowPlayer\s+{re.escape(package_version)}\b",
+              readme,
+          ), "README does not advertise the current package version"
+
+          print("version:", package_version)
+          PY
+
+      - name: Verify dependency declarations stay synchronized
+        run: |
+          python - <<'PY'
+          import pathlib
+          import tomllib
+
+          def normalize(requirement):
+              for token in ("<", ">", "=", "!", "~"):
+                  if token in requirement:
+                      requirement = requirement.split(token, 1)[0]
+              return requirement.strip().lower().replace("_", "-")
+
+          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          pyproject_deps = {
+              normalize(item)
+              for item in project["project"]["dependencies"]
+          }
+          requirements_deps = {
+              normalize(line)
+              for line in pathlib.Path("requirements.txt")
+              .read_text()
+              .splitlines()
+              if line.strip() and not line.lstrip().startswith("#")
+          }
+
+          assert pyproject_deps == requirements_deps, (
+              pyproject_deps,
+              requirements_deps,
+          )
+          print("dependency declarations:", sorted(pyproject_deps))
+          PY
+
+      - name: Validate example custom Smart Mixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from meow_smart import load_custom_mix_definitions
+
+          definitions, errors = load_custom_mix_definitions(
+              Path("examples/smart-mixes.json")
+          )
+
+          assert not errors, errors
+          assert definitions, "example file did not produce any custom mixes"
+
+          for definition in definitions:
+              print(
+                  f"mix OK: {definition.label} -> "
+                  f"{definition.rule}"
+              )
+          PY
+
+      - name: Verify CLI exposes every major feature switch
+        run: |
+          meowplayer --help > /tmp/meowplayer-help.txt
+          grep -q -- "--serious-mode" /tmp/meowplayer-help.txt
+          grep -q -- "--maximum-meow" /tmp/meowplayer-help.txt
+          grep -q -- "--no-mpris" /tmp/meowplayer-help.txt
+          grep -q -- "--no-restore" /tmp/meowplayer-help.txt
+          grep -q -- "--rebuild-catalog" /tmp/meowplayer-help.txt
+          grep -q -- "--no-album-art" /tmp/meowplayer-help.txt
+          grep -q -- "--gapless-mode" /tmp/meowplayer-help.txt
+          grep -q -- "--replaygain" /tmp/meowplayer-help.txt
+          grep -q -- "--replaygain-preamp" /tmp/meowplayer-help.txt
+          grep -q -- "--no-lyrics" /tmp/meowplayer-help.txt
+          grep -q -- "--no-online-lyrics" /tmp/meowplayer-help.txt
+          grep -q -- "--no-visualizer" /tmp/meowplayer-help.txt
+          grep -q -- "--no-watch" /tmp/meowplayer-help.txt
+          meowplayer --version
+
+      - name: Verify XDG config and state persistence
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/meow-config
+          XDG_STATE_HOME: ${{ runner.temp }}/meow-state
+        run: |
+          python - <<'PY'
+          from meow_persistence import (
+              config_path,
+              load_config,
+              load_state,
+              save_config,
+              save_state,
+              smart_mixes_path,
+          )
+
+          config = load_config()
+          config["volume_test_marker"] = "ignored-extra-key"
+          config["lyrics_online_enabled"] = False
+          config["filesystem_watch_enabled"] = False
+          assert save_config(config)
+
+          loaded = load_config()
+          assert loaded["lyrics_online_enabled"] is False
+          assert loaded["filesystem_watch_enabled"] is False
+
+          state = load_state()
+          state["volume"] = 37
+          state["shuffle"] = True
+          state["playback_history"] = ["/tmp/cat.flac"]
+          assert save_state(state)
+
+          restored = load_state()
+          assert restored["volume"] == 37
+          assert restored["shuffle"] is True
+          assert restored["playback_history"] == ["/tmp/cat.flac"]
+
+          assert config_path().name == "config.json"
+          assert smart_mixes_path().name == "smart-mixes.json"
+          print("config:", config_path())
+          print("smart mixes:", smart_mixes_path())
+          PY
+
+      - name: Validate Termux detection contract
+        env:
+          TERMUX_VERSION: "test"
+          PREFIX: "/data/data/com.termux/files/usr"
+        run: |
+          python - <<'PY'
+          import meowplayer
+
+          assert meowplayer._is_termux()
+          print("Termux environment detection OK")
+          PY
+
+  unit-matrix:
+    name: Unit + regression tests / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install MeowPlayer
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip check
+
+      - name: Run complete unittest suite
+        run: python -m unittest discover -s tests -v
+
+      - name: CLI import/version smoke
+        run: |
+          python -c "import meowplayer; print(meowplayer.__version__)"
+          meowplayer --version
+          meowplayer --help > /dev/null
+
+  coverage:
+    name: Component coverage report
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install MeowPlayer and coverage
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install coverage
+
+      - name: Run test suite with branch coverage
+        run: |
+          coverage run --branch -m unittest discover -s tests -v
+          coverage report -m
+          coverage xml -o coverage.xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: meowplayer-coverage
+          path: coverage.xml
+          if-no-files-found: error
+
+  minimum-dependencies:
+    name: Minimum supported dependency versions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install declared minimum dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            "mutagen==1.47.0" \
+            "dbus-next==0.2.3" \
+            "pillow==10.0.0" \
+            "watchdog==6.0.0"
+          python -m pip install --no-deps -e .
+          python -m pip check
+
+      - name: Run tests against minimum dependency floor
+        run: python -m unittest discover -s tests -v
+
+  linux-integration:
+    name: Real Linux integrations / mpv / D-Bus / inotify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install MeowPlayer
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Install Linux integration tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mpv dbus-x11
+          sudo apt-get install -y cava || true
+          mpv --version | head -n 2
+          if command -v cava >/dev/null; then
+            cava -v || true
+          else
+            echo "::warning::CAVA package unavailable on this runner; Python visualizer tests still cover its raw protocol."
+          fi
+
+      - name: Force mpv to a headless null audio output
+        run: |
+          mkdir -p ~/.config/mpv
+          printf '%s\n' 'ao=null' 'video=no' > ~/.config/mpv/mpv.conf
+          cat ~/.config/mpv/mpv.conf
+
+      - name: Generate deterministic WAV fixtures
+        run: |
+          python - <<'PY'
+          import math
+          import struct
+          import wave
+          from pathlib import Path
+
+          root = Path("/tmp/meowplayer-music")
+          root.mkdir(parents=True, exist_ok=True)
+
+          for index, frequency in enumerate((440.0, 554.37), start=1):
+              path = root / f"{index:02d}-test.wav"
+              rate = 44100
+              seconds = 2
+              with wave.open(str(path), "wb") as output:
+                  output.setnchannels(2)
+                  output.setsampwidth(2)
+                  output.setframerate(rate)
+                  frames = bytearray()
+                  for sample in range(rate * seconds):
+                      value = int(
+                          7000 * math.sin(
+                              2 * math.pi * frequency * sample / rate
+                          )
+                      )
+                      frames.extend(struct.pack("<hh", value, value))
+                  output.writeframes(frames)
+              print(path)
+          PY
+
+      - name: Exercise real mpv JSON IPC and gapless playlist priming
+        run: |
+          python - <<'PY'
+          import time
+          from pathlib import Path
+
+          from meowplayer import MPVController
+
+          first = Path("/tmp/meowplayer-music/01-test.wav").resolve()
+          second = Path("/tmp/meowplayer-music/02-test.wav").resolve()
+
+          mpv = MPVController(
+              gapless_mode="weak",
+              replaygain_mode="track",
+              replaygain_preamp=0.0,
+          )
+
+          try:
+              mpv.load(first)
+              mpv.play()
+              time.sleep(0.25)
+
+              current = Path(mpv.current_path()).resolve()
+              assert current == first, (current, first)
+
+              duration = float(mpv.get_property("duration") or 0.0)
+              assert duration > 1.0, duration
+
+              mpv.prime_next(second)
+              playlist_count = int(
+                  mpv.get_property("playlist-count") or 0
+              )
+              assert playlist_count >= 2, playlist_count
+
+              mpv.seek_absolute(0.5)
+              time.sleep(0.1)
+              position = float(mpv.get_property("time-pos") or 0.0)
+              assert position >= 0.0
+
+              mpv.set_repeat(True)
+              assert mpv.get_property("loop-file") in ("inf", True)
+              mpv.set_repeat(False)
+
+              print(
+                  "mpv IPC OK:",
+                  current,
+                  "duration=",
+                  duration,
+                  "playlist-count=",
+                  playlist_count,
+              )
+          finally:
+              mpv.quit()
+          PY
+
+      - name: Exercise top-level MeowPlayer construction and playback
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/integration-config
+          XDG_STATE_HOME: ${{ runner.temp }}/integration-state
+          XDG_DATA_HOME: ${{ runner.temp }}/integration-data
+          XDG_CACHE_HOME: ${{ runner.temp }}/integration-cache
+        run: |
+          python - <<'PY'
+          import time
+          from pathlib import Path
+
+          from meowplayer import MeowPlayer
+
+          player = MeowPlayer(
+              Path("/tmp/meowplayer-music"),
+              serious_mode=True,
+              maximum_meow=False,
+              saved_state={},
+              restore_session=False,
+              mpris_enabled=False,
+              album_art_enabled=False,
+              gapless_mode="weak",
+              replaygain_mode="track",
+              lyrics_enabled=True,
+              lyrics_online_enabled=False,
+              visualizer_enabled=False,
+              filesystem_watch_enabled=False,
+          )
+
+          try:
+              assert len(player.songs) == 2, player.songs
+              assert len(player.metadata) == 2
+
+              player.play(0)
+              time.sleep(0.25)
+
+              assert player.current == 0
+              assert Path(player.mpv.current_path()).resolve() == (
+                  player.songs[0].resolve()
+              )
+
+              player.next_song()
+              time.sleep(0.15)
+              assert player.current == 1
+
+              player.persist_state(force=True)
+              print(
+                  "top-level player OK:",
+                  [track.name for track in player.songs],
+              )
+          finally:
+              player.shutdown()
+          PY
+
+      - name: Exercise real Watchdog/inotify event delivery
+        run: |
+          python - <<'PY'
+          import tempfile
+          import time
+          from pathlib import Path
+
+          from library_watcher import LibraryWatcher
+
+          with tempfile.TemporaryDirectory() as directory:
+              root = Path(directory)
+              watcher = LibraryWatcher(
+                  root,
+                  {".mp3", ".flac", ".wav"},
+                  enabled=True,
+                  debounce_seconds=0.1,
+              )
+
+              assert watcher.available
+              assert watcher.start(), watcher.error
+
+              try:
+                  target = root / "new-track.flac"
+                  target.write_bytes(b"meow")
+
+                  deadline = time.monotonic() + 5.0
+                  summary = None
+
+                  while time.monotonic() < deadline:
+                      summary = watcher.poll()
+                      if summary is not None:
+                          break
+                      time.sleep(0.05)
+
+                  assert summary is not None, "no inotify batch arrived"
+                  assert any(
+                      path.endswith("new-track.flac")
+                      for path in summary["paths"]
+                  ), summary
+                  print("watcher OK:", summary)
+              finally:
+                  watcher.stop()
+          PY
+
+      - name: Exercise real MPRIS registration on a session D-Bus
+        run: |
+          dbus-run-session -- python - <<'PY'
+          import queue
+          import subprocess
+          import time
+
+          from mpris_support import BUS_NAME, MPRISBridge
+
+          commands = queue.SimpleQueue()
+          bridge = MPRISBridge(commands)
+
+          assert bridge.available
+          assert bridge.start(timeout=3.0), bridge.error
+
+          try:
+              bridge.update(
+                  {
+                      "playback_status": "Playing",
+                      "loop_status": "None",
+                      "shuffle": False,
+                      "volume": 0.5,
+                      "position_us": 1_000_000,
+                      "metadata": {
+                          "track_id": (
+                              "/org/mpris/MediaPlayer2/track/test"
+                          ),
+                          "title": "CI Meow",
+                          "artist": "Test Cat",
+                          "album": "Nine Lives",
+                          "genre": "Test",
+                          "url": "file:///tmp/test.wav",
+                          "length_us": 2_000_000,
+                      },
+                      "has_track": True,
+                      "has_tracks": True,
+                  }
+              )
+              time.sleep(0.15)
+
+              result = subprocess.run(
+                  ["busctl", "--user", "list"],
+                  check=True,
+                  text=True,
+                  capture_output=True,
+              )
+              assert BUS_NAME in result.stdout, result.stdout
+              print("MPRIS bus ownership OK:", BUS_NAME)
+          finally:
+              bridge.stop()
+          PY
+
+      - name: Exercise Pillow album-art cache path
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/art-cache
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          from PIL import Image
+          from album_art import AlbumArtManager
+
+          manager = AlbumArtManager(enabled=False)
+          image = Image.new("RGB", (64, 64))
+          output = manager._png_from_image(image, "ci-cover")
+
+          assert output is not None
+          assert Path(output).is_file()
+          assert Path(output).suffix == ".png"
+          print("album art cache OK:", output)
+          PY
+
+  package:
+    name: Wheel / sdist / clean-install validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+
+      - name: Build wheel and source distribution
+        run: python -m build
+
+      - name: Validate package metadata
+        run: python -m twine check dist/*
+
+      - name: Verify wheel and sdist contain all first-party modules
+        run: |
+          python - <<'PY'
+          import pathlib
+          import tarfile
+          import zipfile
+
+          required = {
+              "meowplayer.py",
+              "album_art.py",
+              "lyrics_support.py",
+              "library_watcher.py",
+              "meow_catalog.py",
+              "meow_smart.py",
+              "meow_persistence.py",
+              "mpris_support.py",
+              "visualizer.py",
+          }
+
+          wheel = next(pathlib.Path("dist").glob("*.whl"))
+          with zipfile.ZipFile(wheel) as archive:
+              wheel_names = {
+                  pathlib.PurePosixPath(name).name
+                  for name in archive.namelist()
+              }
+          missing = required - wheel_names
+          assert not missing, f"wheel missing: {sorted(missing)}"
+
+          sdist = next(pathlib.Path("dist").glob("*.tar.gz"))
+          with tarfile.open(sdist, "r:gz") as archive:
+              sdist_names = {
+                  pathlib.PurePosixPath(name).name
+                  for name in archive.getnames()
+              }
+          missing = required - sdist_names
+          assert not missing, f"sdist missing: {sorted(missing)}"
+
+          print("wheel/sdist modules OK")
+          PY
+
+      - name: Install built wheel into a clean virtual environment
+        run: |
+          python -m venv /tmp/meowplayer-clean
+          /tmp/meowplayer-clean/bin/pip install --upgrade pip
+          /tmp/meowplayer-clean/bin/pip install dist/*.whl
+          /tmp/meowplayer-clean/bin/pip check
+
+      - name: Verify clean-installed modules and CLI
+        run: |
+          /tmp/meowplayer-clean/bin/python - <<'PY'
+          import importlib
+          import importlib.metadata
+
+          modules = [
+              "meowplayer",
+              "album_art",
+              "lyrics_support",
+              "library_watcher",
+              "meow_catalog",
+              "meow_smart",
+              "meow_persistence",
+              "mpris_support",
+              "visualizer",
+          ]
+
+          for module in modules:
+              importlib.import_module(module)
+              print("installed import OK:", module)
+
+          print(
+              "distribution version:",
+              importlib.metadata.version("meowplayer-terminal"),
+          )
+          PY
+
+          /tmp/meowplayer-clean/bin/meowplayer --version
+          /tmp/meowplayer-clean/bin/meowplayer --help > /dev/null
+
+      - name: Upload built distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: meowplayer-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  comprehensive-result:
+    name: Comprehensive test gate
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - source-integrity
+      - unit-matrix
+      - coverage
+      - minimum-dependencies
+      - linux-integration
+      - package
+
+    steps:
+      - name: Require every component test job to pass
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          results = json.loads(os.environ["RESULTS"])
+          failed = {
+              name: result
+              for name, result in results.items()
+              if result != "success"
+          }
+
+          if failed:
+              print("Comprehensive MeowPlayer test failures:")
+              for name, result in failed.items():
+                  print(f"  {name}: {result}")
+              sys.exit(1)
+
+          print("Every comprehensive MeowPlayer test job passed. =^.^=")
+          PY
+        env:
+          RESULTS: >-
+            {
+              "source-integrity": "${{ needs.source-integrity.result }}",
+              "unit-matrix": "${{ needs.unit-matrix.result }}",
+              "coverage": "${{ needs.coverage.result }}",
+              "minimum-dependencies": "${{ needs.minimum-dependencies.result }}",
+              "linux-integration": "${{ needs.linux-integration.result }}",
+              "package": "${{ needs.package.result }}"
+            }
