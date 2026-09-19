@@ -1257,10 +1257,17 @@ class MeowPlayer:
             height, width = stdscr.getmaxyx()
             stdscr.erase()
 
-            if height < 16 or width < 46:
+            minimum_width = 32 if _is_termux() else 46
+            if height < 16 or width < minimum_width:
                 message = self.text(
-                    "Terminal too small. Resize to at least 46x16.",
-                    "Terminal too small — give this cat at least 46x16."
+                    (
+                        f"Terminal too small. Resize to at least "
+                        f"{minimum_width}x16."
+                    ),
+                    (
+                        f"Terminal too small — give this cat at least "
+                        f"{minimum_width}x16."
+                    )
                 )
                 try:
                     stdscr.addstr(0, 0, message[:max(1, width - 1)])
