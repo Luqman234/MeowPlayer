@@ -1198,6 +1198,182 @@ class MeowPlayer:
                 songs.append(path)
         return sorted(songs, key=lambda p: p.name.casefold())
 
+    def _paths_from_indices(self, indices):
+        paths = []
+        for index in indices:
+            if not isinstance(index, int):
+                continue
+            if 0 <= index < len(self.songs):
+                paths.append(str(self.songs[index].resolve()))
+        return paths
+
+    def _indices_from_paths(self, paths, unique=False, limit=None):
+        indices = []
+        seen = set()
+
+        for raw_path in paths:
+            try:
+                path = Path(raw_path).expanduser().resolve()
+            except (OSError, RuntimeError, TypeError):
+                continue
+
+            index = self.song_lookup.get(path)
+            if index is None:
+                continue
+            if unique and index in seen:
+                continue
+
+            indices.append(index)
+            seen.add(index)
+
+        if limit is not None:
+            indices = indices[-limit:]
+
+        return indices
+
+    def rescan_library(self, event_summary=None):
+        old_paths = {
+            str(song.resolve())
+            for song in self.songs
+        }
+        current_path = (
+            str(self.songs[self.current].resolve())
+            if self.current is not None
+            and 0 <= self.current < len(self.songs)
+            else None
+        )
+
+        selected_song = self.selected_library_song()
+        selected_path = (
+            str(self.songs[selected_song].resolve())
+            if selected_song is not None
+            and 0 <= selected_song < len(self.songs)
+            else None
+        )
+
+        stash_paths = self._paths_from_indices(self.catnip_stash)
+        history_paths = self._paths_from_indices(self.history)
+        bag_paths = self._paths_from_indices(self.shuffle_bag)
+        sequence_paths = self._paths_from_indices(self.playback_sequence)
+
+        if self.catalog is not None:
+            try:
+                self.catalog.commit()
+                self.catalog.close()
+            except sqlite3.Error:
+                pass
+            self.catalog = None
+
+        self.catalog_error = None
+        self.catalog_hits = 0
+        self.catalog_refreshed = 0
+        self.catalog_pruned = 0
+
+        self.songs = self.find_songs()
+        self.metadata = self.load_library_metadata(rebuild=False)
+        self.library_stats = (
+            self.catalog.play_stats()
+            if self.catalog is not None
+            else {}
+        )
+        self.song_lookup = {
+            song.resolve(): index
+            for index, song in enumerate(self.songs)
+        }
+
+        self.catnip_stash = self._indices_from_paths(stash_paths)
+        self.history = self._indices_from_paths(
+            history_paths,
+            unique=False,
+            limit=200,
+        )
+        self.shuffle_bag = self._indices_from_paths(
+            bag_paths,
+            unique=True,
+        )
+        self.playback_sequence = self._indices_from_paths(
+            sequence_paths,
+            unique=True,
+        )
+
+        if current_path is not None:
+            try:
+                resolved_current = Path(current_path).resolve()
+            except (OSError, RuntimeError):
+                resolved_current = None
+            self.current = (
+                self.song_lookup.get(resolved_current)
+                if resolved_current is not None
+                else None
+            )
+        else:
+            self.current = None
+
+        if current_path is not None and self.current is None:
+            self.mpv.stop()
+            self.current_lyrics = None
+            self.lyrics_track_index = None
+            self.gapless_next_index = None
+
+        if selected_path is not None:
+            try:
+                resolved_selected = Path(selected_path).resolve()
+            except (OSError, RuntimeError):
+                resolved_selected = None
+            selected_index = (
+                self.song_lookup.get(resolved_selected)
+                if resolved_selected is not None
+                else None
+            )
+        else:
+            selected_index = None
+
+        ordered = self.ordered_library_indices()
+        if selected_index is not None and selected_index in ordered:
+            self.selected = ordered.index(selected_index)
+        elif ordered:
+            self.selected = min(self.selected, len(ordered) - 1)
+        else:
+            self.selected = 0
+
+        self.sanitize_shuffle_bag()
+
+        if self.current is not None:
+            self.load_current_lyrics(self.current)
+            self.prime_gapless_next()
+
+        new_paths = {
+            str(song.resolve())
+            for song in self.songs
+        }
+        added = len(new_paths - old_paths)
+        removed = len(old_paths - new_paths)
+
+        changed_count = 0
+        if event_summary:
+            changed_count = len(event_summary.get("paths", ()))
+
+        self.sync_mpris(force=True)
+        self.set_status(
+            (
+                f"Library refreshed: +{added} / -{removed}; "
+                f"{self.catalog_refreshed} metadata refresh(es)."
+            ),
+            (
+                f"Filesystem cat noticed {changed_count or 'some'} change(s): "
+                f"+{added} / -{removed} meow(s), "
+                f"{self.catalog_refreshed} re-sniffed."
+            )
+        )
+
+    def process_filesystem_watch(self):
+        summary = self.library_watcher.poll()
+        if summary is None:
+            return False
+
+        self.rescan_library(summary)
+        return True
+
     def metadata_from_catalog(self, path, cached):
         return TrackMetadata(
             path=path,
@@ -1439,10 +1615,51 @@ class MeowPlayer:
         if self.catalog is not None:
             self.library_stats = self.catalog.play_stats()
 
+    def reload_custom_smart_mixes(self, silent=False):
+        definitions, errors = load_custom_mix_definitions(
+            smart_mixes_path()
+        )
+        self.custom_mix_definitions = definitions
+        self.custom_mix_errors = errors
+
+        if self.smart_playlist_key:
+            valid_keys = {
+                playlist.key
+                for playlist in build_smart_playlists(
+                    self.metadata,
+                    self.library_stats,
+                    self.custom_mix_definitions,
+                )
+            }
+            if self.smart_playlist_key not in valid_keys:
+                self.smart_playlist_key = None
+                self.selected = 0
+
+        if silent:
+            return
+
+        if errors:
+            self.set_status(
+                (
+                    f"Loaded {len(definitions)} custom mix(es); "
+                    f"{len(errors)} rule error(s)."
+                ),
+                (
+                    f"The cat loaded {len(definitions)} custom mix(es), "
+                    f"but hissed at {len(errors)} rule(s)."
+                )
+            )
+        else:
+            self.set_status(
+                f"Loaded {len(definitions)} custom Smart Mix(es).",
+                f"Reloaded {len(definitions)} custom Smart Mix(es)."
+            )
+
     def smart_playlists(self):
         return build_smart_playlists(
             self.metadata,
             self.library_stats,
+            self.custom_mix_definitions,
         )
 
     def current_smart_playlist(self):
