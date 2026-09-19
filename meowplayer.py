@@ -438,6 +438,9 @@ class MPVController:
     def append(self, filename):
         self.command("loadfile", str(filename), "append")
 
+    def advance_playlist(self):
+        return self.command("playlist-next", "force")
+
     def clear_future_playlist(self):
         try:
             current = int(self.get_property("playlist-current-pos"))
@@ -2346,15 +2349,22 @@ class MeowPlayer:
         if reset_shuffle_bag:
             self.refill_shuffle_bag()
 
-        # An explicit/manual load replaces mpv's current item. If we already
-        # primed a future track for gapless playback, remove that reservation
-        # before loadfile replace begins. Leaving the same target both queued
-        # and being loaded can leave mpv between playlist entries with no
-        # current path.
-        self.mpv.clear_future_playlist()
-        self.gapless_next_index = None
+        # If this exact track is already sitting in mpv's playlist as the
+        # one-track-ahead gapless reservation, advance to it directly instead
+        # of deleting it and issuing loadfile replace for the same file.
+        # mpv can otherwise end up with playlist-count=1 but current-pos=-1.
+        use_primed_entry = (
+            self.gapless_next_index == index
+            and not self._awaiting_mpv_path
+        )
 
-        self.mpv.load(self.songs[index])
+        if use_primed_entry:
+            self.mpv.advance_playlist()
+        else:
+            self.mpv.clear_future_playlist()
+            self.mpv.load(self.songs[index])
+
+        self.gapless_next_index = None
         self._awaiting_mpv_path = True
         self.mpv.play()
 
