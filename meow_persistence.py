@@ -9,6 +9,7 @@ DEFAULT_CONFIG = {
     "music_dir": None,
     "restore_session": True,
     "mpris_enabled": True,
+    "album_art_enabled": True,
 }
 
 DEFAULT_STATE = {
@@ -21,6 +22,7 @@ DEFAULT_STATE = {
     "catnip_stash": [],
     "shuffle_bag": [],
     "playback_history": [],
+    "playback_sequence": [],
 }
 
 
