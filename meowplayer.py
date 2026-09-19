@@ -702,6 +702,127 @@ class MeowPlayer:
         elif changed or not self.shuffle_bag:
             self.refill_shuffle_bag()
 
+        self.prime_gapless_next()
+
+    def peek_next_index(self):
+        if not self.songs or self.current is None or self.repeat:
+            return None
+
+        if self.catnip_stash:
+            return self.catnip_stash[0]
+
+        if self.shuffle:
+            pool = self.shuffle_pool()
+            if not pool:
+                return None
+
+            if len(pool) == 1:
+                return pool[0]
+
+            self.sanitize_shuffle_bag()
+            if not self.shuffle_bag:
+                self.refill_shuffle_bag()
+
+            return self.shuffle_bag[-1] if self.shuffle_bag else pool[0]
+
+        if self.playback_sequence:
+            if self.current in self.playback_sequence:
+                position = self.playback_sequence.index(self.current)
+                return self.playback_sequence[
+                    (position + 1) % len(self.playback_sequence)
+                ]
+            return self.playback_sequence[0]
+
+        return (self.current + 1) % len(self.songs)
+
+    def prime_gapless_next(self):
+        if (
+            self.gapless_mode == "no"
+            or self.current is None
+            or self.repeat
+        ):
+            self.gapless_next_index = None
+            try:
+                self.mpv.clear_future_playlist()
+            except AttributeError:
+                pass
+            return
+
+        next_index = self.peek_next_index()
+        self.gapless_next_index = next_index
+
+        if next_index is None:
+            self.mpv.clear_future_playlist()
+            return
+
+        self.mpv.trim_playlist_before_current()
+        self.mpv.prime_next(self.songs[next_index])
+
+    def _consume_gapless_reservation(self, index):
+        if self.catnip_stash and self.catnip_stash[0] == index:
+            self.catnip_stash.pop(0)
+            self.stash_selected = 0
+
+        if self.shuffle and index in self.shuffle_bag:
+            self.shuffle_bag.remove(index)
+
+    def sync_gapless_transition(self):
+        if (
+            self.gapless_mode == "no"
+            or self.current is None
+        ):
+            return False
+
+        current_path = self.mpv.current_path()
+        if not current_path:
+            return False
+
+        try:
+            resolved = Path(current_path).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return False
+
+        mpv_index = self.song_lookup.get(resolved)
+        if mpv_index is None:
+            return False
+
+        if self._awaiting_mpv_path:
+            if mpv_index == self.current:
+                self._awaiting_mpv_path = False
+            return False
+
+        if mpv_index == self.current:
+            return False
+
+        departed = self.current
+        self._consume_gapless_reservation(mpv_index)
+
+        if departed is not None and departed != mpv_index:
+            self.history.append(departed)
+            if len(self.history) > 200:
+                self.history.pop(0)
+
+        self.current = mpv_index
+
+        if self.catalog is not None:
+            self.catalog.record_play(self.songs[mpv_index])
+            self.refresh_library_stats()
+
+        ordered = self.ordered_library_indices()
+        if mpv_index in ordered:
+            self.selected = ordered.index(mpv_index)
+
+        meta = self.meta(mpv_index)
+        self.set_status(
+            f"Gapless transition: {meta.artist_title}",
+            f"The next meow landed without a gap: {meta.artist_title}"
+        )
+
+        self.mpv.trim_playlist_before_current()
+        self.prime_gapless_next()
+        self.sync_mpris(force=True)
+        return True
+
     def restore_session(self, saved_state):
         track = saved_state.get("current_track")
         if not track:
@@ -724,6 +845,7 @@ class MeowPlayer:
         self.current = index
         self.mpv.pause()
         self.mpv.load(self.songs[index])
+        self._awaiting_mpv_path = True
         self.mpv.pause()
 
         if position > 0:
@@ -739,6 +861,7 @@ class MeowPlayer:
             f"Restored session: {meta.artist_title}",
             f"The cat remembered: {meta.artist_title}"
         )
+        self.prime_gapless_next()
 
     def state_snapshot(self):
         position = 0.0
