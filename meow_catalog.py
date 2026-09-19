@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _xdg_cache_home():
@@ -73,7 +73,7 @@ class LibraryCatalog:
             "PRAGMA user_version"
         ).fetchone()[0]
 
-        if version not in (0, 1, SCHEMA_VERSION):
+        if version not in (0, 1, 2, SCHEMA_VERSION):
             raise RuntimeError(
                 f"Unsupported Cat Catalog schema version {version}; "
                 f"expected <= {SCHEMA_VERSION}."
@@ -100,7 +100,9 @@ class LibraryCatalog:
                 favorite INTEGER NOT NULL DEFAULT 0,
                 play_count INTEGER NOT NULL DEFAULT 0,
                 last_played_ns INTEGER,
-                added_at_ns INTEGER NOT NULL DEFAULT 0
+                added_at_ns INTEGER NOT NULL DEFAULT 0,
+                genre TEXT NOT NULL DEFAULT '',
+                duration REAL NOT NULL DEFAULT 0
             )
             """
         )
@@ -127,6 +129,14 @@ class LibraryCatalog:
             (
                 "added_at_ns",
                 "ALTER TABLE tracks ADD COLUMN added_at_ns INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "genre",
+                "ALTER TABLE tracks ADD COLUMN genre TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "duration",
+                "ALTER TABLE tracks ADD COLUMN duration REAL NOT NULL DEFAULT 0",
             ),
         )
         for name, statement in migrations:
@@ -190,6 +200,8 @@ class LibraryCatalog:
                 track_number,
                 track_text,
                 year,
+                genre,
+                duration,
                 folder,
                 filename,
                 tagged
@@ -229,13 +241,15 @@ class LibraryCatalog:
                 track_number,
                 track_text,
                 year,
+                genre,
+                duration,
                 folder,
                 filename,
                 tagged,
                 last_scanned_ns,
                 added_at_ns
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 root = excluded.root,
                 size = excluded.size,
@@ -247,6 +261,8 @@ class LibraryCatalog:
                 track_number = excluded.track_number,
                 track_text = excluded.track_text,
                 year = excluded.year,
+                genre = excluded.genre,
+                duration = excluded.duration,
                 folder = excluded.folder,
                 filename = excluded.filename,
                 tagged = excluded.tagged,
@@ -264,6 +280,8 @@ class LibraryCatalog:
                 int(metadata.track_number),
                 metadata.track_text,
                 metadata.year,
+                metadata.genre,
+                float(metadata.duration),
                 metadata.folder,
                 metadata.filename,
                 int(bool(metadata.tagged)),
