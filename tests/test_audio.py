@@ -10,6 +10,10 @@ class FakeMPV:
     def __init__(self, current_path=None):
         self.path = current_path
         self.primed = []
+        self.loaded = []
+        self.play_calls = 0
+        self.advanced = 0
+        self.advance_response = {"error": "success"}
         self.trimmed = 0
         self.cleared = 0
 
@@ -24,6 +28,17 @@ class FakeMPV:
 
     def clear_future_playlist(self):
         self.cleared += 1
+
+    def load(self, filename):
+        self.loaded.append(Path(filename))
+        self.path = None
+
+    def advance_playlist(self):
+        self.advanced += 1
+        return self.advance_response
+
+    def play(self):
+        self.play_calls += 1
 
 
 class AudioEngineTests(unittest.TestCase):
@@ -79,6 +94,41 @@ class AudioEngineTests(unittest.TestCase):
         self.assertNotIn("visualizer_enabled", parameters)
         self.assertNotIn("filesystem_watch_enabled", parameters)
 
+    def test_advance_playlist_targets_exact_next_index(self):
+        controller = MPVController.__new__(MPVController)
+        commands = []
+
+        def fake_get_property(name):
+            if name == "playlist-current-pos":
+                return 0
+            if name == "playlist-count":
+                return 2
+            return None
+
+        controller.get_property = fake_get_property
+        controller.command = lambda *args: (
+            commands.append(args) or {"error": "success"}
+        )
+
+        response = controller.advance_playlist()
+
+        self.assertEqual(response, {"error": "success"})
+        self.assertEqual(
+            commands,
+            [("playlist-play-index", 1)],
+        )
+
+    def test_advance_playlist_refuses_invalid_playlist_position(self):
+        controller = MPVController.__new__(MPVController)
+        controller.get_property = lambda name: (
+            -1 if name == "playlist-current-pos" else 2
+        )
+        commands = []
+        controller.command = lambda *args: commands.append(args)
+
+        self.assertIsNone(controller.advance_playlist())
+        self.assertEqual(commands, [])
+
     def test_mpv_command_enables_native_audio_features(self):
         command = build_mpv_command(
             "/tmp/meow.sock",
@@ -126,6 +176,99 @@ class AudioEngineTests(unittest.TestCase):
         player.playback_sequence = [0, 2, 3]
 
         self.assertEqual(player.peek_next_index(), 3)
+
+    def test_manual_next_advances_already_primed_gapless_entry(self):
+        player = self.make_player(current=0)
+        player.gapless_next_index = 1
+        player.mpv.primed = [Path("/music/1.flac")]
+
+        player.play(
+            1,
+            preserve_sequence=True,
+        )
+
+        self.assertEqual(player.current, 1)
+        self.assertEqual(player.mpv.advanced, 1)
+        self.assertEqual(player.mpv.cleared, 0)
+        self.assertEqual(player.mpv.loaded, [])
+        self.assertEqual(player.mpv.play_calls, 0)
+        self.assertTrue(player._awaiting_mpv_path)
+        self.assertEqual(player.gapless_next_index, 2)
+
+    def test_failed_primed_advance_falls_back_to_replace(self):
+        player = self.make_player(current=0)
+        player.gapless_next_index = 1
+        player.mpv.advance_response = {"error": "playlist current"}
+
+        player.play(
+            1,
+            preserve_sequence=True,
+        )
+
+        self.assertEqual(player.mpv.advanced, 1)
+        self.assertEqual(player.mpv.cleared, 1)
+        self.assertEqual(
+            player.mpv.loaded,
+            [Path("/music/1.flac")],
+        )
+
+    def test_unprimed_manual_load_still_replaces_current_track(self):
+        player = self.make_player(current=0)
+        player.gapless_next_index = None
+
+        player.play(
+            2,
+            preserve_sequence=True,
+        )
+
+        self.assertEqual(player.current, 2)
+        self.assertEqual(player.mpv.advanced, 0)
+        self.assertEqual(player.mpv.cleared, 1)
+        self.assertEqual(
+            player.mpv.loaded,
+            [Path("/music/2.flac")],
+        )
+        self.assertEqual(player.mpv.play_calls, 1)
+        self.assertTrue(player._awaiting_mpv_path)
+
+    def test_gapless_priming_waits_for_manual_load_confirmation(self):
+        player = self.make_player(current=1)
+        player.playback_sequence = [1, 2, 3]
+        player._awaiting_mpv_path = True
+
+        player.prime_gapless_next()
+
+        self.assertEqual(player.gapless_next_index, 2)
+        self.assertEqual(player.mpv.primed, [])
+
+        player.mpv.path = str(player.songs[1])
+        changed = player.sync_gapless_transition()
+
+        self.assertFalse(changed)
+        self.assertFalse(player._awaiting_mpv_path)
+        self.assertEqual(
+            player.mpv.primed,
+            [Path("/music/2.flac")],
+        )
+
+    def test_playlist_cleanup_never_removes_entries_while_mpv_position_is_minus_one(self):
+        controller = MPVController.__new__(MPVController)
+        commands = []
+
+        def fake_get_property(name):
+            if name == "playlist-current-pos":
+                return -1
+            if name == "playlist-count":
+                return 3
+            return None
+
+        controller.get_property = fake_get_property
+        controller.command = lambda *args: commands.append(args)
+
+        controller.clear_future_playlist()
+        controller.trim_playlist_before_current()
+
+        self.assertEqual(commands, [])
 
     def test_prime_gapless_appends_reserved_next_track(self):
         player = self.make_player(current=1)

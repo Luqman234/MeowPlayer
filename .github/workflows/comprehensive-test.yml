@@ -32,7 +32,7 @@ concurrency:
 env:
   PYTHONUTF8: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  MEOW_CI_REVISION: "async-mpv-wait-v2"
+  MEOW_CI_REVISION: "no-redundant-play-v9"
 
 jobs:
   source-integrity:
@@ -460,10 +460,37 @@ jobs:
               assert duration > 1.0, duration
 
               mpv.prime_next(second)
-              playlist_count = int(
-                  mpv.get_property("playlist-count") or 0
-              )
+
+              deadline = time.monotonic() + 5.0
+              playlist_count = 0
+              playlist_pos = -1
+              while time.monotonic() < deadline:
+                  playlist_count = int(
+                      mpv.get_property("playlist-count") or 0
+                  )
+                  playlist_pos = int(
+                      mpv.get_property("playlist-current-pos") or 0
+                  )
+                  if playlist_count >= 2 and playlist_pos == 0:
+                      break
+                  time.sleep(0.05)
+
               assert playlist_count >= 2, playlist_count
+              assert playlist_pos == 0, playlist_pos
+
+              response = mpv.advance_playlist()
+              assert response and response.get("error") == "success", response
+              current = wait_for_path(mpv, second)
+
+              deadline = time.monotonic() + 5.0
+              while time.monotonic() < deadline:
+                  playlist_pos = mpv.get_property(
+                      "playlist-current-pos"
+                  )
+                  if playlist_pos is not None and int(playlist_pos) == 1:
+                      break
+                  time.sleep(0.05)
+              assert int(playlist_pos) == 1, playlist_pos
 
               mpv.seek_absolute(0.5)
               time.sleep(0.1)
@@ -481,6 +508,8 @@ jobs:
                   duration,
                   "playlist-count=",
                   playlist_count,
+                  "playlist-pos=",
+                  playlist_pos,
               )
           finally:
               mpv.quit()
@@ -529,7 +558,39 @@ jobs:
 
               raise AssertionError(
                   f"player mpv never loaded {expected}; "
-                  f"last path={last!r}"
+                  f"last path={last!r}; "
+                  f"playlist-pos="
+                  f"{player.mpv.get_property('playlist-current-pos')!r}; "
+                  f"playlist-count="
+                  f"{player.mpv.get_property('playlist-count')!r}"
+              )
+
+          def wait_for_gapless_reservation(timeout=5.0):
+              deadline = time.monotonic() + timeout
+              last_pos = None
+              last_count = None
+
+              while time.monotonic() < deadline:
+                  last_pos = player.mpv.get_property(
+                      "playlist-current-pos"
+                  )
+                  last_count = player.mpv.get_property(
+                      "playlist-count"
+                  )
+
+                  try:
+                      if int(last_pos) == 0 and int(last_count) >= 2:
+                          return int(last_pos), int(last_count)
+                  except (TypeError, ValueError):
+                      pass
+
+                  time.sleep(0.05)
+
+              raise AssertionError(
+                  "gapless reservation never became visible; "
+                  f"playlist-pos={last_pos!r}; "
+                  f"playlist-count={last_count!r}; "
+                  f"path={player.mpv.current_path()!r}"
               )
 
           try:
@@ -541,9 +602,26 @@ jobs:
               assert player.current == 0
               wait_for_player_path(player.songs[0])
 
+              # Confirm the asynchronous manual load before allowing
+              # MeowPlayer to mutate mpv's future playlist for gapless audio.
+              player.sync_gapless_transition()
+              assert player._awaiting_mpv_path is False
+              assert player.gapless_next_index == 1
+              playlist_pos, playlist_count = wait_for_gapless_reservation()
+              print(
+                  "gapless reservation ready:",
+                  "playlist-pos=",
+                  playlist_pos,
+                  "playlist-count=",
+                  playlist_count,
+              )
+
               player.next_song()
               assert player.current == 1
               wait_for_player_path(player.songs[1])
+
+              player.sync_gapless_transition()
+              assert player._awaiting_mpv_path is False
 
               player.persist_state(force=True)
               print(
