@@ -7,6 +7,7 @@ on:
       - "meowplayer.py"
       - "album_art.py"
       - "lyrics_support.py"
+      - "library_watcher.py"
       - "meow_catalog.py"
       - "meow_smart.py"
       - "meow_persistence.py"
@@ -21,6 +22,7 @@ on:
       - "meowplayer.py"
       - "album_art.py"
       - "lyrics_support.py"
+      - "library_watcher.py"
       - "meow_catalog.py"
       - "meow_smart.py"
       - "meow_persistence.py"
@@ -46,7 +48,7 @@ jobs:
 
       - name: Compile Python modules
         run: |
-          python -m py_compile meowplayer.py album_art.py lyrics_support.py meow_catalog.py meow_smart.py meow_persistence.py mpris_support.py visualizer.py
+          python -m py_compile meowplayer.py album_art.py lyrics_support.py library_watcher.py meow_catalog.py meow_smart.py meow_persistence.py mpris_support.py visualizer.py
 
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
