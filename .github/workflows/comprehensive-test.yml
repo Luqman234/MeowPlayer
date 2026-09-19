@@ -420,15 +420,37 @@ jobs:
               replaygain_preamp=0.0,
           )
 
+          def wait_for_path(controller, expected, timeout=5.0):
+              deadline = time.monotonic() + timeout
+              last = None
+
+              while time.monotonic() < deadline:
+                  last = controller.current_path()
+                  if last:
+                      resolved = Path(last).resolve()
+                      if resolved == expected:
+                          return resolved
+                  time.sleep(0.05)
+
+              raise AssertionError(
+                  f"mpv never loaded {expected}; last path={last!r}"
+              )
+
           try:
               mpv.load(first)
               mpv.play()
-              time.sleep(0.25)
 
-              current = Path(mpv.current_path()).resolve()
-              assert current == first, (current, first)
+              current = wait_for_path(mpv, first)
 
-              duration = float(mpv.get_property("duration") or 0.0)
+              deadline = time.monotonic() + 5.0
+              duration = 0.0
+              while time.monotonic() < deadline:
+                  duration = float(
+                      mpv.get_property("duration") or 0.0
+                  )
+                  if duration > 1.0:
+                      break
+                  time.sleep(0.05)
               assert duration > 1.0, duration
 
               mpv.prime_next(second)
@@ -487,21 +509,35 @@ jobs:
               filesystem_watch_enabled=False,
           )
 
+          def wait_for_player_path(expected, timeout=5.0):
+              deadline = time.monotonic() + timeout
+              last = None
+
+              while time.monotonic() < deadline:
+                  last = player.mpv.current_path()
+                  if last:
+                      resolved = Path(last).resolve()
+                      if resolved == expected.resolve():
+                          return resolved
+                  time.sleep(0.05)
+
+              raise AssertionError(
+                  f"player mpv never loaded {expected}; "
+                  f"last path={last!r}"
+              )
+
           try:
               assert len(player.songs) == 2, player.songs
               assert len(player.metadata) == 2
 
               player.play(0)
-              time.sleep(0.25)
 
               assert player.current == 0
-              assert Path(player.mpv.current_path()).resolve() == (
-                  player.songs[0].resolve()
-              )
+              wait_for_player_path(player.songs[0])
 
               player.next_song()
-              time.sleep(0.15)
               assert player.current == 1
+              wait_for_player_path(player.songs[1])
 
               player.persist_state(force=True)
               print(
