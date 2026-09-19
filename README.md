@@ -427,7 +427,43 @@ bindl = , XF86AudioStop, exec, playerctl --player=meowplayer stop
 
 That means your keyboard's Play/Pause, Next, Previous, and Stop keys can control MeowPlayer even when its terminal is not focused.
 
-MPRIS requires a user D-Bus session plus the Python `dbus-next` package. If either is missing, MeowPlayer simply runs without MPRIS rather than failing to start.
+MPRIS requires a user D-Bus session plus the Python `dbus-next` package. If registration fails, MeowPlayer stays usable and now shows the exact MPRIS startup error in its status line.
+
+### If playerctl says "No players found"
+
+First make sure the Python D-Bus binding is installed:
+
+```bash
+pacman -Q python-dbus-next playerctl
+python -c 'import dbus_next; print("dbus-next: OK")'
+```
+
+Check that your user D-Bus is reachable:
+
+```bash
+busctl --user list >/dev/null && echo "user D-Bus: OK"
+```
+
+With MeowPlayer running, check whether it actually owns its MPRIS name:
+
+```bash
+busctl --user list | grep org.mpris.MediaPlayer2.meowplayer
+playerctl -l
+```
+
+A healthy session should show:
+
+```text
+org.mpris.MediaPlayer2.meowplayer
+```
+
+and `playerctl -l` should include:
+
+```text
+meowplayer
+```
+
+MeowPlayer does not require `DBUS_SESSION_BUS_ADDRESS` to be manually exported. The D-Bus library is allowed to resolve the normal user session bus itself.
 
 ## Cat modes
 
