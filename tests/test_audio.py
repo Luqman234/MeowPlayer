@@ -94,6 +94,41 @@ class AudioEngineTests(unittest.TestCase):
         self.assertNotIn("visualizer_enabled", parameters)
         self.assertNotIn("filesystem_watch_enabled", parameters)
 
+    def test_advance_playlist_targets_exact_next_index(self):
+        controller = MPVController.__new__(MPVController)
+        commands = []
+
+        def fake_get_property(name):
+            if name == "playlist-current-pos":
+                return 0
+            if name == "playlist-count":
+                return 2
+            return None
+
+        controller.get_property = fake_get_property
+        controller.command = lambda *args: (
+            commands.append(args) or {"error": "success"}
+        )
+
+        response = controller.advance_playlist()
+
+        self.assertEqual(response, {"error": "success"})
+        self.assertEqual(
+            commands,
+            [("playlist-play-index", 1)],
+        )
+
+    def test_advance_playlist_refuses_invalid_playlist_position(self):
+        controller = MPVController.__new__(MPVController)
+        controller.get_property = lambda name: (
+            -1 if name == "playlist-current-pos" else 2
+        )
+        commands = []
+        controller.command = lambda *args: commands.append(args)
+
+        self.assertIsNone(controller.advance_playlist())
+        self.assertEqual(commands, [])
+
     def test_mpv_command_enables_native_audio_features(self):
         command = build_mpv_command(
             "/tmp/meow.sock",
