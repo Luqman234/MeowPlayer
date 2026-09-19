@@ -21,7 +21,9 @@ try:
 except ImportError:
     MutagenFile = None
 
+from album_art import AlbumArtManager
 from meow_catalog import LibraryCatalog
+from meow_smart import build_smart_playlists
 from meow_persistence import (
     load_config,
     load_state,
@@ -31,7 +33,7 @@ from meow_persistence import (
 from mpris_support import MPRISBridge
 
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -46,6 +48,7 @@ LIBRARY_VIEWS = (
     "folders",
     "pawmarks",
     "history",
+    "smart",
 )
 VIEW_LABELS = {
     "songs": ("Songs", "Songs"),
@@ -54,6 +57,7 @@ VIEW_LABELS = {
     "folders": ("Folders", "Nests"),
     "pawmarks": ("Favorites", "Pawmarks"),
     "history": ("Listening History", "Purr History"),
+    "smart": ("Smart Playlists", "Smart Mixes"),
 }
 
 CAT_QUOTES = [
@@ -381,6 +385,7 @@ class MeowPlayer:
         restore_session=True,
         mpris_enabled=True,
         rebuild_catalog=False,
+        album_art_enabled=True,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.serious_mode = serious_mode
@@ -388,6 +393,9 @@ class MeowPlayer:
         self.saved_state = saved_state or {}
         self.restore_session_enabled = restore_session
         self.mpris_enabled = mpris_enabled and not _is_termux()
+        self.album_art = AlbumArtManager(
+            enabled=album_art_enabled and not _is_termux()
+        )
 
         self.catalog = None
         self.catalog_error = None
@@ -406,6 +414,7 @@ class MeowPlayer:
         )
         self.drill_artist = None
         self.drill_album = None
+        self.smart_playlist_key = None
         self.song_lookup = {
             song.resolve(): index for index, song in enumerate(self.songs)
         }
@@ -415,6 +424,7 @@ class MeowPlayer:
         self.current = None
         self.history = []
         self.shuffle_bag = []
+        self.playback_sequence = []
 
         try:
             restored_volume = int(self.saved_state.get("volume", 70))
@@ -450,6 +460,10 @@ class MeowPlayer:
         )
         self.shuffle_bag = self.restore_saved_index_list(
             self.saved_state.get("shuffle_bag", []),
+            unique=True,
+        )
+        self.playback_sequence = self.restore_saved_index_list(
+            self.saved_state.get("playback_sequence", []),
             unique=True,
         )
 
@@ -551,14 +565,22 @@ class MeowPlayer:
 
         return indices
 
+    def shuffle_pool(self):
+        if self.playback_sequence:
+            return list(self.playback_sequence)
+        return list(range(len(self.songs)))
+
     def sanitize_shuffle_bag(self):
         cleaned = []
         seen = set()
+        pool = set(self.shuffle_pool())
 
         for index in self.shuffle_bag:
             if not isinstance(index, int):
                 continue
             if index < 0 or index >= len(self.songs):
+                continue
+            if index not in pool:
                 continue
             if index == self.current:
                 continue
@@ -572,7 +594,7 @@ class MeowPlayer:
     def refill_shuffle_bag(self):
         self.shuffle_bag = [
             index
-            for index in range(len(self.songs))
+            for index in self.shuffle_pool()
             if index != self.current
         ]
         random.shuffle(self.shuffle_bag)
@@ -658,6 +680,11 @@ class MeowPlayer:
             "playback_history": [
                 str(self.songs[index].resolve())
                 for index in self.history[-200:]
+                if 0 <= index < len(self.songs)
+            ],
+            "playback_sequence": [
+                str(self.songs[index].resolve())
+                for index in self.playback_sequence
                 if 0 <= index < len(self.songs)
             ],
         }
@@ -821,6 +848,7 @@ class MeowPlayer:
     def shutdown(self):
         self.persist_state(force=True)
         self.mpris.stop()
+        self.album_art.clear(free_data=True)
 
         if self.catalog is not None:
             try:
@@ -1140,6 +1168,27 @@ class MeowPlayer:
         if self.catalog is not None:
             self.library_stats = self.catalog.play_stats()
 
+    def smart_playlists(self):
+        return build_smart_playlists(
+            self.metadata,
+            self.library_stats,
+        )
+
+    def current_smart_playlist(self):
+        if not self.smart_playlist_key:
+            return None
+
+        for playlist in self.smart_playlists():
+            if playlist.key == self.smart_playlist_key:
+                return playlist
+        return None
+
+    def smart_top_level(self):
+        return (
+            self.library_view == "smart"
+            and self.smart_playlist_key is None
+        )
+
     def filtered_song_indices(self):
         indices = list(range(len(self.songs)))
         query = _normalize_search_text(self.search_query).strip()
@@ -1183,10 +1232,30 @@ class MeowPlayer:
                 if self.stats_for(index)["last_played_ns"] is not None
             ]
 
+        if self.library_view == "smart" and self.smart_playlist_key:
+            playlist = self.current_smart_playlist()
+            allowed = set(playlist.indices) if playlist is not None else set()
+            indices = [
+                index
+                for index in indices
+                if index in allowed
+            ]
+
         return indices
 
     def ordered_track_indices(self):
         indices = self.filtered_song_indices()
+
+        if self.library_view == "smart" and self.smart_playlist_key:
+            playlist = self.current_smart_playlist()
+            if playlist is None:
+                return []
+            visible = set(indices)
+            return [
+                index
+                for index in playlist.indices
+                if index in visible
+            ]
 
         if self.library_view == "history":
             return sorted(
@@ -1197,7 +1266,7 @@ class MeowPlayer:
                 ),
             )
 
-        if self.library_view in ("songs", "pawmarks"):
+        if self.library_view in ("songs", "pawmarks", "smart"):
             return sorted(
                 indices,
                 key=lambda i: (
@@ -1240,6 +1309,9 @@ class MeowPlayer:
         )
 
     def ordered_library_indices(self):
+        if self.smart_top_level():
+            return []
+
         indices = self.ordered_track_indices()
 
         if self.library_view == "artists":
@@ -1319,9 +1391,22 @@ class MeowPlayer:
         return f"{meta.filename}{duration}"
 
     def library_rows(self):
+        if self.smart_top_level():
+            return [
+                (
+                    "smart",
+                    (
+                        f"{playlist.label} · "
+                        f"{len(playlist.indices)} track(s) ›"
+                    ),
+                    playlist.key,
+                )
+                for playlist in self.smart_playlists()
+            ]
+
         ordered = self.ordered_library_indices()
 
-        if self.library_view in ("songs", "pawmarks", "history"):
+        if self.library_view in ("songs", "pawmarks", "history", "smart"):
             return [
                 ("track", self.track_row_text(index), index)
                 for index in ordered
@@ -1406,6 +1491,9 @@ class MeowPlayer:
         return rows
 
     def selected_library_song(self):
+        if self.smart_top_level():
+            return None
+
         visible = self.ordered_library_indices()
         if not visible:
             return None
@@ -1421,6 +1509,8 @@ class MeowPlayer:
             )
         if self.library_view == "albums":
             return self.drill_album is not None
+        if self.library_view == "smart":
+            return self.smart_playlist_key is not None
         return True
 
     def select_library_view(self, view):
@@ -1430,6 +1520,7 @@ class MeowPlayer:
         self.library_view = view
         self.drill_artist = None
         self.drill_album = None
+        self.smart_playlist_key = None
         self.selected = 0
 
         serious_label, cat_label = VIEW_LABELS[view]
@@ -1453,9 +1544,31 @@ class MeowPlayer:
         if self.drill_album is not None:
             label += f" / {self.drill_album[1]}"
 
+        playlist = self.current_smart_playlist()
+        if playlist is not None:
+            label += f" / {playlist.label}"
+
         return label
 
     def activate_library_selection(self):
+        if self.smart_top_level():
+            playlists = self.smart_playlists()
+            if not playlists:
+                return
+
+            self.selected = max(
+                0,
+                min(self.selected, len(playlists) - 1),
+            )
+            playlist = playlists[self.selected]
+            self.smart_playlist_key = playlist.key
+            self.selected = 0
+            self.set_status(
+                f"Opened smart playlist: {playlist.label}",
+                f"The cat assembled: {playlist.label}"
+            )
+            return
+
         index = self.selected_library_song()
         if index is None:
             return
@@ -1491,6 +1604,12 @@ class MeowPlayer:
             )
             return
 
+        if self.library_view == "smart":
+            playlist = self.current_smart_playlist()
+            sequence = list(playlist.indices) if playlist is not None else []
+            self.play(index, sequence=sequence)
+            return
+
         self.play(index)
 
     def go_back_library(self):
@@ -1500,6 +1619,8 @@ class MeowPlayer:
             self.drill_artist = None
         elif self.library_view == "albums" and self.drill_album is not None:
             self.drill_album = None
+        elif self.library_view == "smart" and self.smart_playlist_key is not None:
+            self.smart_playlist_key = None
         else:
             return False
 
@@ -1544,11 +1665,24 @@ class MeowPlayer:
             )
         )
 
-    def play(self, index, automatic=False, record_history=True, record_listen=True):
+    def play(
+        self,
+        index,
+        automatic=False,
+        record_history=True,
+        record_listen=True,
+        preserve_sequence=False,
+        sequence=None,
+    ):
         if not self.songs:
             return
 
         index %= len(self.songs)
+
+        if not preserve_sequence:
+            self.playback_sequence = list(sequence or [])
+            if self.shuffle:
+                self.refill_shuffle_bag()
 
         if (
             record_history
@@ -1627,7 +1761,11 @@ class MeowPlayer:
         else:
             self.stash_selected = 0
 
-        self.play(index, automatic=automatic)
+        self.play(
+            index,
+            automatic=automatic,
+            preserve_sequence=True,
+        )
 
         if automatic:
             self.set_status(
@@ -1659,11 +1797,26 @@ class MeowPlayer:
                     self.refill_shuffle_bag()
                 index = self.shuffle_bag.pop()
         elif self.current is None:
-            index = 0
+            if self.playback_sequence:
+                index = self.playback_sequence[0]
+            else:
+                index = 0
+        elif self.playback_sequence:
+            if self.current in self.playback_sequence:
+                position = self.playback_sequence.index(self.current)
+                index = self.playback_sequence[
+                    (position + 1) % len(self.playback_sequence)
+                ]
+            else:
+                index = self.playback_sequence[0]
         else:
             index = (self.current + 1) % len(self.songs)
 
-        self.play(index, automatic=automatic)
+        self.play(
+            index,
+            automatic=automatic,
+            preserve_sequence=True,
+        )
         if not automatic:
             self.set_status(
                 "Skipped to next track.",
@@ -1683,7 +1836,11 @@ class MeowPlayer:
         else:
             index = (self.current - 1) % len(self.songs)
 
-        self.play(index, record_history=False)
+        self.play(
+            index,
+            record_history=False,
+            preserve_sequence=True,
+        )
 
         if (
             self.shuffle
