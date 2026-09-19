@@ -4,6 +4,7 @@ import argparse
 import curses
 import json
 import os
+import queue
 import random
 import socket
 import subprocess
@@ -18,6 +19,16 @@ try:
     from mutagen import File as MutagenFile
 except ImportError:
     MutagenFile = None
+
+from meow_persistence import (
+    config_path,
+    load_config,
+    load_state,
+    save_config,
+    save_state,
+    state_path,
+)
+from mpris_support import MPRISBridge
 
 
 SUPPORTED_EXTENSIONS = {
@@ -270,13 +281,25 @@ class MPVController:
     def load(self, filename):
         self.command("loadfile", str(filename), "replace")
 
+    def pause(self):
+        self.set_property("pause", True)
+
+    def play(self):
+        self.set_property("pause", False)
+
     def toggle_pause(self):
         paused = self.get_property("pause")
         self.set_property("pause", not bool(paused))
         return not bool(paused)
 
+    def stop(self):
+        self.command("stop")
+
     def seek(self, seconds):
         self.command("seek", seconds, "relative")
+
+    def seek_absolute(self, seconds):
+        self.command("seek", max(0.0, seconds), "absolute", "exact")
 
     def quit(self):
         try:
@@ -296,10 +319,21 @@ class MPVController:
 
 
 class MeowPlayer:
-    def __init__(self, music_dir, serious_mode=False, maximum_meow=False):
+    def __init__(
+        self,
+        music_dir,
+        serious_mode=False,
+        maximum_meow=False,
+        saved_state=None,
+        restore_session=True,
+        mpris_enabled=True,
+    ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.serious_mode = serious_mode
         self.maximum_meow = maximum_meow
+        self.saved_state = saved_state or {}
+        self.restore_session_enabled = restore_session
+        self.mpris_enabled = mpris_enabled and not _is_termux()
 
         self.songs = self.find_songs()
         self.metadata = [
@@ -315,12 +349,22 @@ class MeowPlayer:
         self.current = None
         self.history = []
 
-        self.volume = 70
-        self.shuffle = False
-        self.repeat = False
+        try:
+            restored_volume = int(self.saved_state.get("volume", 70))
+        except (TypeError, ValueError):
+            restored_volume = 70
+
+        self.volume = max(0, min(100, restored_volume))
+        self.shuffle = bool(self.saved_state.get("shuffle", False))
+        self.repeat = bool(self.saved_state.get("repeat", False))
 
         self.view = "library"
-        self.library_view = "songs"
+        restored_view = self.saved_state.get("library_view", "songs")
+        self.library_view = (
+            restored_view
+            if restored_view in LIBRARY_VIEWS
+            else "songs"
+        )
         self.catnip_stash = []
 
         self.search_query = ""
@@ -348,10 +392,221 @@ class MeowPlayer:
         self.quote = random.choice(CAT_QUOTES)
         self.last_quote_change = time.monotonic()
         self.tail_frame = 0
+        self.last_state_save = 0.0
+        self.last_mpris_sync = 0.0
+        self.external_actions = queue.SimpleQueue()
+        self.remote_quit_requested = False
 
         self.mpv = MPVController()
         self.mpv.set_property("volume", self.volume)
-        self.mpv.set_repeat(False)
+        self.mpv.set_repeat(self.repeat)
+
+        if self.restore_session_enabled:
+            self.restore_session(self.saved_state)
+
+        self.mpris = MPRISBridge(self.external_actions)
+        if self.mpris_enabled:
+            self.mpris.start()
+
+    def restore_session(self, saved_state):
+        track = saved_state.get("current_track")
+        if not track:
+            return
+
+        try:
+            track_path = Path(track).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return
+
+        index = self.song_lookup.get(track_path)
+        if index is None:
+            return
+
+        try:
+            position = max(0.0, float(saved_state.get("position", 0.0)))
+        except (TypeError, ValueError):
+            position = 0.0
+
+        self.current = index
+        self.mpv.pause()
+        self.mpv.load(self.songs[index])
+
+        if position > 0:
+            time.sleep(0.03)
+            self.mpv.seek_absolute(position)
+
+        ordered = self.ordered_library_indices()
+        if index in ordered:
+            self.selected = ordered.index(index)
+
+        meta = self.meta(index)
+        self.set_status(
+            f"Restored session: {meta.artist_title}",
+            f"The cat remembered: {meta.artist_title}"
+        )
+
+    def state_snapshot(self):
+        position = 0.0
+        if self.current is not None:
+            try:
+                position = float(
+                    self.mpv.get_property("time-pos") or 0.0
+                )
+            except (TypeError, ValueError):
+                position = 0.0
+
+        return {
+            "volume": self.volume,
+            "shuffle": self.shuffle,
+            "repeat": self.repeat,
+            "library_view": self.library_view,
+            "current_track": (
+                str(self.songs[self.current].resolve())
+                if self.current is not None
+                else None
+            ),
+            "position": max(0.0, position),
+        }
+
+    def persist_state(self, force=False):
+        now = time.monotonic()
+        if not force and now - self.last_state_save < 5.0:
+            return
+
+        save_state(self.state_snapshot())
+        self.last_state_save = now
+
+    def mpris_snapshot(self):
+        idle = True
+        paused = False
+        position = 0.0
+        duration = 0.0
+
+        if self.current is not None:
+            idle = bool(self.mpv.get_property("idle-active"))
+            paused = bool(self.mpv.get_property("pause"))
+
+            try:
+                position = float(
+                    self.mpv.get_property("time-pos") or 0.0
+                )
+            except (TypeError, ValueError):
+                position = 0.0
+
+            try:
+                duration = float(
+                    self.mpv.get_property("duration") or 0.0
+                )
+            except (TypeError, ValueError):
+                duration = 0.0
+
+        if self.current is None or idle:
+            playback_status = "Stopped"
+        elif paused:
+            playback_status = "Paused"
+        else:
+            playback_status = "Playing"
+
+        metadata = None
+        if self.current is not None:
+            meta = self.meta(self.current)
+            metadata = {
+                "track_id": (
+                    f"/org/mpris/MediaPlayer2/track/"
+                    f"track_{self.current}"
+                ),
+                "title": meta.title,
+                "artist": (
+                    None
+                    if meta.artist == "Unknown Artist"
+                    else meta.artist
+                ),
+                "album": (
+                    None
+                    if meta.album == "Unknown Album"
+                    else meta.album
+                ),
+                "album_artist": (
+                    None
+                    if meta.album_artist == "Unknown Artist"
+                    else meta.album_artist
+                ),
+                "url": self.songs[self.current].resolve().as_uri(),
+                "length_us": int(max(0.0, duration) * 1_000_000),
+            }
+
+        return {
+            "playback_status": playback_status,
+            "loop_status": "Track" if self.repeat else "None",
+            "shuffle": self.shuffle,
+            "volume": self.volume / 100.0,
+            "position_us": int(max(0.0, position) * 1_000_000),
+            "metadata": metadata,
+            "has_track": self.current is not None,
+            "has_tracks": bool(self.songs),
+        }
+
+    def sync_mpris(self, force=False):
+        if not self.mpris_enabled:
+            return
+
+        now = time.monotonic()
+        if not force and now - self.last_mpris_sync < 0.5:
+            return
+
+        self.mpris.update(self.mpris_snapshot())
+        self.last_mpris_sync = now
+
+    def process_external_actions(self):
+        while True:
+            try:
+                action, args = self.external_actions.get_nowait()
+            except queue.Empty:
+                break
+
+            if action == "quit":
+                self.remote_quit_requested = True
+            elif action == "next":
+                self.next_song()
+            elif action == "previous":
+                self.previous_song()
+            elif action == "pause":
+                if self.current is not None:
+                    self.mpv.pause()
+            elif action == "play":
+                if self.current is None:
+                    self.play_selected_library_song()
+                else:
+                    self.mpv.play()
+            elif action == "play_pause":
+                if self.current is None:
+                    self.play_selected_library_song()
+                else:
+                    self.mpv.toggle_pause()
+            elif action == "stop":
+                if self.current is not None:
+                    self.mpv.stop()
+            elif action == "seek" and self.current is not None:
+                self.mpv.seek(args[0])
+                position = self.mpv.get_property("time-pos") or 0
+                self.mpris.notify_seeked(float(position) * 1_000_000)
+            elif action == "set_position" and self.current is not None:
+                self.mpv.seek_absolute(args[0])
+                self.mpris.notify_seeked(args[0] * 1_000_000)
+            elif action == "set_volume":
+                self.set_volume_absolute(args[0] * 100.0)
+            elif action == "set_shuffle":
+                self.shuffle = bool(args[0])
+            elif action == "set_repeat":
+                self.repeat = bool(args[0])
+                self.mpv.set_repeat(self.repeat)
+
+        self.sync_mpris(force=True)
+
+    def shutdown(self):
+        self.persist_state(force=True)
+        self.mpris.stop()
+        self.mpv.quit()
 
     def text(self, serious, cat):
         return serious if self.serious_mode else cat
@@ -893,9 +1148,17 @@ class MeowPlayer:
             f"The cat recovered {len(loaded)} treat(s); {missing} escaped."
         )
 
-    def update_volume(self, amount):
-        self.volume = max(0, min(100, self.volume + amount))
+    def set_volume_absolute(self, value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return
+
+        self.volume = int(round(max(0.0, min(100.0, value))))
         self.mpv.set_property("volume", self.volume)
+
+    def update_volume(self, amount):
+        self.set_volume_absolute(self.volume + amount)
 
         if amount > 0:
             self.set_status("Volume increased.", "Meow level increased.")
@@ -1252,8 +1515,16 @@ class MeowPlayer:
         self.splash(stdscr)
         library_scroll = 0
         stash_scroll = 0
+        self.sync_mpris(force=True)
 
         while True:
+            self.process_external_actions()
+            self.persist_state()
+            self.sync_mpris()
+
+            if self.remote_quit_requested:
+                break
+
             height, width = stdscr.getmaxyx()
             stdscr.erase()
 
@@ -1684,7 +1955,8 @@ class MeowPlayer:
                     )
                     self.load_stash(path)
 
-        self.mpv.quit()
+        self.persist_state(force=True)
+        self.sync_mpris(force=True)
 
 
 def parse_args():
@@ -1715,26 +1987,60 @@ def parse_args():
         help="enable maximum feline energy"
     )
 
+    parser.add_argument(
+        "--no-mpris",
+        action="store_true",
+        help="disable MPRIS/D-Bus integration for this run"
+    )
+    parser.add_argument(
+        "--no-restore",
+        action="store_true",
+        help="do not restore the previous playback session"
+    )
+
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    config = load_config()
+
+    configured_music_dir = config.get("music_dir")
     music_dir = (
         Path(args.music_dir).expanduser()
         if args.music_dir
-        else _default_music_dir()
+        else (
+            Path(configured_music_dir).expanduser()
+            if configured_music_dir
+            else _default_music_dir()
+        )
     )
 
     if not music_dir.exists():
         print(_missing_music_dir_message(music_dir))
         sys.exit(1)
 
+    config["music_dir"] = str(music_dir.resolve())
+    save_config(config)
+
+    state = load_state()
+    mpris_enabled = (
+        bool(config.get("mpris_enabled", True))
+        and not args.no_mpris
+    )
+    restore_session = (
+        bool(config.get("restore_session", True))
+        and not args.no_restore
+    )
+
     try:
         player = MeowPlayer(
             music_dir,
             serious_mode=args.serious_mode,
             maximum_meow=args.maximum_meow,
+            saved_state=state,
+            restore_session=restore_session,
+            mpris_enabled=mpris_enabled,
         )
     except FileNotFoundError:
         print(
@@ -1750,13 +2056,13 @@ def main():
                 "\n\nThe cat searched the entire nest. No tunes. :<"
             )
         print(message)
-        player.mpv.quit()
+        player.shutdown()
         sys.exit(0)
 
     try:
         curses.wrapper(player.run)
     finally:
-        player.mpv.quit()
+        player.shutdown()
 
 
 if __name__ == "__main__":
