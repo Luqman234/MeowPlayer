@@ -1069,6 +1069,7 @@ class MeowPlayer:
             elif action == "set_repeat":
                 self.repeat = bool(args[0])
                 self.mpv.set_repeat(self.repeat)
+                self.prime_gapless_next()
 
         if handled:
             self.sync_mpris(force=True)
@@ -1933,6 +1934,7 @@ class MeowPlayer:
             self.refill_shuffle_bag()
 
         self.mpv.load(self.songs[index])
+        self._awaiting_mpv_path = True
         self.mpv.play()
 
         if record_listen and self.catalog is not None:
@@ -1954,6 +1956,8 @@ class MeowPlayer:
                 f"Playing: {meta.artist_title}",
                 f"The cat chose: {meta.artist_title}"
             )
+
+        self.prime_gapless_next()
 
     def play_selected_library_song(self):
         index = self.selected_library_song()
@@ -1990,6 +1994,7 @@ class MeowPlayer:
             f"Added to queue: {label}",
             f"Stashed the meow: {label}"
         )
+        self.prime_gapless_next()
 
     def play_stash_position(self, position, automatic=False):
         if not self.catnip_stash:
@@ -2134,6 +2139,7 @@ class MeowPlayer:
             f"Removed from queue: {label}",
             f"Yeeted from The Catnip Stash: {label}"
         )
+        self.prime_gapless_next()
 
     def move_stash_item(self, direction):
         if len(self.catnip_stash) < 2:
@@ -2155,6 +2161,7 @@ class MeowPlayer:
             "Reordered queue.",
             "Rearranged The Catnip Stash."
         )
+        self.prime_gapless_next()
 
     def clear_stash(self):
         count = len(self.catnip_stash)
@@ -2171,6 +2178,8 @@ class MeowPlayer:
                 "Queue is already empty.",
                 "The Catnip Stash contains only imaginary treats."
             )
+
+        self.prime_gapless_next()
 
     def save_stash(self, path):
         path = Path(path).expanduser()
@@ -2235,6 +2244,7 @@ class MeowPlayer:
             f"Loaded {len(loaded)} track(s); {missing} unavailable.",
             f"The cat recovered {len(loaded)} treat(s); {missing} escaped."
         )
+        self.prime_gapless_next()
 
     def set_volume_absolute(self, value):
         try:
@@ -2982,9 +2992,21 @@ class MeowPlayer:
             else:
                 self.album_art.clear(free_data=False)
 
-            if self.current is not None and not self.repeat:
+            transitioned = self.sync_gapless_transition()
+
+            if (
+                self.current is not None
+                and not self.repeat
+                and not transitioned
+            ):
                 eof = self.mpv.get_property("eof-reached")
-                if eof:
+                if (
+                    eof
+                    and (
+                        self.gapless_mode == "no"
+                        or self.gapless_next_index is None
+                    )
+                ):
                     self.next_song(automatic=True)
 
             try:
@@ -3101,6 +3123,7 @@ class MeowPlayer:
                     f"Repeat {'enabled' if self.repeat else 'disabled'}.",
                     f"Tail-Chase {'ENGAGED' if self.repeat else 'disengaged'}."
                 )
+                self.prime_gapless_next()
                 continue
 
             if self.view == "library":
