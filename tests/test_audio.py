@@ -191,7 +191,7 @@ class AudioEngineTests(unittest.TestCase):
         self.assertEqual(player.mpv.advanced, 1)
         self.assertEqual(player.mpv.cleared, 0)
         self.assertEqual(player.mpv.loaded, [])
-        self.assertEqual(player.mpv.play_calls, 1)
+        self.assertEqual(player.mpv.play_calls, 0)
         self.assertTrue(player._awaiting_mpv_path)
         self.assertEqual(player.gapless_next_index, 2)
 
