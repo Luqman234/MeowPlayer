@@ -32,7 +32,7 @@ concurrency:
 env:
   PYTHONUTF8: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  MEOW_CI_REVISION: "gapless-load-confirm-v3"
+  MEOW_CI_REVISION: "manual-next-prime-clear-v4"
 
 jobs:
   source-integrity:
@@ -529,7 +529,11 @@ jobs:
 
               raise AssertionError(
                   f"player mpv never loaded {expected}; "
-                  f"last path={last!r}"
+                  f"last path={last!r}; "
+                  f"playlist-pos="
+                  f"{player.mpv.get_property('playlist-current-pos')!r}; "
+                  f"playlist-count="
+                  f"{player.mpv.get_property('playlist-count')!r}"
               )
 
           try:
