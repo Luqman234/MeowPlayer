@@ -18,6 +18,7 @@ DEFAULT_STATE = {
     "library_view": "songs",
     "current_track": None,
     "position": 0.0,
+    "catnip_stash": [],
 }
 
 
