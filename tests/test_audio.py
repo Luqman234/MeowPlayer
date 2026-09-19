@@ -13,6 +13,7 @@ class FakeMPV:
         self.loaded = []
         self.play_calls = 0
         self.advanced = 0
+        self.advance_response = {"error": "success"}
         self.trimmed = 0
         self.cleared = 0
 
@@ -34,7 +35,7 @@ class FakeMPV:
 
     def advance_playlist(self):
         self.advanced += 1
-        return {"error": "success"}
+        return self.advance_response
 
     def play(self):
         self.play_calls += 1
@@ -158,6 +159,23 @@ class AudioEngineTests(unittest.TestCase):
         self.assertEqual(player.mpv.play_calls, 1)
         self.assertTrue(player._awaiting_mpv_path)
         self.assertEqual(player.gapless_next_index, 2)
+
+    def test_failed_primed_advance_falls_back_to_replace(self):
+        player = self.make_player(current=0)
+        player.gapless_next_index = 1
+        player.mpv.advance_response = {"error": "playlist current"}
+
+        player.play(
+            1,
+            preserve_sequence=True,
+        )
+
+        self.assertEqual(player.mpv.advanced, 1)
+        self.assertEqual(player.mpv.cleared, 1)
+        self.assertEqual(
+            player.mpv.loaded,
+            [Path("/music/1.flac")],
+        )
 
     def test_unprimed_manual_load_still_replaces_current_track(self):
         player = self.make_player(current=0)
