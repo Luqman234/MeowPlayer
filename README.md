@@ -86,7 +86,7 @@ MeowPlayer currently scans for:
 - Linux, or Termux on Android
 - Unix domain socket support
 
-If Mutagen is unavailable, MeowPlayer still runs using filename/folder fallbacks, but tag-based artist/album/year data will not be available.
+If Mutagen is unavailable, MeowPlayer still runs using filename/folder fallbacks, but tag-based artist/album/year/genre data and cached audio duration will not be available for newly scanned files.
 
 ### Arch Linux
 
@@ -668,7 +668,7 @@ MPRIS exposes:
 - Next / Previous
 - Stop
 - seek and absolute position
-- current title / artist / album metadata
+- current title / artist / album / genre metadata
 - playback position and duration
 - volume
 - Pounce Mode as MPRIS Shuffle
