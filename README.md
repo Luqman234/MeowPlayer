@@ -96,12 +96,6 @@ pkg update
 pkg install python python-pip mpv git
 ```
 
-Install the Python metadata dependency:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
 Grant Termux access to Android shared storage:
 
 ```bash
@@ -130,6 +124,8 @@ python meowplayer.py
 ```
 
 The Termux build of `mpv` is configured for Android audio output, so MeowPlayer continues to use the same mpv backend as on desktop Linux.
+
+For smaller phone displays, MeowPlayer lowers its minimum supported width from 46 columns to 32 columns when Termux is detected. Long labels and footer hints are truncated automatically rather than preventing the player from opening.
 
 ## Installation
 
