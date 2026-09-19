@@ -286,7 +286,7 @@ If MeowPlayer detects Termux but cannot find shared music storage, it prints a T
 
 ## The Cat Catalog
 
-MeowPlayer 0.8.0 adds a persistent SQLite library database/cache called **The Cat Catalog**.
+MeowPlayer 0.7.0 introduced the persistent SQLite **Cat Catalog**; MeowPlayer 0.8.0 expands it into a real library database with Pawmarks and listening history.
 
 By default it lives at:
 
