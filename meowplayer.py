@@ -2592,16 +2592,16 @@ class MeowPlayer:
                     matches = len(self.filtered_song_indices())
 
                     if self.search_active:
-                    mode_line = self.text(
-                        (
-                            f"SEARCH > {self.search_query}_   "
-                            f"({matches} match(es)) · {current_view}"
-                        ),
-                        (
-                            f"SCENT SEARCH > {self.search_query}_   "
-                            f"({matches} meow(s)) · {current_view}"
+                        mode_line = self.text(
+                            (
+                                f"SEARCH > {self.search_query}_   "
+                                f"({matches} match(es)) · {current_view}"
+                            ),
+                            (
+                                f"SCENT SEARCH > {self.search_query}_   "
+                                f"({matches} meow(s)) · {current_view}"
+                            )
                         )
-                    )
                     elif self.search_query:
                         mode_line = self.text(
                             (
@@ -3026,6 +3026,11 @@ def parse_args():
         action="store_true",
         help="discard cached metadata for this library and rebuild it"
     )
+    parser.add_argument(
+        "--no-album-art",
+        action="store_true",
+        help="disable terminal album-art rendering for this run"
+    )
 
     return parser.parse_args()
 
@@ -3061,6 +3066,10 @@ def main():
         bool(config.get("restore_session", True))
         and not args.no_restore
     )
+    album_art_enabled = (
+        bool(config.get("album_art_enabled", True))
+        and not args.no_album_art
+    )
 
     try:
         player = MeowPlayer(
@@ -3071,6 +3080,7 @@ def main():
             restore_session=restore_session,
             mpris_enabled=mpris_enabled,
             rebuild_catalog=args.rebuild_catalog,
+            album_art_enabled=album_art_enabled,
         )
     except FileNotFoundError:
         print(
