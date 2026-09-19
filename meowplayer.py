@@ -23,19 +23,24 @@ except ImportError:
 
 from album_art import AlbumArtManager
 from lyrics_support import LyricsManager
+from library_watcher import LibraryWatcher
 from meow_catalog import LibraryCatalog
-from meow_smart import build_smart_playlists
+from meow_smart import (
+    build_smart_playlists,
+    load_custom_mix_definitions,
+)
 from meow_persistence import (
     load_config,
     load_state,
     save_config,
     save_state,
+    smart_mixes_path,
 )
 from mpris_support import MPRISBridge
 from visualizer import AudioVisualizer
 
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -312,6 +317,7 @@ class MPVController:
         replaygain_preamp=0.0,
         lyrics_enabled=True,
         visualizer_enabled=True,
+        filesystem_watch_enabled=True,
     ):
         self.socket_path = os.path.join(
             tempfile.gettempdir(),
@@ -482,6 +488,8 @@ class MeowPlayer:
         self.lyrics_follow = True
         self.lyrics_scroll = 0
         self.previous_view = "library"
+        self.custom_mix_definitions = []
+        self.custom_mix_errors = []
         self.gapless_mode = (
             gapless_mode
             if gapless_mode in {"no", "weak", "yes"}
@@ -518,6 +526,7 @@ class MeowPlayer:
         self.song_lookup = {
             song.resolve(): index for index, song in enumerate(self.songs)
         }
+        self.reload_custom_smart_mixes(silent=True)
 
         self.selected = 0
         self.stash_selected = 0
@@ -623,6 +632,11 @@ class MeowPlayer:
         self.last_mpris_sync = 0.0
         self.external_actions = queue.SimpleQueue()
         self.remote_quit_requested = False
+        self.library_watcher = LibraryWatcher(
+            self.music_dir,
+            SUPPORTED_EXTENSIONS,
+            enabled=filesystem_watch_enabled,
+        )
 
         self.mpv = MPVController(
             gapless_mode=self.gapless_mode,
@@ -641,6 +655,8 @@ class MeowPlayer:
                 self.refill_shuffle_bag()
             elif not self.shuffle_bag and len(self.songs) > 1:
                 self.refill_shuffle_bag()
+
+        self.library_watcher.start()
 
         self.mpris = MPRISBridge(self.external_actions)
         if self.mpris_enabled:
@@ -1101,6 +1117,7 @@ class MeowPlayer:
     def shutdown(self):
         self.persist_state(force=True)
         self.mpris.stop()
+        self.library_watcher.stop()
         self.album_art.clear(free_data=True)
         self.visualizer.stop()
 
