@@ -71,6 +71,7 @@ MeowPlayer currently scans for:
 - Python 3
 - `mpv`
 - [Mutagen](https://mutagen.readthedocs.io/) for audio metadata parsing
+- `dbus-next` for optional Linux MPRIS integration
 - A terminal with curses support
 - Linux, or Termux on Android
 - Unix domain socket support
@@ -86,7 +87,7 @@ sudo pacman -S python mpv python-mutagen python-dbus-next
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install python3 mpv python3-mutagen
+sudo apt install python3 mpv python3-mutagen python3-dbus-next
 ```
 
 ### Termux / Android
@@ -348,6 +349,7 @@ The state file is managed automatically and remembers:
 - current Songs / Artists / Albums / Nests view
 - last track
 - last playback position
+- The Catnip Stash queue
 
 State is written periodically and again on shutdown.
 
@@ -403,13 +405,24 @@ playerctl --player=meowplayer previous
 
 ### Hyprland media-key example
 
-If your compositor does not bind hardware media keys automatically, route them through `playerctl`:
+If your compositor does not bind hardware media keys automatically, route them through `playerctl`.
+
+Current Hyprland Lua-style configuration:
+
+```lua
+hl.bind("XF86AudioPlay", hl.dsp.exec_cmd("playerctl --player=meowplayer play-pause"), { locked = true })
+hl.bind("XF86AudioNext", hl.dsp.exec_cmd("playerctl --player=meowplayer next"), { locked = true })
+hl.bind("XF86AudioPrev", hl.dsp.exec_cmd("playerctl --player=meowplayer previous"), { locked = true })
+hl.bind("XF86AudioStop", hl.dsp.exec_cmd("playerctl --player=meowplayer stop"), { locked = true })
+```
+
+On older Hyprland releases using hyprlang syntax:
 
 ```ini
-bindel = , XF86AudioPlay, exec, playerctl --player=meowplayer play-pause
-bindel = , XF86AudioNext, exec, playerctl --player=meowplayer next
-bindel = , XF86AudioPrev, exec, playerctl --player=meowplayer previous
-bindel = , XF86AudioStop, exec, playerctl --player=meowplayer stop
+bindl = , XF86AudioPlay, exec, playerctl --player=meowplayer play-pause
+bindl = , XF86AudioNext, exec, playerctl --player=meowplayer next
+bindl = , XF86AudioPrev, exec, playerctl --player=meowplayer previous
+bindl = , XF86AudioStop, exec, playerctl --player=meowplayer stop
 ```
 
 That means your keyboard's Play/Pause, Next, Previous, and Stop keys can control MeowPlayer even when its terminal is not focused.
