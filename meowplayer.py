@@ -82,7 +82,48 @@ CAT_QUOTES = [
     "The waveform has been judged acceptable by the cat.",
     "Local files. Local cat. Maximum ownership.",
     "A suspicious amount of engineering has gone into this meow.",
+    "The cat has reviewed your bitrate and refuses to elaborate.",
+    "Please do not feed the SQLite database after midnight.",
+    "This FFT has been stared at intensely. Results inconclusive.",
+    "The cat says gapless playback tastes smoother.",
+    "D-Bus has been bapped. It appears to still function.",
+    "Your music library has passed the sniff test.",
+    "The cat has unionized. Demands include more scritches.",
+    "No, the cat does not know why that file is tagged 'Unknown Artist'.",
+    "One does not simply empty The Catnip Stash.",
+    "The terminal is warm. This is now legally a cat bed.",
+    "ReplayGain: because apparently the cat has standards.",
+    "The cat has read the documentation. This changes nothing.",
 ]
+
+CAT_INCIDENTS = (
+    "sat directly on the play button and is pretending it was intentional.",
+    "attempted to eat the waveform. The waveform survived.",
+    "filed a bug report against gravity.",
+    "opened /dev/null and stared into the abyss.",
+    "bapped D-Bus once. No witnesses came forward.",
+    "inspected SQLite by lying on top of it.",
+    "declared the current album legally part of its territory.",
+    "mistook the spectrum visualizer for a tiny fence and attacked it.",
+    "moved absolutely nothing, then demanded credit for optimization.",
+    "is conducting a surprise audit of The Catnip Stash.",
+    "has entered the server room despite there being no server room.",
+    "briefly became root in spirit only.",
+    "found one byte under the sofa. Ownership remains disputed.",
+    "pressed a key nobody mapped. Somehow nothing exploded.",
+    "has determined that 100% volume is an indoor voice.",
+)
+
+PET_REACTIONS = (
+    "purred with suspiciously high clock stability.",
+    "accepted the scritch. Latency improved by an unverifiable 0.0001 ms.",
+    "leaned into the scritch and nearly fell off the terminal.",
+    "has forgiven exactly one software bug.",
+    "made a tiny 'mrrp' noise. Engineering productivity increased.",
+    "approved the current track by closing both eyes.",
+    "received affection and immediately demanded another interrupt.",
+    "is now emotionally cached.",
+)
 
 CAT_MASCOT = (
     " /\\_/\\",
@@ -120,6 +161,16 @@ CAT_MOOD_MASCOTS = {
         " /\\_/\\",
         r"( o.o )",
         r" > ~ <",
+    ),
+    "Screaming": (
+        " /\\_/\\",
+        r"( O.O )",
+        r" > !!! <",
+    ),
+    "Whispering": (
+        " /\\_/\\",
+        r"( o.o )",
+        r" > . <  pspsps",
     ),
 }
 
@@ -628,7 +679,12 @@ class MeowPlayer:
 
         self.status_message = self.text(initial_serious, initial_cat)
         self.quote = random.choice(CAT_QUOTES)
-        self.last_quote_change = time.monotonic()
+        now = time.monotonic()
+        self.last_quote_change = now
+        self.scritches = 0
+        self.cat_incident = None
+        self.cat_incident_until = 0.0
+        self.next_cat_incident_at = now + random.uniform(35.0, 70.0)
         self.tail_frame = 0
         self.last_state_save = 0.0
         self.last_mpris_sync = 0.0
@@ -1146,6 +1202,10 @@ class MeowPlayer:
         paused = bool(self.mpv.get_property("pause"))
         if paused:
             return "Loafing"
+        if self.volume >= 90:
+            return "Screaming"
+        if self.volume <= 10:
+            return "Whispering"
         if self.repeat:
             return "Tail-Chasing"
         if self.shuffle:
@@ -1153,6 +1213,76 @@ class MeowPlayer:
         if self.catnip_stash:
             return "Guarding Catnip"
         return "Purring"
+
+    def trigger_cat_incident(self, message=None, duration=8.0, now=None):
+        if self.serious_mode:
+            return False
+
+        timestamp = time.monotonic() if now is None else float(now)
+        self.cat_incident = message or random.choice(CAT_INCIDENTS)
+        self.cat_incident_until = timestamp + max(1.0, float(duration))
+        self.next_cat_incident_at = timestamp + random.uniform(45.0, 95.0)
+        return True
+
+    def maybe_trigger_cat_incident(self, now=None):
+        if self.serious_mode:
+            return False
+
+        timestamp = time.monotonic() if now is None else float(now)
+
+        if self.cat_incident is not None:
+            if timestamp < self.cat_incident_until:
+                return False
+            self.cat_incident = None
+
+        if timestamp < self.next_cat_incident_at:
+            return False
+
+        return self.trigger_cat_incident(now=timestamp)
+
+    def cat_footer_message(self, now=None):
+        if self.serious_mode:
+            return ""
+
+        timestamp = time.monotonic() if now is None else float(now)
+        if (
+            self.cat_incident is not None
+            and timestamp < self.cat_incident_until
+        ):
+            return f"🚨 CAT INCIDENT: {self.cat_incident}"
+
+        if self.cat_incident is not None:
+            self.cat_incident = None
+
+        return f"🐱 {self.quote}"
+
+    def pet_cat(self):
+        if self.serious_mode:
+            self.set_status(
+                "Mascot interaction unavailable in Serious Mode.",
+                ""
+            )
+            return False
+
+        self.scritches += 1
+
+        if self.scritches % 10 == 0:
+            reaction = (
+                f"SCRITCH MILESTONE {self.scritches}: the cat has become "
+                "too powerful to benchmark."
+            )
+        else:
+            reaction = random.choice(PET_REACTIONS)
+
+        self.trigger_cat_incident(
+            f"SCRITCH #{self.scritches}: {reaction}",
+            duration=7.0,
+        )
+        self.set_status(
+            f"Cat interaction #{self.scritches}.",
+            f"Scritch #{self.scritches} accepted. {reaction}"
+        )
+        return True
 
     def live_cat_mascot(self):
         if self.maximum_meow:
@@ -1164,6 +1294,8 @@ class MeowPlayer:
                 "Zoomies": r" ( =>.<=)   !!",
                 "Tail-Chasing": r" ( =@.@=)   ↻",
                 "Guarding Catnip": r" ( =o.o=)   ~",
+                "Screaming": r" ( =O.O=)   !!!",
+                "Whispering": r" ( =o.o=)   pspsps",
             }[mood]
             return (
                 "  /\\_/\\      ♪",
@@ -2520,7 +2652,27 @@ class MeowPlayer:
     def update_volume(self, amount):
         self.set_volume_absolute(self.volume + amount)
 
-        if amount > 0:
+        if self.volume == 100:
+            self.set_status(
+                "Volume set to 100%.",
+                "MEOW LEVEL MAXIMUM. The cat is now yelling directly into the DAC."
+            )
+        elif self.volume >= 90:
+            self.set_status(
+                f"Volume set to {self.volume}%.",
+                f"Meow Level {self.volume}%. Indoor voice privileges revoked."
+            )
+        elif self.volume == 0:
+            self.set_status(
+                "Volume muted.",
+                "Silent meow achieved. The cat is now aggressively lip-syncing."
+            )
+        elif self.volume <= 10:
+            self.set_status(
+                f"Volume set to {self.volume}%.",
+                f"Meow Level {self.volume}%. Tiny indoor voice enabled."
+            )
+        elif amount > 0:
             self.set_status("Volume increased.", "Meow level increased.")
         else:
             self.set_status("Volume decreased.", "The cat has quieted down.")
@@ -2572,10 +2724,18 @@ class MeowPlayer:
         stdscr.erase()
         height, width = stdscr.getmaxyx()
         mascot = MAXIMUM_MEOW_MASCOT if self.maximum_meow else CAT_MASCOT
+        startup_lines = (
+            "Sniffing metadata and indexing your music nest...",
+            "Counting songs. Losing count. Counting again...",
+            "Checking The Catnip Stash for contraband...",
+            "Asking mpv very politely to do the difficult part...",
+            "Warming the terminal until it qualifies as a cat bed...",
+            "Inspecting tags with absolutely unnecessary seriousness...",
+        )
         lines = list(mascot) + [
             "",
             "Welcome to MeowPlayer",
-            "Sniffing metadata and indexing your music nest..."
+            random.choice(startup_lines)
         ]
 
         start_y = max(0, (height - len(lines)) // 2)
@@ -3196,7 +3356,14 @@ class MeowPlayer:
                 meta = self.meta(self.current)
                 paused = self.mpv.get_property("pause")
                 icon = "⏸" if paused else "▶"
-                label = "Now Playing" if self.serious_mode else "Now Purring"
+                if self.serious_mode:
+                    label = "Now Playing"
+                else:
+                    mood = self.cat_mood()
+                    label = {
+                        "Screaming": "Now YOWLING",
+                        "Whispering": "Now tiny-purring",
+                    }.get(mood, "Now Purring")
                 now_playing = f"{icon}  {label}: {meta.artist_title}"
             else:
                 now_playing = self.text(
@@ -3287,6 +3454,11 @@ class MeowPlayer:
                     f"Tail-Chase: {'ON' if self.repeat else 'OFF'}   "
                     f"Catnip: {len(self.catnip_stash)}   "
                     f"Mood: {self.cat_mood()}"
+                    + (
+                        f"   Scritches: {self.scritches}"
+                        if self.scritches
+                        else ""
+                    )
                 )
 
             try:
@@ -3439,6 +3611,8 @@ class MeowPlayer:
                     stash_scroll,
                 )
 
+            self.maybe_trigger_cat_incident()
+
             if (
                 not self.serious_mode
                 and time.monotonic() - self.last_quote_change > 20
@@ -3456,9 +3630,9 @@ class MeowPlayer:
                 else:
                     controls = (
                         "↑↓ Scroll  ENTER Follow  L Close Songbook  V Spectrum  "
-                        "N/P Meow  Space Paws  X Escape"
+                        "N/P Meow  G Pet  Space Paws  X Escape"
                     )
-                    quote = f"🐱 {self.quote}"
+                    quote = self.cat_footer_message()
             elif self.view == "library":
                 if self.serious_mode:
                     controls = (
@@ -3469,9 +3643,9 @@ class MeowPlayer:
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Open/Purr  1-7 Nests  F Pawmark  "
-                        "L Songbook  V Spectrum  M Mixes  Q Catnip  X Escape"
+                        "L Songbook  V Spectrum  M Mixes  G Pet  Q Catnip  X Escape"
                     )
-                    quote = f"🐱 {self.quote}"
+                    quote = self.cat_footer_message()
             else:
                 if self.serious_mode:
                     controls = (
@@ -3482,9 +3656,9 @@ class MeowPlayer:
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Devour  D Yeet  J/K Rearrange  C Spill  "
-                        "W Bury .m3u  O Dig up .m3u  Q Nest  X Escape"
+                        "W Bury .m3u  O Dig up .m3u  G Pet  Q Nest  X Escape"
                     )
-                    quote = f"🐱 {self.quote}"
+                    quote = self.cat_footer_message()
 
             if self.maximum_meow and quote:
                 quote = f"🐱 MAXIMUM MEOW: {self.quote} 🐾♫🐾"
@@ -3565,6 +3739,10 @@ class MeowPlayer:
 
             if key in (ord("m"), ord("M")):
                 self.reload_custom_smart_mixes()
+                continue
+
+            if key in (ord("g"), ord("G")):
+                self.pet_cat()
                 continue
 
             if key in (ord("v"), ord("V")):
