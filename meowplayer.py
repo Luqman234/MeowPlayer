@@ -2952,10 +2952,14 @@ class MeowPlayer:
                 )
 
             progress_y = content_start + 2
-            info_y = content_start + 4
-            status_y = content_start + 5
-            mode_y = content_start + 6
-            list_start = content_start + 8
+            visualizer_y = content_start + 3
+            inline_lyric = self.current_lyric_text()
+            lyric_shift = 1 if inline_lyric else 0
+            lyric_y = content_start + 4
+            info_y = content_start + 4 + lyric_shift
+            status_y = content_start + 5 + lyric_shift
+            mode_y = content_start + 6 + lyric_shift
+            list_start = content_start + 8 + lyric_shift
 
             try:
                 stdscr.addstr(
@@ -2971,6 +2975,36 @@ class MeowPlayer:
                 )
             except curses.error:
                 pass
+
+            spectrum = self.visualizer.render(
+                max(1, top_width - 4)
+            )
+            if spectrum:
+                try:
+                    stdscr.addstr(
+                        visualizer_y,
+                        2,
+                        spectrum[:top_width - 4],
+                        curses.color_pair(1),
+                    )
+                except curses.error:
+                    pass
+
+            if inline_lyric:
+                lyric_label = (
+                    inline_lyric
+                    if self.serious_mode
+                    else f"♫ {inline_lyric}"
+                )
+                try:
+                    stdscr.addstr(
+                        lyric_y,
+                        2,
+                        lyric_label[:top_width - 4],
+                        curses.A_BOLD,
+                    )
+                except curses.error:
+                    pass
 
             if self.serious_mode:
                 shuffle_info = (
@@ -3016,7 +3050,34 @@ class MeowPlayer:
             except curses.error:
                 pass
 
-            if self.view == "library":
+            if self.view == "lyrics":
+                if self.current_lyrics is None:
+                    mode_line = self.text(
+                        "Lyrics — unavailable for this track",
+                        "Songbook — no words found for this meow"
+                    )
+                else:
+                    lyric_kind = (
+                        "synchronized"
+                        if self.current_lyrics.synced
+                        else "plain"
+                    )
+                    follow = (
+                        "follow"
+                        if self.lyrics_follow
+                        else "manual scroll"
+                    )
+                    mode_line = self.text(
+                        (
+                            f"Lyrics — {lyric_kind} · "
+                            f"{self.current_lyrics.source} · {follow}"
+                        ),
+                        (
+                            f"Songbook — {lyric_kind} · "
+                            f"{self.current_lyrics.source} · {follow}"
+                        )
+                    )
+            elif self.view == "library":
                 current_view = self.library_breadcrumb()
 
                 if self.smart_top_level():
@@ -3097,7 +3158,14 @@ class MeowPlayer:
                 height - list_start - footer_lines - 1
             )
 
-            if self.view == "library":
+            if self.view == "lyrics":
+                self.draw_lyrics(
+                    stdscr,
+                    width,
+                    list_start,
+                    list_height,
+                )
+            elif self.view == "library":
                 library_scroll = self.draw_library(
                     stdscr,
                     width,
@@ -3121,17 +3189,30 @@ class MeowPlayer:
                 self.quote = random.choice(CAT_QUOTES)
                 self.last_quote_change = time.monotonic()
 
-            if self.view == "library":
+            if self.view == "lyrics":
+                if self.serious_mode:
+                    controls = (
+                        "↑↓ Scroll  ENTER Follow  L Back  V Visualizer  "
+                        "N/P Track  Space Pause  X Quit"
+                    )
+                    quote = ""
+                else:
+                    controls = (
+                        "↑↓ Scroll  ENTER Follow  L Close Songbook  V Spectrum  "
+                        "N/P Meow  Space Paws  X Escape"
+                    )
+                    quote = f"🐱 {self.quote}"
+            elif self.view == "library":
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Open/Play  1-7 Views  F Favorite  "
-                        "B Back  / Search  A Queue  Q Queue  X Quit"
+                        "L Lyrics  V Visualizer  Q Queue  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Open/Purr  1-7 Nests  F Pawmark  "
-                        "B Back  / Scent  A Stash  Q Catnip  X Escape"
+                        "L Songbook  V Spectrum  Q Catnip  X Escape"
                     )
                     quote = f"🐱 {self.quote}"
             else:
@@ -3220,7 +3301,37 @@ class MeowPlayer:
                 )
                 break
 
+            if key in (ord("l"), ord("L")):
+                self.toggle_lyrics_view()
+                continue
+
+            if key in (ord("v"), ord("V")):
+                if not self.visualizer.available:
+                    self.set_status(
+                        "Visualizer unavailable: install CAVA.",
+                        "No spectrum cat found. Install CAVA first."
+                    )
+                else:
+                    visible = self.visualizer.toggle()
+                    self.set_status(
+                        (
+                            f"Visualizer {'enabled' if visible else 'disabled'}."
+                        ),
+                        (
+                            f"Spectrum {'purring' if visible else 'sleeping'}."
+                        )
+                    )
+                continue
+
             if key in (ord("q"), ord("Q")):
+                if self.view == "lyrics":
+                    self.view = self.previous_view
+                    self.set_status(
+                        "Returned from lyrics.",
+                        "The cat closed the songbook."
+                    )
+                    continue
+
                 self.view = (
                     "stash" if self.view == "library" else "library"
                 )
@@ -3315,7 +3426,28 @@ class MeowPlayer:
                 self.prime_gapless_next()
                 continue
 
-            if self.view == "library":
+            if self.view == "lyrics":
+                document = self.current_lyrics
+                if key == curses.KEY_UP and document is not None:
+                    self.lyrics_follow = False
+                    self.lyrics_scroll = max(
+                        0,
+                        self.lyrics_scroll - 1,
+                    )
+                elif key == curses.KEY_DOWN and document is not None:
+                    self.lyrics_follow = False
+                    self.lyrics_scroll = min(
+                        max(0, len(document.lines) - 1),
+                        self.lyrics_scroll + 1,
+                    )
+                elif key in (10, 13, curses.KEY_ENTER):
+                    self.lyrics_follow = True
+                    self.set_status(
+                        "Lyrics follow resumed.",
+                        "The songbook is following the meow again."
+                    )
+
+            elif self.view == "library":
                 if self.smart_top_level():
                     navigation_count = len(self.smart_playlists())
                 else:
@@ -3382,7 +3514,7 @@ class MeowPlayer:
                     )
                     library_scroll = 0
 
-            else:
+            elif self.view == "stash":
                 if key == curses.KEY_UP and self.catnip_stash:
                     self.stash_selected = max(
                         0,
