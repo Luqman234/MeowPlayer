@@ -2358,9 +2358,15 @@ class MeowPlayer:
             and not self._awaiting_mpv_path
         )
 
+        advanced = False
         if use_primed_entry:
-            self.mpv.advance_playlist()
-        else:
+            response = self.mpv.advance_playlist()
+            advanced = bool(
+                response
+                and response.get("error") == "success"
+            )
+
+        if not advanced:
             self.mpv.clear_future_playlist()
             self.mpv.load(self.songs[index])
 
