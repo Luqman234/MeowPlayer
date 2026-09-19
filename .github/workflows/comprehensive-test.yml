@@ -32,7 +32,7 @@ concurrency:
 env:
   PYTHONUTF8: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  MEOW_CI_REVISION: "async-mpv-wait-v2"
+  MEOW_CI_REVISION: "gapless-load-confirm-v3"
 
 jobs:
   source-integrity:
@@ -541,9 +541,18 @@ jobs:
               assert player.current == 0
               wait_for_player_path(player.songs[0])
 
+              # Confirm the asynchronous manual load before allowing
+              # MeowPlayer to mutate mpv's future playlist for gapless audio.
+              player.sync_gapless_transition()
+              assert player._awaiting_mpv_path is False
+              assert player.gapless_next_index == 1
+
               player.next_song()
               assert player.current == 1
               wait_for_player_path(player.songs[1])
+
+              player.sync_gapless_transition()
+              assert player._awaiting_mpv_path is False
 
               player.persist_state(force=True)
               print(
