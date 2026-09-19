@@ -316,6 +316,7 @@ class MPVController:
         replaygain_mode="track",
         replaygain_preamp=0.0,
         lyrics_enabled=True,
+        lyrics_online_enabled=True,
         visualizer_enabled=True,
         filesystem_watch_enabled=True,
     ):
@@ -482,7 +483,10 @@ class MeowPlayer:
         self.album_art = AlbumArtManager(
             enabled=album_art_enabled and not _is_termux()
         )
-        self.lyrics = LyricsManager(enabled=lyrics_enabled)
+        self.lyrics = LyricsManager(
+            enabled=lyrics_enabled,
+            online_enabled=lyrics_online_enabled,
+        )
         self.visualizer = AudioVisualizer(enabled=visualizer_enabled)
         self.current_lyrics = None
         self.lyrics_track_index = None
@@ -3889,7 +3893,12 @@ def parse_args():
     parser.add_argument(
         "--no-lyrics",
         action="store_true",
-        help="disable sidecar and embedded lyrics for this run"
+        help="disable local, embedded, cached, and online lyrics for this run"
+    )
+    parser.add_argument(
+        "--no-online-lyrics",
+        action="store_true",
+        help="disable automatic LRCLIB lookup while keeping local lyrics enabled"
     )
     parser.add_argument(
         "--no-visualizer",
@@ -3981,6 +3990,10 @@ def main():
         bool(config.get("lyrics_enabled", True))
         and not args.no_lyrics
     )
+    lyrics_online_enabled = (
+        bool(config.get("lyrics_online_enabled", True))
+        and not args.no_online_lyrics
+    )
     visualizer_enabled = (
         bool(config.get("visualizer_enabled", True))
         and not args.no_visualizer
@@ -4004,6 +4017,7 @@ def main():
             replaygain_mode=replaygain_mode,
             replaygain_preamp=replaygain_preamp,
             lyrics_enabled=lyrics_enabled,
+            lyrics_online_enabled=lyrics_online_enabled,
             visualizer_enabled=visualizer_enabled,
             filesystem_watch_enabled=filesystem_watch_enabled,
         )
