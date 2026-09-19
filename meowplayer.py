@@ -3640,6 +3640,16 @@ def parse_args():
         default=None,
         help="ReplayGain preamp in dB for this run"
     )
+    parser.add_argument(
+        "--no-lyrics",
+        action="store_true",
+        help="disable sidecar and embedded lyrics for this run"
+    )
+    parser.add_argument(
+        "--no-visualizer",
+        action="store_true",
+        help="disable the optional CAVA spectrum visualizer"
+    )
 
     return parser.parse_args()
 
@@ -3716,6 +3726,14 @@ def main():
         if args.replaygain_preamp is not None
         else configured_preamp
     )
+    lyrics_enabled = (
+        bool(config.get("lyrics_enabled", True))
+        and not args.no_lyrics
+    )
+    visualizer_enabled = (
+        bool(config.get("visualizer_enabled", True))
+        and not args.no_visualizer
+    )
 
     try:
         player = MeowPlayer(
@@ -3730,6 +3748,8 @@ def main():
             gapless_mode=gapless_mode,
             replaygain_mode=replaygain_mode,
             replaygain_preamp=replaygain_preamp,
+            lyrics_enabled=lyrics_enabled,
+            visualizer_enabled=visualizer_enabled,
         )
     except FileNotFoundError:
         print(
