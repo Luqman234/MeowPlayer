@@ -109,6 +109,9 @@ class MPVController:
     def set_property(self, name, value):
         self.command("set_property", name, value)
 
+    def set_repeat(self, enabled):
+        self.set_property("loop-file", "inf" if enabled else "no")
+
     def load(self, filename):
         self.command("loadfile", str(filename), "replace")
 
@@ -173,6 +176,7 @@ class MeowPlayer:
 
         self.mpv = MPVController()
         self.mpv.set_property("volume", self.volume)
+        self.mpv.set_repeat(False)
 
     def text(self, serious, cat):
         return serious if self.serious_mode else cat
@@ -979,21 +983,10 @@ class MeowPlayer:
 
             stdscr.refresh()
 
-            if self.current is not None:
+            if self.current is not None and not self.repeat:
                 eof = self.mpv.get_property("eof-reached")
                 if eof:
-                    if self.repeat:
-                        self.play(
-                            self.current,
-                            automatic=True,
-                            record_history=False
-                        )
-                        self.set_status(
-                            "Repeating current track.",
-                            "Tail-chase engaged: one more purr!"
-                        )
-                    else:
-                        self.next_song(automatic=True)
+                    self.next_song(automatic=True)
 
             key = stdscr.getch()
             if key == -1:
@@ -1082,6 +1075,7 @@ class MeowPlayer:
 
             if key in (ord("r"), ord("R")):
                 self.repeat = not self.repeat
+                self.mpv.set_repeat(self.repeat)
                 self.set_status(
                     f"Repeat {'enabled' if self.repeat else 'disabled'}.",
                     f"Tail-Chase {'ENGAGED' if self.repeat else 'disengaged'}."
