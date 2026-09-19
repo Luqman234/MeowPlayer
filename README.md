@@ -68,7 +68,8 @@ MeowPlayer currently scans for:
 - `mpv`
 - [Mutagen](https://mutagen.readthedocs.io/) for audio metadata parsing
 - A terminal with curses support
-- Linux or another Unix-like environment with Unix domain sockets
+- Linux, or Termux on Android
+- Unix domain socket support
 
 If Mutagen is unavailable, MeowPlayer still runs using filename/folder fallbacks, but tag-based artist/album/year data will not be available.
 
@@ -83,6 +84,52 @@ sudo pacman -S python mpv python-mutagen
 ```bash
 sudo apt install python3 mpv python3-mutagen
 ```
+
+### Termux / Android
+
+MeowPlayer has first-class Termux support.
+
+Install the runtime packages:
+
+```bash
+pkg update
+pkg install python python-pip mpv git
+```
+
+Install the Python metadata dependency:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Grant Termux access to Android shared storage:
+
+```bash
+termux-setup-storage
+```
+
+After permission is granted, Android's normal Music directory is typically exposed to Termux as:
+
+```text
+~/storage/music
+```
+
+MeowPlayer detects Termux automatically. If no music directory is supplied, it prefers `~/storage/music`, then `/storage/emulated/0/Music`, and finally `~/Music`.
+
+Keep the **MeowPlayer repository itself inside Termux's private home directory**, such as `~/MeowPlayer`. Shared Android storage is fine for the music library, but it does not behave like a normal Unix filesystem and is not a good location for executable project files.
+
+Example setup:
+
+```bash
+cd ~
+git clone https://github.com/Luqman234/MeowPlayer.git
+cd MeowPlayer
+python -m pip install -r requirements.txt
+termux-setup-storage
+python meowplayer.py
+```
+
+The Termux build of `mpv` is configured for Android audio output, so MeowPlayer continues to use the same mpv backend as on desktop Linux.
 
 ## Installation
 
@@ -101,7 +148,7 @@ chmod +x meowplayer.py
 
 ## Usage
 
-By default, MeowPlayer scans `~/Music`:
+By default, MeowPlayer scans `~/Music` on desktop Linux. In Termux it automatically prefers Android's shared `~/storage/music` directory:
 
 ```bash
 ./meowplayer.py
@@ -120,6 +167,14 @@ To use another music directory, pass it as the first argument:
 ```
 
 The directory is scanned recursively, so music inside subdirectories is included automatically.
+
+On Termux, you can still override the Android music directory explicitly:
+
+```bash
+python meowplayer.py ~/storage/downloads/Music
+```
+
+If MeowPlayer detects Termux but cannot find shared music storage, it prints a Termux-specific hint telling you to run `termux-setup-storage`.
 
 ## Metadata and library views
 
