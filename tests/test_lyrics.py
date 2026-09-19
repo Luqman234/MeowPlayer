@@ -38,7 +38,8 @@ class LyricsTests(unittest.TestCase):
             "[00:08.00]Three"
         )
 
-        self.assertEqual(document.current_line(0.0), "One")
+        self.assertEqual(document.current_line(0.0), "")
+        self.assertEqual(document.current_line(1.0), "One")
         self.assertEqual(document.current_line(4.5), "Two")
         self.assertEqual(document.current_line(99.0), "Three")
 
@@ -50,6 +51,24 @@ class LyricsTests(unittest.TestCase):
             [line.text for line in document.lines],
             ["first", "second"],
         )
+
+    def test_sidecar_added_later_invalidates_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "song.flac"
+            track.write_bytes(b"not-real-audio")
+
+            manager = LyricsManager(enabled=True)
+            self.assertIsNone(manager.load(track))
+
+            (root / "song.lrc").write_text(
+                "[00:01.00]Arrived later\n",
+                encoding="utf-8",
+            )
+            document = manager.load(track)
+
+            self.assertIsNotNone(document)
+            self.assertEqual(document.current_line(2.0), "Arrived later")
 
     def test_sidecar_lrc_has_priority(self):
         with tempfile.TemporaryDirectory() as directory:
