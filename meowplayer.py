@@ -507,8 +507,11 @@ class MeowPlayer:
             self.restore_session(self.saved_state)
 
         self.sanitize_shuffle_bag()
-        if self.shuffle and not self.shuffle_bag and len(self.songs) > 1:
-            self.refill_shuffle_bag()
+        if self.shuffle:
+            if not self.restore_session_enabled:
+                self.refill_shuffle_bag()
+            elif not self.shuffle_bag and len(self.songs) > 1:
+                self.refill_shuffle_bag()
 
         self.mpris = MPRISBridge(self.external_actions)
         if self.mpris_enabled:
@@ -690,6 +693,9 @@ class MeowPlayer:
                 )
             except (TypeError, ValueError):
                 duration = 0.0
+
+            if duration <= 0 and self.current is not None:
+                duration = self.meta(self.current).duration
 
         if self.current is None or idle:
             playback_status = "Stopped"
@@ -2252,16 +2258,26 @@ class MeowPlayer:
                 pass
 
             if self.serious_mode:
+                shuffle_info = (
+                    f"ON ({len(self.shuffle_bag)} left)"
+                    if self.shuffle
+                    else "OFF"
+                )
                 info = (
                     f"Volume: {self.volume}%   "
-                    f"Shuffle: {'ON' if self.shuffle else 'OFF'}   "
+                    f"Shuffle: {shuffle_info}   "
                     f"Repeat: {'ON' if self.repeat else 'OFF'}   "
                     f"Queue: {len(self.catnip_stash)}"
                 )
             else:
+                pounce_info = (
+                    f"ON ({len(self.shuffle_bag)} left)"
+                    if self.shuffle
+                    else "OFF"
+                )
                 info = (
                     f"Meow Level: {self.volume}%   "
-                    f"Pounce: {'ON' if self.shuffle else 'OFF'}   "
+                    f"Pounce: {pounce_info}   "
                     f"Tail-Chase: {'ON' if self.repeat else 'OFF'}   "
                     f"Catnip: {len(self.catnip_stash)}   "
                     f"Mood: {self.cat_mood()}"
