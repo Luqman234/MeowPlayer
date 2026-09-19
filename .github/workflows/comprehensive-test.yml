@@ -32,7 +32,7 @@ concurrency:
 env:
   PYTHONUTF8: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  MEOW_CI_REVISION: "primed-playlist-next-v6"
+  MEOW_CI_REVISION: "wait-for-primed-playlist-v7"
 
 jobs:
   source-integrity:
@@ -536,6 +536,34 @@ jobs:
                   f"{player.mpv.get_property('playlist-count')!r}"
               )
 
+          def wait_for_gapless_reservation(timeout=5.0):
+              deadline = time.monotonic() + timeout
+              last_pos = None
+              last_count = None
+
+              while time.monotonic() < deadline:
+                  last_pos = player.mpv.get_property(
+                      "playlist-current-pos"
+                  )
+                  last_count = player.mpv.get_property(
+                      "playlist-count"
+                  )
+
+                  try:
+                      if int(last_pos) == 0 and int(last_count) >= 2:
+                          return int(last_pos), int(last_count)
+                  except (TypeError, ValueError):
+                      pass
+
+                  time.sleep(0.05)
+
+              raise AssertionError(
+                  "gapless reservation never became visible; "
+                  f"playlist-pos={last_pos!r}; "
+                  f"playlist-count={last_count!r}; "
+                  f"path={player.mpv.current_path()!r}"
+              )
+
           try:
               assert len(player.songs) == 2, player.songs
               assert len(player.metadata) == 2
@@ -550,12 +578,14 @@ jobs:
               player.sync_gapless_transition()
               assert player._awaiting_mpv_path is False
               assert player.gapless_next_index == 1
-              assert int(
-                  player.mpv.get_property("playlist-current-pos")
-              ) == 0
-              assert int(
-                  player.mpv.get_property("playlist-count")
-              ) >= 2
+              playlist_pos, playlist_count = wait_for_gapless_reservation()
+              print(
+                  "gapless reservation ready:",
+                  "playlist-pos=",
+                  playlist_pos,
+                  "playlist-count=",
+                  playlist_count,
+              )
 
               player.next_song()
               assert player.current == 1
