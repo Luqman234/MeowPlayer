@@ -15,6 +15,7 @@ DEFAULT_CONFIG = {
     "replaygain_preamp": 0.0,
     "lyrics_enabled": True,
     "visualizer_enabled": True,
+    "filesystem_watch_enabled": True,
 }
 
 DEFAULT_STATE = {
@@ -46,6 +47,10 @@ def config_path():
 
 def state_path():
     return _xdg_base("XDG_STATE_HOME", ".local/state") / APP_NAME / "state.json"
+
+
+def smart_mixes_path():
+    return config_path().parent / "smart-mixes.json"
 
 
 def _load_json(path, defaults):
