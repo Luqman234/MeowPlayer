@@ -1,21 +1,40 @@
 # MeowPlayer 🐱🎵
 
-A lightweight terminal music player written in Python, with `mpv` handling audio playback and `curses` providing the terminal UI.
+A lightweight, aggressively cat-themed terminal music player written in Python, with `mpv` handling audio playback and `curses` providing the terminal UI.
 
 MeowPlayer recursively scans a music directory, displays your tracks in the terminal, and lets you control playback entirely from the keyboard.
+
+```text
+ /\_/\   ♫ MEOWPLAYER — terminal purr engine
+( o.o )
+ > ^ <
+
+Now Purring: Space Song.flac
+00:42 ━━━━━━━∿──────────── 03:28
+
+Meow Level: 70%   Pounce Mode: OFF   Tail-Chase: ON
+```
 
 ## Features
 
 - Full-screen terminal interface
+- Cat mascot in the header
+- Cat-themed startup splash
+- Random rotating cat quotes
+- Cat-flavored status messages
+- Animated tail progress marker
+- Pawprint marker for the currently playing track
 - Recursive music-folder scanning
-- Play and pause
-- Previous and next track
+- Play and paws
+- Previous purr and next meow
 - Seek forward and backward
-- Volume control
-- Shuffle mode
-- Repeat mode
+- Meow Level volume control
+- Pounce Mode shuffle
+- Tail-Chase repeat
 - Playback progress and duration display
 - Automatic playback of the next track
+- Serious mode for people who temporarily require professionalism
+- Maximum Meow mode for people who absolutely do not
 - Uses `mpv` as the audio backend
 
 ### Supported formats
@@ -89,20 +108,78 @@ To use another music directory, pass it as the first argument:
 
 The directory is scanned recursively, so music inside subdirectories is included automatically.
 
+## Cat modes
+
+Normal mode is already cat-themed:
+
+```bash
+./meowplayer.py
+```
+
+If you need MeowPlayer to behave itself for a moment:
+
+```bash
+./meowplayer.py --serious-mode
+```
+
+Serious Mode removes the cat jokes, mascot splash, feline labels, quotes, paw markers, and animated tail in favor of conventional music-player wording.
+
+If normal MeowPlayer does not contain enough cat:
+
+```bash
+./meowplayer.py --maximum-meow
+```
+
+Maximum Meow increases the mascot energy and turns the quote line into a full feline emergency.
+
+You can combine either mode with a music directory:
+
+```bash
+./meowplayer.py --maximum-meow ~/Music
+```
+
+`--serious-mode` and `--maximum-meow` are mutually exclusive, for obvious philosophical reasons.
+
 ## Controls
 
-| Key | Action |
+| Key | MeowPlayer action |
 | --- | --- |
-| `↑` / `↓` | Select a track |
+| `↑` / `↓` | Choose a track |
 | `Enter` | Play selected track |
-| `Space` | Play / pause |
-| `←` / `→` | Seek backward / forward 5 seconds |
-| `N` | Next track |
-| `P` | Previous track |
-| `+` / `-` | Volume up / down |
-| `S` | Toggle shuffle |
-| `R` | Toggle repeat |
-| `Q` | Quit |
+| `Space` | Paws / resume |
+| `←` / `→` | Scritch backward / forward 5 seconds |
+| `N` | Next meow |
+| `P` | Previous purr |
+| `+` / `-` | Raise / lower Meow Level |
+| `S` | Toggle Pounce Mode (shuffle) |
+| `R` | Toggle Tail-Chase (repeat) |
+| `Q` | Escape before the cat notices |
+
+## Feline vocabulary
+
+MeowPlayer has elected to rename several ordinary music-player concepts:
+
+| Conventional term | MeowPlayer term |
+| --- | --- |
+| Now Playing | Now Purring |
+| Volume | Meow Level |
+| Shuffle | Pounce Mode |
+| Repeat | Tail-Chase |
+| Pause | Paws |
+| Seek | Scritch seek |
+| Current track marker | 🐾 |
+
+Action feedback is equally important. Expect messages such as:
+
+```text
+The cat has chosen a song.
+Pawsed. The cat is loafing.
+Purr resumed. The loaf has awakened.
+Skipped to the next meow.
+Back to the previous purr.
+Meow level increased.
+The cat has quieted down.
+```
 
 ## How it works
 
@@ -119,7 +196,7 @@ MeowPlayer terminal UI
      Audio output
 ```
 
-Python handles the user interface, song selection, controls, and library scanning. `mpv` handles the actual audio decoding and playback.
+Python handles the interface, song selection, controls, library scanning, and all cat-related responsibilities. `mpv` handles the actual audio decoding and playback.
 
 This means MeowPlayer does not need to implement MP3, FLAC, AAC, Opus, and other audio codecs itself.
 
@@ -129,6 +206,7 @@ This means MeowPlayer does not need to implement MP3, FLAC, AAC, Opus, and other
 MeowPlayer/
 ├── meowplayer.py
 ├── README.md
+├── LICENSE
 └── .gitignore
 ```
 
@@ -158,13 +236,20 @@ Some possible future improvements:
 - MPRIS integration
 - Better shuffle history
 - Packaging as a system command
+- Additional scientifically unnecessary cat behavior
+
+## License
+
+MeowPlayer is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE) for the full license text.
 
 ## Why "MeowPlayer"?
 
 Because every respectable terminal deserves at least one cat-themed application.
 
 ```text
- /_/\\
+ /\_/\
 ( o.o )
  > ^ <
 ```
+
+And because apparently naming it MeowPlayer was not enough. We had to commit to the bit.
