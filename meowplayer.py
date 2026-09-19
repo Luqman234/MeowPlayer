@@ -3448,13 +3448,13 @@ class MeowPlayer:
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Open/Play  1-7 Views  F Favorite  "
-                        "L Lyrics  V Visualizer  Q Queue  X Quit"
+                        "L Lyrics  V Viz  M Mixes  Q Queue  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Open/Purr  1-7 Nests  F Pawmark  "
-                        "L Songbook  V Spectrum  Q Catnip  X Escape"
+                        "L Songbook  V Spectrum  M Mixes  Q Catnip  X Escape"
                     )
                     quote = f"🐱 {self.quote}"
             else:
