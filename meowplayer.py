@@ -1283,6 +1283,16 @@ class MeowPlayer:
         self.selected = max(0, min(self.selected, len(visible) - 1))
         return visible[self.selected]
 
+    def library_selection_is_track(self):
+        if self.library_view == "artists":
+            return (
+                self.drill_artist is not None
+                and self.drill_album is not None
+            )
+        if self.library_view == "albums":
+            return self.drill_album is not None
+        return True
+
     def select_library_view(self, view):
         if view not in LIBRARY_VIEWS:
             return
@@ -1371,6 +1381,13 @@ class MeowPlayer:
         return True
 
     def toggle_selected_pawmark(self):
+        if not self.library_selection_is_track():
+            self.set_status(
+                "Open the group before favoriting a track.",
+                "Open this nest first, then Pawmark a specific meow."
+            )
+            return
+
         index = self.selected_library_song()
         if index is None:
             return
@@ -1442,6 +1459,13 @@ class MeowPlayer:
             self.play(index)
 
     def add_selected_to_stash(self):
+        if not self.library_selection_is_track():
+            self.set_status(
+                "Open the group before queueing a track.",
+                "Open this nest first, then stash a specific meow."
+            )
+            return
+
         index = self.selected_library_song()
         if index is None:
             self.set_status(
@@ -2155,12 +2179,12 @@ class MeowPlayer:
                     mode_line = self.text(
                         (
                             f"Library / {current_view} — "
-                            f"{len(self.songs)} track(s) · "
+                            f"{matches} track(s) · "
                             f"Next: {self.next_treat_label()}"
                         ),
                         (
                             f"Music Nest / {current_view} — "
-                            f"{len(self.songs)} meow(s) · "
+                            f"{matches} meow(s) · "
                             f"Next Treat: {self.next_treat_label()}"
                         )
                     )
