@@ -1,11 +1,11 @@
 # MeowPlayer 🐱🎵
 
-**MeowPlayer 0.13.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
+**MeowPlayer 0.13.1** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
 
 Python and `curses` provide the interface, `mpv` handles playback, Mutagen reads music metadata, SQLite powers the persistent **Cat Catalog**, Watchdog keeps the library live, and Linux desktops can control the player through MPRIS / D-Bus.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.13.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.13.1 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -18,6 +18,50 @@ Tail-Chase: OFF   Catnip: 4   Mood: Zoomies
 Music Nest / Songs — 842 meow(s)
 ★ Space Song — Beach House · Depression Cherry · Dream Pop · 05:20
 ```
+
+## What's new in 0.13.1 — The Cat Got Worse
+
+MeowPlayer had become suspiciously respectable, so 0.13.1 restores unnecessary feline behavior without letting any of it touch playback correctness.
+
+### Pet the cat
+
+Press `G` anywhere in the normal TUI to pet the cat.
+
+```text
+G
+↓
+Scritch #1 accepted.
+↓
+cat reacts
+↓
+session Scritches counter increases
+```
+
+Every tenth scritch gets a special milestone response.
+
+### Cat Incidents
+
+Normal and Maximum Meow modes can now experience harmless temporary **Cat Incidents** in the footer:
+
+```text
+🚨 CAT INCIDENT: attempted to eat the waveform. The waveform survived.
+```
+
+Incidents are presentation-only. They do not alter playback, files, queues, the Cat Catalog, or mpv state.
+
+### More reactive moods
+
+Meow Level now affects the mascot:
+
+```text
+0–10%   → Whispering
+11–89%  → normal state-dependent moods
+90–100% → Screaming
+```
+
+At high volume, `Now Purring` may become **Now YOWLING**. At very low volume, the cat **tiny-purrs**.
+
+Serious Mode suppresses all of this nonsense.
 
 ## What's new in 0.13.0
 
@@ -83,6 +127,8 @@ Library state is remapped by **file path**, not by old numeric index, so queue e
 - **Album art in supported Kitty terminals**, using embedded artwork or common folder-cover files
 - Album-art cache plus MPRIS `mpris:artUrl` exposure for desktop integrations
 - Reactive cat moods, rotating cat quotes, paw markers, and Maximum Meow mode
+- **Pet the Cat** with session Scritches, milestone reactions, and temporary Cat Incidents
+- Volume-reactive **Whispering** and **Screaming** moods plus intentionally unnecessary status jokes
 - Proper Python packaging with `pyproject.toml`
 - Package smoke tests and unit tests through GitHub Actions
 
@@ -1064,6 +1110,7 @@ Loaded playlist entries must resolve to tracks already indexed in the current li
 | `L` | Toggle Songbook / lyrics view |
 | `V` | Toggle live spectrum visualizer |
 | `M` | Reload custom Smart Mix rules |
+| `G` | Pet the cat / add one Scritch |
 | `Space` | Paws / resume |
 | `←` / `→` | Scritch backward / forward 5 seconds |
 | `N` | Next meow |
@@ -1185,6 +1232,32 @@ busctl --user list | grep org.mpris.MediaPlayer2.meowplayer
 
 MeowPlayer stays usable if MPRIS registration fails and displays the startup error in its status line.
 
+## Cat chaos
+
+Normal mode now includes a deliberately non-functional **cat chaos layer**.
+
+It can:
+
+- rotate increasingly questionable footer quotes
+- trigger temporary Cat Incidents
+- track session Scritches from the `G` key
+- celebrate every tenth Scritch
+- change the mascot to **Whispering** or **Screaming** based on Meow Level
+- rename the live playback label to `Now YOWLING` or `Now tiny-purring`
+- use randomized startup messages such as asking mpv to do the difficult part
+
+It cannot:
+
+- modify your music files
+- change the queue
+- reorder the Pounce Bag
+- edit the Cat Catalog
+- change Smart Mix rules
+- alter ReplayGain/gapless behavior
+- make network requests
+
+The chaos is intentionally presentation-only.
+
 ## Cat modes
 
 ### Normal mode
@@ -1223,9 +1296,11 @@ The mascot reacts to player state:
 | Pounce Mode | Zoomies |
 | Tail-Chase | Tail-Chasing |
 | Catnip queued | Guarding Catnip |
+| Meow Level ≤10% | Whispering |
+| Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.13.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.13.1 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -1311,7 +1386,7 @@ The mascot reacts to player state:
          playerctl / media keys
 ```
 
-Python owns the interface, library model, built-in/custom Smart Mix generation, live library remapping, lyrics synchronization, spectrum rendering, search, persistence, queueing, shuffle logic, one-track-ahead gapless scheduling, album-art resolution, and cat-related responsibilities. Watchdog supplies filesystem events while MeowPlayer deliberately keeps SQLite and library mutation on the main thread. Mutagen reads metadata, embedded artwork, and stream duration. SQLite stores the persistent library model. Pillow normalizes artwork into cached PNG files. CAVA optionally supplies FFT spectrum data. `mpv` handles decoding, ReplayGain, audio output, seeking, and the actual gapless handoff between primed playlist entries.
+Python owns the interface, library model, built-in/custom Smart Mix generation, live library remapping, lyrics synchronization, spectrum rendering, search, persistence, queueing, shuffle logic, one-track-ahead gapless scheduling, album-art resolution, the presentation-only cat-chaos layer, and other cat-related responsibilities. Watchdog supplies filesystem events while MeowPlayer deliberately keeps SQLite and library mutation on the main thread. Mutagen reads metadata, embedded artwork, and stream duration. SQLite stores the persistent library model. Pillow normalizes artwork into cached PNG files. CAVA optionally supplies FFT spectrum data. `mpv` handles decoding, ReplayGain, audio output, seeking, and the actual gapless handoff between primed playlist entries.
 
 ## Build packages
 
@@ -1331,8 +1406,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.13.0-py3-none-any.whl
-└── meowplayer_terminal-0.13.0.tar.gz
+├── meowplayer_terminal-0.13.1-py3-none-any.whl
+└── meowplayer_terminal-0.13.1.tar.gz
 ```
 
 The installed CLI is still:
@@ -1364,6 +1439,7 @@ MeowPlayer/
 │   ├── test_album_art.py
 │   ├── test_audio.py
 │   ├── test_catalog.py
+│   ├── test_goofy.py
 │   ├── test_lyrics.py
 │   ├── test_rescan.py
 │   ├── test_shuffle.py
@@ -1372,6 +1448,7 @@ MeowPlayer/
 │   └── test_watcher.py
 └── .github/
     └── workflows/
+        ├── comprehensive-test.yml
         └── package-smoke.yml
 ```
 
