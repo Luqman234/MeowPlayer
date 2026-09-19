@@ -734,6 +734,11 @@ class MeowPlayer:
         metadata = None
         if self.current is not None:
             meta = self.meta(self.current)
+            cover_path = (
+                self.album_art.cover_for(self.songs[self.current])
+                if self.album_art.enabled
+                else None
+            )
             metadata = {
                 "track_id": (
                     f"/org/mpris/MediaPlayer2/track/"
@@ -756,6 +761,11 @@ class MeowPlayer:
                     else meta.album_artist
                 ),
                 "genre": meta.genre or None,
+                "art_url": (
+                    cover_path.resolve().as_uri()
+                    if cover_path is not None
+                    else None
+                ),
                 "url": self.songs[self.current].resolve().as_uri(),
                 "length_us": int(max(0.0, duration) * 1_000_000),
             }
@@ -1357,7 +1367,7 @@ class MeowPlayer:
         )
         genre = f" · {meta.genre}" if meta.genre else ""
 
-        if self.library_view in ("songs", "pawmarks"):
+        if self.library_view in ("songs", "pawmarks", "smart"):
             text = meta.artist_title
             if meta.album != "Unknown Album":
                 text += f" · {meta.album}"
@@ -1805,13 +1815,19 @@ class MeowPlayer:
             return
 
         if self.shuffle:
-            if len(self.songs) == 1:
-                index = 0
+            pool = self.shuffle_pool()
+            if not pool:
+                return
+            if len(pool) == 1:
+                index = pool[0]
             else:
                 self.sanitize_shuffle_bag()
                 if not self.shuffle_bag:
                     self.refill_shuffle_bag()
-                index = self.shuffle_bag.pop()
+                if not self.shuffle_bag:
+                    index = pool[0]
+                else:
+                    index = self.shuffle_bag.pop()
         elif self.current is None:
             if self.playback_sequence:
                 index = self.playback_sequence[0]
@@ -1848,7 +1864,19 @@ class MeowPlayer:
         if self.history:
             index = self.history.pop()
         elif self.current is None:
-            index = 0
+            index = (
+                self.playback_sequence[0]
+                if self.playback_sequence
+                else 0
+            )
+        elif (
+            self.playback_sequence
+            and self.current in self.playback_sequence
+        ):
+            position = self.playback_sequence.index(self.current)
+            index = self.playback_sequence[
+                (position - 1) % len(self.playback_sequence)
+            ]
         else:
             index = (self.current - 1) % len(self.songs)
 
