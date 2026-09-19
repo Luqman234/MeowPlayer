@@ -1,11 +1,11 @@
 # MeowPlayer 🐱🎵
 
-**MeowPlayer 0.11.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
+**MeowPlayer 0.12.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
 
 Python and `curses` provide the interface, `mpv` handles playback, Mutagen reads music metadata, SQLite powers the persistent **Cat Catalog**, and Linux desktops can control the player through MPRIS / D-Bus.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.11.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.12.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -43,6 +43,9 @@ Music Nest / Songs — 842 meow(s)
 - Automatic next-track playback
 - **Gapless playback** with one-track-ahead mpv playlist priming
 - Native **ReplayGain** loudness normalization through mpv
+- Synchronized **LRC lyrics** plus embedded/plain lyrics support
+- Dedicated live-follow **Songbook** lyrics view
+- Optional **CAVA spectrum visualizer** with raw FFT bar integration
 - Persistent session state and paused resume
 - Linux MPRIS / D-Bus integration
 - `playerctl`, desktop media keys, and MPRIS-aware widget support
@@ -62,6 +65,9 @@ Install the system runtime dependency and `pipx`:
 ```bash
 sudo pacman -S mpv python-pipx
 pipx ensurepath
+
+# Optional: live spectrum visualizer
+sudo pacman -S cava
 ```
 
 Clone and install MeowPlayer:
@@ -91,6 +97,8 @@ meowplayer --no-album-art
 meowplayer --gapless-mode weak
 meowplayer --replaygain track
 meowplayer --replaygain album --replaygain-preamp -1.0
+meowplayer --no-lyrics
+meowplayer --no-visualizer
 meowplayer --version
 ```
 
@@ -162,6 +170,7 @@ MPRIS is intentionally disabled on Termux because a normal Linux desktop D-Bus s
 - Mutagen
 - `dbus-next` for Linux MPRIS integration
 - Pillow for album-art normalization and caching
+- CAVA *(optional)* for the live audio spectrum visualizer
 - A terminal with curses support
 - Unix-domain socket support
 
@@ -462,6 +471,113 @@ The old database is migrated automatically.
 
 MeowPlayer 0.9.0 added genre and duration to the catalog schema. Existing Pawmarks and listening history were preserved, but cached tracks were deliberately re-sniffed once so those fields could be populated. Later launches return to normal incremental caching.
 
+## Lyrics / Songbook
+
+MeowPlayer 0.12.0 adds a dedicated lyrics system.
+
+Press `L` at any time to open the **Songbook**.
+
+Lyrics are resolved in this order:
+
+```text
+same-name .lrc sidecar
+        ↓
+embedded synchronized lyrics
+        ↓
+same-name .txt sidecar
+        ↓
+embedded plain lyrics
+```
+
+For example:
+
+```text
+Music/
+└── Album/
+    ├── 01 Song.flac
+    └── 01 Song.lrc
+```
+
+A synchronized `.lrc` file can look like:
+
+```text
+[00:12.40]First line
+[00:17.85]Second line
+[00:22.10]Third line
+```
+
+Multiple timestamps on one line and standard `[offset:+/-milliseconds]` tags are supported.
+
+When synchronized lyrics are available, MeowPlayer also shows the current lyric directly in the normal player:
+
+```text
+♫ And this is the line being sung right now
+```
+
+Inside the Songbook:
+
+| Key | Action |
+| --- | --- |
+| `L` | Open / close lyrics |
+| `↑` / `↓` | Temporarily scroll manually |
+| `Enter` | Resume live timestamp following |
+| `N` / `P` | Next / previous track |
+| `Space` | Pause / resume |
+
+The currently active synchronized line is highlighted and automatically centered while follow mode is active.
+
+Plain lyrics from `.txt` files or unsynchronized embedded tags are displayed as a normal scrollable text view.
+
+Disable lyric loading for one launch with:
+
+```bash
+meowplayer --no-lyrics
+```
+
+The persistent config supports:
+
+```json
+"lyrics_enabled": true
+```
+
+## Audio visualizer
+
+MeowPlayer 0.12.0 can embed a real frequency spectrum in the TUI using **CAVA**.
+
+CAVA is optional. If it is missing, MeowPlayer continues normally with no visualizer.
+
+On Arch Linux:
+
+```bash
+sudo pacman -S cava
+```
+
+When available, MeowPlayer starts CAVA in raw ASCII mode and consumes its FFT bar values instead of letting CAVA draw its own terminal interface.
+
+The spectrum appears directly beneath the playback progress bar:
+
+```text
+▁▂▄▆█▇▅▃▂▁▂▅▇█▆▄▂▁
+```
+
+Press `V` to toggle it at runtime.
+
+The generated CAVA configuration uses the default audio monitor source when available, so the visualizer observes the system output path rather than decoding the music file again inside Python.
+
+Disable it for one launch with:
+
+```bash
+meowplayer --no-visualizer
+```
+
+Persistent config:
+
+```json
+"visualizer_enabled": true
+```
+
+Because the default sink monitor can contain audio from other applications, the displayed spectrum may react to other system audio playing at the same time.
+
 ## Album art
 
 MeowPlayer 0.11.0 can display real album artwork directly inside **Kitty terminals** using Kitty's terminal graphics protocol.
@@ -734,6 +850,8 @@ Loaded playlist entries must resolve to tracks already indexed in the current li
 | `F` | Toggle Pawmark |
 | `A` | Add track to Catnip Stash |
 | `Q` | Toggle Music Nest / Catnip Stash |
+| `L` | Toggle Songbook / lyrics view |
+| `V` | Toggle live spectrum visualizer |
 | `Space` | Paws / resume |
 | `←` / `→` | Scritch backward / forward 5 seconds |
 | `N` | Next meow |
@@ -759,11 +877,13 @@ Example:
 {
   "album_art_enabled": true,
   "gapless_mode": "weak",
+  "lyrics_enabled": true,
   "mpris_enabled": true,
   "music_dir": "/home/you/Music",
   "replaygain_mode": "track",
   "replaygain_preamp": 0.0,
-  "restore_session": true
+  "restore_session": true,
+  "visualizer_enabled": true
 }
 ```
 
@@ -883,7 +1003,7 @@ The mascot reacts to player state:
 | Catnip queued | Guarding Catnip |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.11.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.12.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -899,6 +1019,8 @@ The mascot reacts to player state:
 | Favorites | Pawmarks |
 | Listening history | Purr History |
 | Smart playlists | Smart Mixes |
+| Lyrics | Songbook |
+| Audio visualizer | Spectrum |
 | Now Playing | Now Purring |
 | Volume | Meow Level |
 | Shuffle | Pounce Mode |
@@ -945,7 +1067,10 @@ The mascot reacts to player state:
             └──────┬────────┘
                    ▼
              MeowPlayer TUI
-                   │
+              │         │
+              │         ├── Lyrics / Songbook
+              │         └── CAVA raw spectrum
+              │
              mpv JSON IPC
                    │
              next-track priming
@@ -963,7 +1088,7 @@ The mascot reacts to player state:
          playerctl / media keys
 ```
 
-Python owns the interface, library model, Smart Mix generation, search, persistence, queueing, shuffle logic, one-track-ahead gapless scheduling, album-art resolution, and cat-related responsibilities. Mutagen reads metadata, embedded artwork, and stream duration. SQLite stores the persistent library model. Pillow normalizes artwork into cached PNG files. `mpv` handles decoding, ReplayGain, audio output, and the actual gapless handoff between primed playlist entries.
+Python owns the interface, library model, Smart Mix generation, lyrics synchronization, spectrum rendering, search, persistence, queueing, shuffle logic, one-track-ahead gapless scheduling, album-art resolution, and cat-related responsibilities. Mutagen reads metadata, embedded artwork, and stream duration. SQLite stores the persistent library model. Pillow normalizes artwork into cached PNG files. `mpv` handles decoding, ReplayGain, audio output, and the actual gapless handoff between primed playlist entries.
 
 ## Build packages
 
@@ -983,8 +1108,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.11.0-py3-none-any.whl
-└── meowplayer_terminal-0.11.0.tar.gz
+├── meowplayer_terminal-0.12.0-py3-none-any.whl
+└── meowplayer_terminal-0.12.0.tar.gz
 ```
 
 The installed CLI is still:
@@ -999,10 +1124,12 @@ meowplayer
 MeowPlayer/
 ├── meowplayer.py
 ├── album_art.py
+├── lyrics_support.py
 ├── meow_catalog.py
 ├── meow_smart.py
 ├── meow_persistence.py
 ├── mpris_support.py
+├── visualizer.py
 ├── pyproject.toml
 ├── requirements.txt
 ├── README.md
@@ -1011,8 +1138,10 @@ MeowPlayer/
 │   ├── test_album_art.py
 │   ├── test_audio.py
 │   ├── test_catalog.py
+│   ├── test_lyrics.py
 │   ├── test_shuffle.py
-│   └── test_smart.py
+│   ├── test_smart.py
+│   └── test_visualizer.py
 └── .github/
     └── workflows/
         └── package-smoke.yml
@@ -1023,7 +1152,7 @@ MeowPlayer/
 Compile the modules:
 
 ```bash
-python -m py_compile meowplayer.py album_art.py meow_catalog.py meow_smart.py meow_persistence.py mpris_support.py
+python -m py_compile meowplayer.py album_art.py lyrics_support.py meow_catalog.py meow_smart.py meow_persistence.py mpris_support.py visualizer.py
 ```
 
 Run tests:
@@ -1059,6 +1188,8 @@ Potential next upgrades:
 
 - additional terminal graphics protocols beyond Kitty
 - user-defined Smart Mix rules
+- per-track lyric timing offsets and lyric editing
+- additional visualizer backends / dedicated per-player capture
 - ReplayGain tag inspection / loudness diagnostics
 - broader gapless stress testing across mixed sample rates and codecs
 - release automation and tagged GitHub releases
