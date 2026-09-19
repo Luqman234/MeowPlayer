@@ -13,6 +13,8 @@ DEFAULT_CONFIG = {
     "gapless_mode": "weak",
     "replaygain_mode": "track",
     "replaygain_preamp": 0.0,
+    "lyrics_enabled": True,
+    "visualizer_enabled": True,
 }
 
 DEFAULT_STATE = {
