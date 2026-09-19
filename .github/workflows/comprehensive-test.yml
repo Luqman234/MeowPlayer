@@ -32,7 +32,7 @@ concurrency:
 env:
   PYTHONUTF8: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  MEOW_CI_REVISION: "manual-next-prime-clear-v5"
+  MEOW_CI_REVISION: "primed-playlist-next-v6"
 
 jobs:
   source-integrity:
@@ -550,6 +550,12 @@ jobs:
               player.sync_gapless_transition()
               assert player._awaiting_mpv_path is False
               assert player.gapless_next_index == 1
+              assert int(
+                  player.mpv.get_property("playlist-current-pos")
+              ) == 0
+              assert int(
+                  player.mpv.get_property("playlist-count")
+              ) >= 2
 
               player.next_song()
               assert player.current == 1
