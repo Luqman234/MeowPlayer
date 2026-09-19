@@ -6,10 +6,12 @@ on:
     paths:
       - "meowplayer.py"
       - "album_art.py"
+      - "lyrics_support.py"
       - "meow_catalog.py"
       - "meow_smart.py"
       - "meow_persistence.py"
       - "mpris_support.py"
+      - "visualizer.py"
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/**"
@@ -18,10 +20,12 @@ on:
     paths:
       - "meowplayer.py"
       - "album_art.py"
+      - "lyrics_support.py"
       - "meow_catalog.py"
       - "meow_smart.py"
       - "meow_persistence.py"
       - "mpris_support.py"
+      - "visualizer.py"
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/**"
@@ -42,7 +46,7 @@ jobs:
 
       - name: Compile Python modules
         run: |
-          python -m py_compile meowplayer.py album_art.py meow_catalog.py meow_smart.py meow_persistence.py mpris_support.py
+          python -m py_compile meowplayer.py album_art.py lyrics_support.py meow_catalog.py meow_smart.py meow_persistence.py mpris_support.py visualizer.py
 
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
