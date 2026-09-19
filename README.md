@@ -1,11 +1,11 @@
 # MeowPlayer 🐱🎵
 
-**MeowPlayer 0.9.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
+**MeowPlayer 0.10.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
 
 Python and `curses` provide the interface, `mpv` handles playback, Mutagen reads music metadata, SQLite powers the persistent **Cat Catalog**, and Linux desktops can control the player through MPRIS / D-Bus.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.9.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.10.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -28,7 +28,8 @@ Music Nest / Songs — 842 meow(s)
 - Persistent SQLite **Cat Catalog**
 - Incremental metadata caching for fast warm startups
 - Automatic invalidation for modified files and pruning for deleted files
-- Songs, Artists, Albums, Folders/Nests, Pawmarks, and Purr History views
+- Songs, Artists, Albums, Folders/Nests, Pawmarks, Purr History, and **Smart Mixes** views
+- Dynamic Smart Mixes for favorites, recent plays, most-played tracks, fresh additions, unplayed tracks, and every detected genre
 - Artist → album → track drill-down navigation
 - Album → track drill-down navigation
 - Unicode **Scent Search**, including Japanese input and NFKC normalization
@@ -44,6 +45,8 @@ Music Nest / Songs — 842 meow(s)
 - Linux MPRIS / D-Bus integration
 - `playerctl`, desktop media keys, and MPRIS-aware widget support
 - Native Termux defaults and a narrower phone-friendly layout
+- **Album art in supported Kitty terminals**, using embedded artwork or common folder-cover files
+- Album-art cache plus MPRIS `mpris:artUrl` exposure for desktop integrations
 - Reactive cat moods, rotating cat quotes, paw markers, and Maximum Meow mode
 - Proper Python packaging with `pyproject.toml`
 - Package smoke tests and unit tests through GitHub Actions
@@ -82,6 +85,7 @@ meowplayer --serious-mode
 meowplayer --no-mpris
 meowplayer --no-restore
 meowplayer --rebuild-catalog
+meowplayer --no-album-art
 meowplayer --version
 ```
 
@@ -152,6 +156,7 @@ MPRIS is intentionally disabled on Termux because a normal Linux desktop D-Bus s
 - `mpv`
 - Mutagen
 - `dbus-next` for Linux MPRIS integration
+- Pillow for album-art normalization and caching
 - A terminal with curses support
 - Unix-domain socket support
 
@@ -171,6 +176,7 @@ Press the corresponding key from the Music Nest:
 | `4` | Folders / Nests |
 | `5` | Pawmarks |
 | `6` | Purr History |
+| `7` | Smart Mixes |
 | `Tab` | Cycle views |
 
 ### Songs
@@ -260,6 +266,56 @@ Nude — Radiohead · played 14× · 04:15
 夜に駆ける — YOASOBI · played 9× · 04:21
 Space Song — Beach House · played 6× · 05:20
 ```
+
+## Smart Mixes
+
+Press `7` to open **Smart Mixes**.
+
+Unlike ordinary saved playlists, Smart Mixes are generated from the current Cat Catalog every time they are opened.
+
+Built-in mixes include:
+
+```text
+Pawmarked Mix
+Recently Purrred
+Most Purrred
+Fresh Finds
+Never Purrred
+Genre Mix · Dream Pop
+Genre Mix · Rock
+Genre Mix · ...
+```
+
+Genre mixes are dynamic: if your library contains a genre tag, MeowPlayer creates a mix for it automatically.
+
+```text
+Music Nest / Smart Mixes
+
+>^.^< Pawmarked Mix · 31 track(s) ›
+      Recently Purrred · 126 track(s) ›
+      Most Purrred · 91 track(s) ›
+      Fresh Finds · 100 track(s) ›
+      Never Purrred · 403 track(s) ›
+      Genre Mix · Dream Pop · 47 track(s) ›
+```
+
+Press `Enter` to open a mix, then `Enter` on a track to play it.
+
+Smart Mixes are real playback sequences:
+
+```text
+Next
+  ↓
+next track in the active Smart Mix
+
+Pounce Mode
+  ↓
+Pounce Bag contains only tracks in that Smart Mix
+```
+
+The active playback sequence is persisted in runtime state, so restarting MeowPlayer does not silently turn a Smart Mix back into the full library.
+
+Use `B` or `Backspace` to return to the Smart Mix list.
 
 ## Scent Search
 
@@ -399,7 +455,65 @@ to:
 
 The old database is migrated automatically.
 
-MeowPlayer 0.9.0 adds genre and duration to the catalog schema. Existing Pawmarks and listening history are preserved, but cached tracks are deliberately re-sniffed once so those new fields can be populated. Later launches return to normal incremental caching.
+MeowPlayer 0.10.0 adds genre and duration to the catalog schema. Existing Pawmarks and listening history are preserved, but cached tracks are deliberately re-sniffed once so those new fields can be populated. Later launches return to normal incremental caching.
+
+## Album art
+
+MeowPlayer 0.10.0 can display real album artwork directly inside **Kitty terminals** using Kitty's terminal graphics protocol.
+
+Album art is enabled automatically when:
+
+- MeowPlayer is running directly in Kitty / `xterm-kitty`
+- the terminal is large enough to preserve the TUI layout
+- Pillow is available
+- a cover can be resolved
+- MeowPlayer is not inside tmux
+- `--no-album-art` was not supplied
+
+The cover is rendered in the upper-right portion of the player while the normal curses UI remains usable.
+
+MeowPlayer looks for art in this order:
+
+1. embedded artwork in the audio file
+2. common cover files beside the track
+
+Embedded artwork support covers common MP3/FLAC/MP4/Vorbis-style metadata. Folder artwork matching is case-insensitive and recognizes names such as:
+
+```text
+cover.jpg
+cover.png
+cover.webp
+folder.jpg
+folder.png
+front.jpg
+front.png
+album.jpg
+album.png
+```
+
+Artwork is converted to PNG and cached at:
+
+```text
+~/.cache/meowplayer/album-art/
+```
+
+or the equivalent `XDG_CACHE_HOME` path. Audio files are never modified.
+
+Disable terminal artwork for one launch with:
+
+```bash
+meowplayer --no-album-art
+```
+
+The persistent config also supports:
+
+```json
+"album_art_enabled": true
+```
+
+If the terminal is unsupported, the window is too small, or no cover exists, MeowPlayer simply falls back to the normal text UI.
+
+Resolved covers are also exported over MPRIS as `mpris:artUrl`, allowing compatible desktop widgets and media controls to reuse the same cached image.
 
 ## Pounce Bag shuffle
 
@@ -503,7 +617,7 @@ Loaded playlist entries must resolve to tracks already indexed in the current li
 | --- | --- |
 | `↑` / `↓` | Choose |
 | `Enter` | Open artist/album group or play track |
-| `1`–`6` | Select library view |
+| `1`–`7` | Select library view |
 | `Tab` | Cycle library view |
 | `B` / `Backspace` | Go up one drill-down level |
 | `/` | Scent Search |
@@ -533,6 +647,7 @@ Example:
 
 ```json
 {
+  "album_art_enabled": true,
   "mpris_enabled": true,
   "music_dir": "/home/you/Music",
   "restore_session": true
@@ -556,6 +671,7 @@ It remembers:
 - Catnip Stash
 - remaining Pounce Bag
 - Previous-history
+- active Smart Mix playback sequence
 
 State is written periodically and again during shutdown.
 
@@ -589,6 +705,7 @@ MPRIS metadata includes:
 - genre
 - file URI
 - duration
+- album-art URL when available
 
 Test with `playerctl`:
 
@@ -653,7 +770,7 @@ The mascot reacts to player state:
 | Catnip queued | Guarding Catnip |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.9.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.10.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -668,6 +785,7 @@ The mascot reacts to player state:
 | Queue | The Catnip Stash |
 | Favorites | Pawmarks |
 | Listening history | Purr History |
+| Smart playlists | Smart Mixes |
 | Now Playing | Now Purring |
 | Volume | Meow Level |
 | Shuffle | Pounce Mode |
@@ -694,15 +812,19 @@ The mascot reacts to player state:
                 │ genre/duration  │
                 │ Pawmarks        │
                 │ Purr History    │
+                │ Smart Mix data  │
                 └────────┬────────┘
                          │
             ┌────────────┼─────────────┐
             ▼            ▼             ▼
-         Artists       Albums       Scent Search
-            │            │
-            └──────┬─────┘
-                   ▼
-              Music Nest
+         Artists       Albums       Smart Mixes
+            │            │             │
+            └────────────┼─────────────┘
+                         ▼
+                    Scent Search
+                         │
+                         ▼
+                    Music Nest
                    │
             ┌──────┴────────┐
             ▼               ▼
@@ -725,7 +847,7 @@ The mascot reacts to player state:
          playerctl / media keys
 ```
 
-Python owns the interface, library model, search, persistence, queueing, shuffle logic, and cat-related responsibilities. Mutagen reads metadata and stream duration. SQLite stores the persistent library model. `mpv` handles decoding and audio playback.
+Python owns the interface, library model, Smart Mix generation, search, persistence, queueing, shuffle logic, album-art resolution, and cat-related responsibilities. Mutagen reads metadata, embedded artwork, and stream duration. SQLite stores the persistent library model. Pillow normalizes artwork into cached PNG files. `mpv` handles decoding and audio playback.
 
 ## Build packages
 
@@ -745,8 +867,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.9.0-py3-none-any.whl
-└── meowplayer_terminal-0.9.0.tar.gz
+├── meowplayer_terminal-0.10.0-py3-none-any.whl
+└── meowplayer_terminal-0.10.0.tar.gz
 ```
 
 The installed CLI is still:
@@ -760,7 +882,9 @@ meowplayer
 ```text
 MeowPlayer/
 ├── meowplayer.py
+├── album_art.py
 ├── meow_catalog.py
+├── meow_smart.py
 ├── meow_persistence.py
 ├── mpris_support.py
 ├── pyproject.toml
@@ -768,8 +892,10 @@ MeowPlayer/
 ├── README.md
 ├── LICENSE
 ├── tests/
+│   ├── test_album_art.py
 │   ├── test_catalog.py
-│   └── test_shuffle.py
+│   ├── test_shuffle.py
+│   └── test_smart.py
 └── .github/
     └── workflows/
         └── package-smoke.yml
@@ -780,7 +906,7 @@ MeowPlayer/
 Compile the modules:
 
 ```bash
-python -m py_compile   meowplayer.py   meow_catalog.py   meow_persistence.py   mpris_support.py
+python -m py_compile meowplayer.py album_art.py meow_catalog.py meow_smart.py meow_persistence.py mpris_support.py
 ```
 
 Run tests:
@@ -814,8 +940,8 @@ meowplayer --help
 
 Potential next upgrades:
 
-- album art in compatible terminals
-- genre-focused smart views and smart playlists
+- additional terminal graphics protocols beyond Kitty
+- user-defined Smart Mix rules
 - ReplayGain / loudness normalization
 - gapless playback improvements
 - release automation and tagged GitHub releases
