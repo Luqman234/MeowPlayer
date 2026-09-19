@@ -1,8 +1,10 @@
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from meow_catalog import LibraryCatalog, SCHEMA_VERSION
 
@@ -213,6 +215,43 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertIn(str(song.resolve()), stats)
         self.assertFalse(stats[str(song.resolve())]["favorite"])
         self.assertEqual(stats[str(song.resolve())]["play_count"], 0)
+
+    def test_legacy_cache_database_moves_to_xdg_data(self):
+        self.catalog.close()
+
+        cache_home = self.base / "cache"
+        data_home = self.base / "data"
+        legacy_path = cache_home / "meowplayer" / "library.sqlite3"
+        legacy_path.parent.mkdir(parents=True)
+
+        legacy_catalog = LibraryCatalog(
+            self.music,
+            path=legacy_path,
+        )
+        song = self.make_song()
+        legacy_catalog.put(
+            song,
+            song.stat(),
+            fake_metadata(song),
+        )
+        legacy_catalog.commit()
+        legacy_catalog.close()
+
+        with patch.dict(
+            os.environ,
+            {
+                "XDG_CACHE_HOME": str(cache_home),
+                "XDG_DATA_HOME": str(data_home),
+            },
+            clear=False,
+        ):
+            self.catalog = LibraryCatalog(self.music)
+
+        expected = data_home / "meowplayer" / "library.sqlite3"
+        self.assertEqual(self.catalog.path, expected)
+        self.assertTrue(expected.exists())
+        self.assertFalse(legacy_path.exists())
+        self.assertEqual(self.catalog.count(), 1)
 
     def test_clear_root_compatibility_helper(self):
         song = self.make_song()
