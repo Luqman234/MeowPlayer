@@ -554,7 +554,7 @@ class MeowPlayer:
             "volume": self.volume / 100.0,
             "position_us": int(max(0.0, position) * 1_000_000),
             "metadata": metadata,
-            "has_track": self.current is not None,
+            "has_track": self.current is not None and not idle,
             "has_tracks": bool(self.songs),
         }
 
@@ -592,11 +592,15 @@ class MeowPlayer:
             elif action == "play":
                 if self.current is None:
                     self.play_selected_library_song()
+                elif bool(self.mpv.get_property("idle-active")):
+                    self.play(self.current, record_history=False)
                 else:
                     self.mpv.play()
             elif action == "play_pause":
                 if self.current is None:
                     self.play_selected_library_song()
+                elif bool(self.mpv.get_property("idle-active")):
+                    self.play(self.current, record_history=False)
                 else:
                     self.mpv.toggle_pause()
             elif action == "stop":
