@@ -51,24 +51,28 @@ class SmartPlaylistTests(unittest.TestCase):
         self.stats = {
             str(Path("/music/0.flac").resolve()): {
                 "favorite": True,
+                "rating": 5,
                 "play_count": 5,
                 "last_played_ns": 400,
                 "added_at_ns": 10,
             },
             str(Path("/music/1.flac").resolve()): {
                 "favorite": False,
+                "rating": 3,
                 "play_count": 1,
                 "last_played_ns": 300,
                 "added_at_ns": 40,
             },
             str(Path("/music/2.flac").resolve()): {
                 "favorite": True,
+                "rating": 4,
                 "play_count": 9,
                 "last_played_ns": 200,
                 "added_at_ns": 30,
             },
             str(Path("/music/3.flac").resolve()): {
                 "favorite": False,
+                "rating": 0,
                 "play_count": 0,
                 "last_played_ns": None,
                 "added_at_ns": 20,
@@ -91,6 +95,25 @@ class SmartPlaylistTests(unittest.TestCase):
         self.assertEqual(playlists["recent"].indices, (0, 1, 2))
         self.assertEqual(playlists["most-played"].indices, (2, 0, 1))
         self.assertEqual(playlists["unplayed"].indices, (3,))
+        self.assertEqual(playlists["top-rated"].indices, (0, 2, 1))
+
+    def test_rule_engine_supports_rating_as_numeric_field(self):
+        expression = compile_rule(
+            "rating >= 4 and play_count >= 5"
+        )
+
+        self.assertTrue(
+            rule_matches(expression, self.metadata, self.stats, 0)
+        )
+        self.assertFalse(
+            rule_matches(expression, self.metadata, self.stats, 1)
+        )
+        self.assertTrue(
+            rule_matches(expression, self.metadata, self.stats, 2)
+        )
+        self.assertFalse(
+            rule_matches(expression, self.metadata, self.stats, 3)
+        )
 
     def test_fresh_finds_are_sorted_by_added_time(self):
         playlists = self.playlists()
@@ -137,8 +160,8 @@ class SmartPlaylistTests(unittest.TestCase):
             "mixes": [
                 {
                     "name": "Dream Favorites",
-                    "rule": 'genre ~ "Dream" and favorite = true',
-                    "sort": "-play_count",
+                    "rule": 'genre ~ "Dream" and favorite = true and rating >= 4',
+                    "sort": "-rating",
                     "limit": 1,
                 }
             ]
