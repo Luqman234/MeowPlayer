@@ -1,0 +1,42 @@
+name: Live LRCLIB Probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/live-lrclib-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  live-lrclib:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Probe MeowPlayer live LRCLIB lookup
+        run: |
+          python - <<'PY'
+          from lyrics_support import _fetch_lrclib, parse_lrc
+
+          metadata = {
+              'title': 'I Want to Live',
+              'artist': 'Borislav Slavov',
+              'album': "Baldur's Gate 3 (Original Game Soundtrack)",
+              'duration': 233.0,
+          }
+
+          text = _fetch_lrclib(metadata, timeout=10.0)
+          assert text, 'LRCLIB returned no synchronized lyrics'
+
+          document = parse_lrc(text, source='live LRCLIB probe')
+          assert document is not None, 'returned text did not parse as LRC'
+          assert document.synced, 'returned lyrics were not synchronized'
+          assert len(document.lines) > 0, 'parsed LRC contained no timed lines'
+
+          print('LIVE_LRCLIB_OK')
+          print('synced:', document.synced)
+          print('timed_lines:', len(document.lines))
+          PY
