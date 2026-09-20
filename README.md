@@ -1,11 +1,11 @@
 # MeowPlayer 🐱🎵
 
-**MeowPlayer 0.13.1** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
+**MeowPlayer 0.14.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
 
 Python and `curses` provide the interface, `mpv` handles playback, Mutagen reads music metadata, SQLite powers the persistent **Cat Catalog**, Watchdog keeps the library live, and Linux desktops can control the player through MPRIS / D-Bus.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.13.1 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.14.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -13,11 +13,67 @@ Python and `curses` provide the interface, `mpv` handles playback, Mutagen reads
 00:42 ━━━━━━━∿──────────── 05:20
 
 Meow Level: 70%   Pounce: ON (37 left)
-Tail-Chase: OFF   Catnip: 4   Mood: Zoomies
+Tail-Chase: OFF   Catnip: 4   Verdict: ★★★★☆   Mood: Zoomies
 
 Music Nest / Songs — 842 meow(s)
-★ Space Song — Beach House · Depression Cherry · Dream Pop · 05:20
+🐾 Space Song — Beach House · Depression Cherry · Dream Pop · ★★★★☆ · 05:20
 ```
+
+## What's new in 0.14.0 — The Cat Has Opinions
+
+0.14.0 adds a second layer of personal library data beyond Pawmarks: persistent **0–5 star ratings**, plus a wider Songbook layout that can show lyrics and album art together.
+
+### Ratings beyond Pawmarks
+
+Pawmarks remain a binary favorite / save signal. Ratings are a separate 0–5 judgment stored in the Cat Catalog.
+
+Use:
+
+```text
+[  lower rating
+]  raise rating
+```
+
+In the Music Nest, the selected track is rated. In the Catnip Stash, the selected queued track is rated. In Songbook or normal playback contexts, the current track is rated.
+
+```text
+🐾 Space Song — Beach House · ★★★★☆
+   Nude — Radiohead · ★★★★★
+```
+
+`🐾` means Pawmarked. `★★★★☆` means rated 4/5. They are intentionally independent.
+
+Ratings survive restarts and library rescans. Smart Mix rules can use `rating` as a numeric field:
+
+```text
+rating >= 4
+genre ~ "Dream Pop" and rating >= 4
+favorite = true and rating = 5
+```
+
+There is also a built-in **Top Rated** Smart Mix ordered by rating and then play count.
+
+### Lyrics + album-art split Songbook
+
+On a sufficiently wide supported Kitty terminal, Songbook now becomes a real split view:
+
+```text
+┌──────────────────────── lyrics ────────────────────────┬──── album art ────┐
+│                                                       │                   │
+│   >♫< current synchronized lyric                     │      cover        │
+│       next lyric                                     │       art         │
+│       next lyric                                     │                   │
+│                                                       │                   │
+└───────────────────────────────────────────────────────┴───────────────────┘
+```
+
+The split only activates when artwork is available and the terminal has enough room. Narrow terminals, Termux, unsupported terminals, or tracks without artwork keep the normal full-width lyrics view.
+
+### The review board has become unprofessional
+
+Rating a track now produces intentionally unnecessary cat verdicts and temporary review-board incidents. The quote/incident pool also contains more album-art, lyrics, SQLite, Unicode-star, and terminal-cat nonsense.
+
+None of the extra cat behavior changes files, playback order, ratings by itself, Smart Mix rules, or mpv state.
 
 ## What's new in 0.13.1 — The Cat Got Worse
 
@@ -79,6 +135,7 @@ For example:
 
 ```text
 genre ~ "Dream Pop" and favorite = true
+rating >= 4 and play_count >= 5
 duration >= 300 and played = false
 year >= 2015 and (genre ~ "Rock" or genre ~ "Metal")
 ```
@@ -101,13 +158,15 @@ Library state is remapped by **file path**, not by old numeric index, so queue e
 - Incremental metadata caching for fast warm startups
 - Automatic invalidation for modified files and pruning for deleted files
 - Songs, Artists, Albums, Folders/Nests, Pawmarks, Purr History, and **Smart Mixes** views
-- Dynamic Smart Mixes for favorites, recent plays, most-played tracks, fresh additions, unplayed tracks, and every detected genre
+- Dynamic Smart Mixes for favorites, recent plays, most-played tracks, **Top Rated**, fresh additions, unplayed tracks, and every detected genre
 - Safe **custom Smart Mix rules** with AND/OR/NOT, parentheses, text matching, numeric comparisons, sorting, and limits
 - **Live filesystem watching** with debounced Cat Catalog refreshes when music is added, removed, moved, or retagged
 - Artist → album → track drill-down navigation
 - Album → track drill-down navigation
 - Unicode **Scent Search**, including Japanese input and NFKC normalization
 - Persistent **Pawmarks** favorites
+- Persistent independent **0–5 star ratings** with `[` / `]` controls
+- Rating-aware custom Smart Mix rules and sorting through the numeric `rating` field
 - Persistent play counts and listening history
 - Real queueing through **The Catnip Stash**
 - Save/load Catnip Stash playlists as `.m3u` / `.m3u8`
@@ -118,7 +177,7 @@ Library state is remapped by **file path**, not by old numeric index, so queue e
 - **Gapless playback** with one-track-ahead mpv playlist priming
 - Native **ReplayGain** loudness normalization through mpv
 - Synchronized **LRC lyrics** with automatic LRCLIB download/cache plus embedded/plain lyrics support
-- Dedicated live-follow **Songbook** lyrics view
+- Dedicated live-follow **Songbook** lyrics view with adaptive **lyrics + album-art split view** on wide Kitty terminals
 - Optional **CAVA spectrum visualizer** with raw FFT bar integration
 - Persistent session state and paused resume
 - Linux MPRIS / D-Bus integration
@@ -129,6 +188,7 @@ Library state is remapped by **file path**, not by old numeric index, so queue e
 - Reactive cat moods, rotating cat quotes, paw markers, and Maximum Meow mode
 - **Pet the Cat** with session Scritches, milestone reactions, and temporary Cat Incidents
 - Volume-reactive **Whispering** and **Screaming** moods plus intentionally unnecessary status jokes
+- Cat rating verdicts, review-board incidents, and an expanded pool of deeply unnecessary feline commentary
 - Proper Python packaging with `pyproject.toml`
 - Package smoke tests and unit tests through GitHub Actions
 
@@ -776,9 +836,12 @@ Inside the Songbook:
 | `↑` / `↓` | Temporarily scroll manually |
 | `Enter` | Resume live timestamp following |
 | `N` / `P` | Next / previous track |
+| `[` / `]` | Lower / raise current track rating |
 | `Space` | Pause / resume |
 
 The currently active synchronized line is highlighted and automatically centered while follow mode is active.
+
+When Kitty album art is available and the terminal is wide enough, Songbook reserves a right-side panel for the current cover while lyrics continue scrolling on the left. The split is adaptive and disappears automatically when space or artwork is unavailable.
 
 Plain lyrics from `.txt` files or unsynchronized embedded tags are displayed as a normal scrollable text view.
 
@@ -848,7 +911,7 @@ Album art is enabled automatically when:
 - MeowPlayer is not inside tmux
 - `--no-album-art` was not supplied
 
-The cover is rendered in the upper-right portion of the player while the normal curses UI remains usable.
+The cover is rendered in the upper-right portion of the normal player while the curses UI remains usable. In Songbook, wide terminals instead use the artwork as a dedicated right-side split panel beside the lyrics.
 
 MeowPlayer looks for art in this order:
 
@@ -1105,6 +1168,7 @@ Loaded playlist entries must resolve to tracks already indexed in the current li
 | `B` / `Backspace` | Go up one drill-down level |
 | `/` | Scent Search |
 | `F` | Toggle Pawmark |
+| `[` / `]` | Lower / raise 0–5 star rating |
 | `A` | Add track to Catnip Stash |
 | `Q` | Toggle Music Nest / Catnip Stash |
 | `L` | Toggle Songbook / lyrics view |
@@ -1245,6 +1309,8 @@ It can:
 - change the mascot to **Whispering** or **Screaming** based on Meow Level
 - rename the live playback label to `Now YOWLING` or `Now tiny-purring`
 - use randomized startup messages such as asking mpv to do the difficult part
+- issue melodramatic rating verdicts and temporary review-board incidents
+- make questionable comments about album art, lyrics, SQLite, and Unicode stars
 
 It cannot:
 
@@ -1300,7 +1366,7 @@ The mascot reacts to player state:
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.13.1 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.14.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -1314,6 +1380,7 @@ The mascot reacts to player state:
 | Search | Scent Search |
 | Queue | The Catnip Stash |
 | Favorites | Pawmarks |
+| Rating | Cat verdict / stars |
 | Listening history | Purr History |
 | Smart playlists | Smart Mixes |
 | Lyrics | Songbook |
@@ -1343,6 +1410,7 @@ The mascot reacts to player state:
                 │ cached metadata │
                 │ genre/duration  │
                 │ Pawmarks        │
+                │ 0–5 ratings     │
                 │ Purr History    │
                 │ Smart Mix data  │
                 └────────┬────────┘
@@ -1367,6 +1435,7 @@ The mascot reacts to player state:
              MeowPlayer TUI
               │         │
               │         ├── Lyrics / Songbook
+              │         │     └── split album art
               │         └── CAVA raw spectrum
               │
              mpv JSON IPC
@@ -1406,8 +1475,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.13.1-py3-none-any.whl
-└── meowplayer_terminal-0.13.1.tar.gz
+├── meowplayer_terminal-0.14.0-py3-none-any.whl
+└── meowplayer_terminal-0.14.0.tar.gz
 ```
 
 The installed CLI is still:

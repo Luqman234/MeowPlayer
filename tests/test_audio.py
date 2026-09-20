@@ -14,6 +14,8 @@ class FakeMPV:
         self.play_calls = 0
         self.advanced = 0
         self.advance_response = {"error": "success"}
+        self.wait_for_path_result = True
+        self.waited_for = []
         self.trimmed = 0
         self.cleared = 0
 
@@ -36,6 +38,10 @@ class FakeMPV:
     def advance_playlist(self):
         self.advanced += 1
         return self.advance_response
+
+    def wait_for_path(self, filename, timeout=0.35):
+        self.waited_for.append((Path(filename), timeout))
+        return self.wait_for_path_result
 
     def play(self):
         self.play_calls += 1
@@ -81,6 +87,104 @@ class AudioEngineTests(unittest.TestCase):
             artist_title=f"Track {index}"
         )
         return player
+
+    def test_lyrics_album_art_split_layout_is_adaptive(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+
+        layout = player.lyrics_album_art_layout(
+            30,
+            120,
+            Path("/tmp/cover.png"),
+            10,
+            12,
+        )
+
+        self.assertIsNotNone(layout)
+        self.assertGreaterEqual(layout["lyrics_width"], 42)
+        self.assertGreater(layout["column"], layout["lyrics_width"])
+        self.assertLessEqual(layout["rows"], 12)
+
+        self.assertIsNone(
+            player.lyrics_album_art_layout(
+                30,
+                70,
+                Path("/tmp/cover.png"),
+                10,
+                12,
+            )
+        )
+        self.assertIsNone(
+            player.lyrics_album_art_layout(
+                30,
+                120,
+                None,
+                10,
+                12,
+            )
+        )
+
+    def test_cat_track_decoration_separates_pawmark_and_rating(self):
+        player = self.make_player(count=1, current=0)
+        player.serious_mode = False
+        player.library_stats = {
+            str(player.songs[0].resolve()): {
+                "favorite": True,
+                "rating": 4,
+                "play_count": 0,
+                "last_played_ns": None,
+                "added_at_ns": 0,
+            }
+        }
+
+        decorated = player.decorate_track_row(0, "Track 0")
+
+        self.assertTrue(decorated.startswith("🐾 "))
+        self.assertIn("★★★★☆", decorated)
+
+    def test_adjust_rating_updates_selected_library_track(self):
+        player = self.make_player(count=3, current=0)
+        player.view = "library"
+        player.library_view = "songs"
+        player.selected = 1
+        player.drill_artist = None
+        player.drill_album = None
+        player.smart_playlist_key = None
+        player.serious_mode = False
+        player.library_stats = {
+            str(path.resolve()): {
+                "favorite": False,
+                "rating": 0,
+                "play_count": 0,
+                "last_played_ns": None,
+                "added_at_ns": 0,
+            }
+            for path in player.songs
+        }
+
+        class RatingCatalog:
+            def __init__(self, stats):
+                self.stats = stats
+
+            def set_rating(self, path, rating):
+                self.stats[str(Path(path).resolve())]["rating"] = rating
+                return rating
+
+            def play_stats(self):
+                return self.stats
+
+        player.catalog = RatingCatalog(player.library_stats)
+        player.trigger_cat_incident = lambda *args, **kwargs: True
+        player.set_status = lambda *args, **kwargs: None
+
+        self.assertTrue(player.adjust_rating(1))
+        self.assertEqual(
+            player.library_stats[str(player.songs[1].resolve())]["rating"],
+            1,
+        )
+        self.assertEqual(
+            player.library_stats[str(player.songs[0].resolve())]["rating"],
+            0,
+        )
 
     def test_meowplayer_constructor_accepts_online_lyrics_flag(self):
         parameters = inspect.signature(MeowPlayer.__init__).parameters
@@ -194,6 +298,28 @@ class AudioEngineTests(unittest.TestCase):
         self.assertEqual(player.mpv.play_calls, 0)
         self.assertTrue(player._awaiting_mpv_path)
         self.assertEqual(player.gapless_next_index, 2)
+
+    def test_stranded_successful_primed_advance_recovers_with_replace(self):
+        player = self.make_player(current=0)
+        player.gapless_next_index = 1
+        player.mpv.wait_for_path_result = False
+
+        player.play(
+            1,
+            preserve_sequence=True,
+        )
+
+        self.assertEqual(player.mpv.advanced, 1)
+        self.assertEqual(
+            player.mpv.waited_for[0][0],
+            Path("/music/1.flac"),
+        )
+        self.assertEqual(player.mpv.cleared, 1)
+        self.assertEqual(
+            player.mpv.loaded,
+            [Path("/music/1.flac")],
+        )
+        self.assertEqual(player.mpv.play_calls, 1)
 
     def test_failed_primed_advance_falls_back_to_replace(self):
         player = self.make_player(current=0)

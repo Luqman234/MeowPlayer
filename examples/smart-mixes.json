@@ -3,8 +3,8 @@
     {
       "name": "Late Night Purrs",
       "description": "Dreamy favorites with a little listening history behind them.",
-      "rule": "genre ~ \"Dream\" and favorite = true and play_count >= 3",
-      "sort": "-play_count",
+      "rule": "genre ~ \"Dream\" and favorite = true and rating >= 4 and play_count >= 3",
+      "sort": "-rating",
       "limit": 100
     },
     {

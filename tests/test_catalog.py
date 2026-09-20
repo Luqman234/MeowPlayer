@@ -114,6 +114,23 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertFalse(self.catalog.toggle_favorite(song))
         self.assertFalse(self.catalog.is_favorite(song))
 
+    def test_rating_persists_and_is_clamped_to_five_stars(self):
+        song = self.make_song()
+        self.cache_song(song)
+
+        self.assertEqual(self.catalog.rating(song), 0)
+        self.assertEqual(self.catalog.set_rating(song, 4), 4)
+        self.assertEqual(self.catalog.rating(song), 4)
+
+        stats = self.catalog.play_stats()[str(song.resolve())]
+        self.assertEqual(stats["rating"], 4)
+
+        self.assertEqual(self.catalog.set_rating(song, 99), 5)
+        self.assertEqual(self.catalog.rating(song), 5)
+
+        self.assertEqual(self.catalog.set_rating(song, -3), 0)
+        self.assertEqual(self.catalog.rating(song), 0)
+
     def test_record_play_updates_stats_and_history(self):
         song = self.make_song()
         self.cache_song(song)
@@ -135,6 +152,7 @@ class LibraryCatalogTests(unittest.TestCase):
         original_stat = song.stat()
         self.cache_song(song)
         self.catalog.toggle_favorite(song)
+        self.catalog.set_rating(song, 5)
         self.catalog.record_play(song, played_at_ns=123)
 
         touched = self.catalog.invalidate_root()
@@ -145,6 +163,7 @@ class LibraryCatalogTests(unittest.TestCase):
 
         stats = self.catalog.play_stats()[str(song.resolve())]
         self.assertTrue(stats["favorite"])
+        self.assertEqual(stats["rating"], 5)
         self.assertEqual(stats["play_count"], 1)
         self.assertEqual(stats["last_played_ns"], 123)
 
@@ -218,6 +237,7 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual(version, SCHEMA_VERSION)
         self.assertIn(str(song.resolve()), stats)
         self.assertFalse(stats[str(song.resolve())]["favorite"])
+        self.assertEqual(stats[str(song.resolve())]["rating"], 0)
         self.assertEqual(stats[str(song.resolve())]["play_count"], 0)
 
     def test_v2_migration_preserves_stats_and_invalidates_metadata(self):
