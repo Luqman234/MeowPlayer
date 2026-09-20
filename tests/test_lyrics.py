@@ -4,7 +4,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from lyrics_support import LyricsManager, parse_lrc, parse_plain_lyrics
+from lyrics_support import (
+    LyricsFetchResult,
+    LyricsManager,
+    _fetch_lrclib_result,
+    parse_lrc,
+    parse_plain_lyrics,
+)
 
 
 class LyricsTests(unittest.TestCase):
@@ -103,8 +109,12 @@ class LyricsTests(unittest.TestCase):
             cache_dir = root / "cache"
 
             with mock.patch(
-                "lyrics_support._fetch_lrclib",
-                return_value="[00:01.00]Downloaded line\n",
+                "lyrics_support._fetch_lrclib_result",
+                return_value=LyricsFetchResult(
+                    "[00:01.00]Downloaded line\n",
+                    "found",
+                    "Artist Song",
+                ),
             ) as fetch:
                 manager = LyricsManager(
                     enabled=True,
@@ -139,6 +149,171 @@ class LyricsTests(unittest.TestCase):
             self.assertEqual(cached.current_line(2.0), "Downloaded line")
             self.assertEqual(cached.source, "LRCLIB cache")
 
+    def test_online_status_reports_searching_then_found(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "Artist - Song.flac"
+            track.write_bytes(b"not-real-audio")
+
+            release = mock.Mock()
+
+            def delayed_fetch(metadata, timeout):
+                release()
+                time.sleep(0.03)
+                return LyricsFetchResult(
+                    "[00:01.00]Found online\n",
+                    "found",
+                    "Artist Song",
+                )
+
+            with mock.patch(
+                "lyrics_support._fetch_lrclib_result",
+                side_effect=delayed_fetch,
+            ):
+                manager = LyricsManager(
+                    enabled=True,
+                    online_enabled=True,
+                    request_timeout=0.25,
+                )
+                self.assertIsNone(manager.load(track))
+
+                state = manager.online_status(track)
+                self.assertEqual(state["status"], "searching")
+
+                document = None
+                for _ in range(100):
+                    document = manager.poll(track)
+                    if document is not None:
+                        break
+                    time.sleep(0.01)
+
+            self.assertIsNotNone(document)
+            self.assertEqual(manager.online_status(track)["status"], "found")
+
+    def test_transient_network_failure_is_retried_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "Artist - Song.flac"
+            track.write_bytes(b"not-real-audio")
+
+            with mock.patch(
+                "lyrics_support._fetch_lrclib_result",
+                side_effect=[
+                    LyricsFetchResult("", "network-error", "Artist Song"),
+                    LyricsFetchResult(
+                        "[00:01.00]Retry worked\n",
+                        "found",
+                        "Artist Song",
+                    ),
+                ],
+            ) as fetch:
+                manager = LyricsManager(
+                    enabled=True,
+                    online_enabled=True,
+                    request_timeout=0.25,
+                )
+                self.assertIsNone(manager.load(track))
+
+                document = None
+                for _ in range(100):
+                    document = manager.poll(track)
+                    if document is not None:
+                        break
+                    time.sleep(0.01)
+
+            self.assertIsNotNone(document)
+            self.assertEqual(document.current_line(2.0), "Retry worked")
+            self.assertEqual(fetch.call_count, 2)
+            self.assertEqual(manager.online_status(track)["attempts"], 2)
+
+    def test_failed_lookup_does_not_cache_none_forever(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "Artist - Song.flac"
+            track.write_bytes(b"not-real-audio")
+
+            first = LyricsFetchResult("", "not-found", "Artist Song")
+            second = LyricsFetchResult(
+                "[00:01.00]Second lookup worked\n",
+                "found",
+                "Artist Song",
+            )
+
+            with mock.patch(
+                "lyrics_support._fetch_lrclib_result",
+                side_effect=[first, second],
+            ) as fetch:
+                manager = LyricsManager(
+                    enabled=True,
+                    online_enabled=True,
+                    request_timeout=0.25,
+                )
+                self.assertIsNone(manager.load(track))
+
+                for _ in range(100):
+                    manager.poll(track)
+                    if manager.online_status(track)["status"] == "not-found":
+                        break
+                    time.sleep(0.01)
+
+                self.assertEqual(
+                    manager.online_status(track)["status"],
+                    "not-found",
+                )
+
+                self.assertIsNone(manager.load(track))
+                document = None
+                for _ in range(100):
+                    document = manager.poll(track)
+                    if document is not None:
+                        break
+                    time.sleep(0.01)
+
+            self.assertEqual(fetch.call_count, 2)
+            self.assertIsNotNone(document)
+            self.assertEqual(
+                document.current_line(2.0),
+                "Second lookup worked",
+            )
+
+    def test_lrclib_search_falls_back_to_filename_stem(self):
+        metadata = {
+            "title": "Wrong Tagged Title",
+            "artist": "Wrong Tagged Artist",
+            "album": "",
+            "duration": 0.0,
+            "filename_stem": "Correct Artist - Correct Song",
+        }
+        calls = []
+
+        def fake_request(path, params, timeout):
+            calls.append((path, dict(params)))
+            if path == "/api/get":
+                return None, "not-found"
+            if params.get("q") == "Correct Artist - Correct Song":
+                return [
+                    {
+                        "syncedLyrics": "[00:01.00]Correct result",
+                    }
+                ], "ok"
+            return [], "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "found")
+        self.assertEqual(result.query, "Correct Artist - Correct Song")
+        self.assertIn(
+            (
+                "/api/search",
+                {"q": "Correct Artist - Correct Song"},
+            ),
+            calls,
+        )
+
     def test_sidecar_still_beats_downloaded_cache(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -147,8 +322,12 @@ class LyricsTests(unittest.TestCase):
             cache_dir = root / "cache"
 
             with mock.patch(
-                "lyrics_support._fetch_lrclib",
-                return_value="[00:01.00]Remote lyric\n",
+                "lyrics_support._fetch_lrclib_result",
+                return_value=LyricsFetchResult(
+                    "[00:01.00]Remote lyric\n",
+                    "found",
+                    "song",
+                ),
             ):
                 online = LyricsManager(
                     enabled=True,
