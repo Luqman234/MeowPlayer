@@ -46,7 +46,7 @@ from online_metadata import (
 from visualizer import AudioVisualizer
 
 
-__version__ = "0.14.1"
+__version__ = "0.15.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -108,6 +108,9 @@ CAT_QUOTES = [
     "The visualizer is expensive string wiggling. The cat approves.",
     "SQLite remembers. The cat absolutely does not.",
     "Five stars were found in Unicode. Authority has been abused.",
+    "The cat has outsourced missing tags to MusicBrainz.",
+    "Unknown Artist has been placed under investigation.",
+    "The metadata cat has returned from the internet with paperwork.",
 ]
 
 CAT_INCIDENTS = (
