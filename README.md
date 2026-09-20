@@ -1,8 +1,10 @@
-# MeowPlayer 🐱🎵
+# MeowPlayer 🐈🎵
 
-**MeowPlayer 0.15.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
+**A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-Python and `curses` provide the interface, `mpv` handles playback, Mutagen reads music metadata, SQLite powers the persistent **Cat Catalog**, Watchdog keeps the library live, and Linux desktops can control the player through MPRIS / D-Bus.
+**MeowPlayer 0.15.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+
+No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
 ```text
  /\_/\   ♫ MEOWPLAYER v0.15.0 — Purring
@@ -19,48 +21,136 @@ Music Nest / Songs — 842 meow(s)
 🐾 Space Song — Beach House · Depression Cherry · Dream Pop · ★★★★☆ · 05:20
 ```
 
-## What's new in 0.15.0 — The Metadata Cat Goes Online
+### The short version
 
-MeowPlayer can now automatically enrich incomplete track metadata from **MusicBrainz** without rewriting the audio file itself.
-
-Local tags always win. Online metadata is only allowed to fill missing or fallback values such as:
+MeowPlayer started from a simple idea:
 
 ```text
-filename-stem title
-Unknown Artist
-Unknown Album
-missing album artist
-missing year
-missing genre
+find music → play music → add cat
 ```
 
-The lookup happens in a single background worker so the TUI and playback stay responsive. MeowPlayer validates search confidence and compares MusicBrainz duration against the actual local file before accepting a result.
+It then made several questionable architectural decisions:
+
+```text
+find music
+   ↓
+index music
+   ↓
+cache metadata
+   ↓
+watch the filesystem
+   ↓
+generate Smart Mixes
+   ↓
+prime gapless playback
+   ↓
+fetch lyrics
+   ↓
+investigate Unknown Artist on the internet
+   ↓
+let the user pet the cat
+```
+
+The result is still supposed to feel like a terminal music player: fast to launch, keyboard-driven, local-first, readable, hackable, and comfortable living next to `git`, `ssh`, and whatever other crimes are occurring in your shell.
+
+### The Cat Constitution
+
+MeowPlayer tries to stay true to a few rules:
+
+- **Local files are the foundation.** The player does not require a proprietary cloud library.
+- **Local tags are authoritative.** MusicBrainz may fill holes; it does not get to overrule good metadata you already own.
+- **Online features fail soft.** No internet should mean fewer conveniences, not no music.
+- **The cat may be ridiculous; playback state may not be.** Cat Incidents are presentation-only.
+- **Your audio files are not secretly rewritten.** Online metadata and downloaded lyrics live in MeowPlayer's own cache/catalog unless you create sidecar files yourself.
+- **Serious Mode remains a first-class citizen.** The application can remove most cat presentation without removing actual features.
+
+### What lives under the fur
+
+| Area | What MeowPlayer actually uses |
+| --- | --- |
+| Playback | `mpv` JSON IPC, gapless priming, ReplayGain |
+| Library | SQLite **Cat Catalog**, recursive scanning, Watchdog/inotify |
+| Metadata | Mutagen locally, optional MusicBrainz enrichment for missing fields |
+| Lyrics | sidecar/embedded lyrics + optional LRCLIB synchronized lookup |
+| Discovery | Artists, Albums, Folders/Nests, Pawmarks, Purr History, Smart Mixes |
+| Desktop | MPRIS / D-Bus, `playerctl`, media keys |
+| Terminal candy | Kitty album art, CAVA spectrum |
+| Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.15.0 — The Metadata Cat Goes Online
+
+The cat has finally been granted restricted internet access.
+
+When a track is missing useful information, MeowPlayer can now ask **MusicBrainz** for help and cache the result in the Cat Catalog. This is metadata **enrichment**, not metadata conquest: local tags always win.
+
+MeowPlayer considers fields such as these incomplete:
+
+```text
+title = filename fallback
+artist = Unknown Artist
+album = Unknown Album
+album artist = missing
+year = missing
+genre = missing
+```
+
+Then the Metadata Investigation Bureau does approximately this:
 
 ```text
 local tags / filename
         ↓
-missing metadata?
+anything actually missing?
         ↓ yes
-MusicBrainz recording search
+derive a MusicBrainz recording query
         ↓
-confidence + duration check
+inspect candidate confidence
+        ↓
+compare remote duration to the real local file
+        ↓
+suspicious match? ───── yes ───→ hiss politely and reject it
+        │
+        no
         ↓
 fill missing fields only
         ↓
-Cat Catalog cache
+record source + MusicBrainz ID + query + timestamp
+        ↓
+Cat Catalog
 ```
 
-Results are cached in the SQLite Cat Catalog together with MusicBrainz provenance and lookup state. Successful results are normally reused for 30 days, misses for 7 days, and transient network failures become retryable after 15 minutes.
+A filename such as:
 
-MusicBrainz requests are serialized and rate-limited instead of launching one web request per track at once.
+```text
+01 - Beach House - Space Song.flac
+```
 
-Disable the feature for a run with:
+can provide fallback clues even when the tags say `Unknown Artist` and `Unknown Album`.
+
+The lookup happens in a **single background worker**, so the TUI and playback do not sit around staring at an HTTP request. Requests are serialized/rate-limited instead of unleashing hundreds of metadata cats on MusicBrainz at once.
+
+The cache policy deliberately distinguishes outcomes:
+
+```text
+found          → normally reuse for ~30 days
+not found      → normally wait ~7 days before asking again
+network error  → retryable after ~15 minutes
+```
+
+No audio is uploaded, and MeowPlayer does not rewrite the tags inside your MP3/FLAC/etc. files. The enriched values live in MeowPlayer's own library model.
+
+Disable the investigation department for one run:
 
 ```bash
 meowplayer --no-online-metadata
 ```
 
-The feature does **not** modify tags inside your MP3/FLAC/etc. files. It enriches MeowPlayer's own library view and cache only.
+Or permanently set:
+
+```json
+"online_metadata_enabled": false
+```
+
+The cat will return to judging filenames manually.
 
 ## What's new in 0.14.1 — The Cat Stops Lying About Lyrics
 
@@ -217,54 +307,90 @@ MeowPlayer now watches the music root recursively. Add, delete, rename, move, or
 
 Library state is remapped by **file path**, not by old numeric index, so queue entries, Pounce Bag contents, playback history, Smart Mix sequences, and the current track do not silently turn into different songs after a rescan.
 
-## Highlights
+## Highlights — what the cat actually does
 
-- Full-screen terminal UI with keyboard-first controls
-- Recursive local music-library scanning
-- MP3, FLAC, OGG, Opus, WAV, M4A, AAC, and WMA discovery
-- Metadata for title, artist, album, album artist, track number, year, **genre**, and **duration**
-- Automatic **MusicBrainz metadata enrichment** for incomplete tracks
-- Local tags remain authoritative; online data only fills missing fields
-- Rate-limited background metadata lookup with persistent Cat Catalog caching and provenance
-- Persistent SQLite **Cat Catalog**
-- Incremental metadata caching for fast warm startups
-- Automatic invalidation for modified files and pruning for deleted files
-- Songs, Artists, Albums, Folders/Nests, Pawmarks, Purr History, and **Smart Mixes** views
-- Dynamic Smart Mixes for favorites, recent plays, most-played tracks, **Top Rated**, fresh additions, unplayed tracks, and every detected genre
-- Safe **custom Smart Mix rules** with AND/OR/NOT, parentheses, text matching, numeric comparisons, sorting, and limits
-- **Live filesystem watching** with debounced Cat Catalog refreshes when music is added, removed, moved, or retagged
-- Artist → album → track drill-down navigation
-- Album → track drill-down navigation
-- Unicode **Scent Search**, including Japanese input and NFKC normalization
-- Persistent **Pawmarks** favorites
-- Persistent independent **0–5 star ratings** with `[` / `]` controls
-- Rating-aware custom Smart Mix rules and sorting through the numeric `rating` field
-- Persistent play counts and listening history
+This section is intentionally long because calling MeowPlayer a "tiny terminal wrapper around mpv" has become increasingly difficult to defend in court.
+
+### Music Nest / library
+
+- Recursive local-library scanning for MP3, FLAC, OGG, Opus, WAV, M4A, AAC, and WMA
+- Persistent SQLite **Cat Catalog** with incremental metadata caching
+- Metadata for title, artist, album, album artist, track number, year, genre, and duration
+- Automatic invalidation when files change and pruning when files disappear
+- Live Watchdog/inotify rescans while the application is running
+- Songs, Artists, Albums, Folders/Nests, Pawmarks, Purr History, and Smart Mix views
+- Artist → album → track and album → track drill-down navigation
+- Unicode **Scent Search** with NFKC normalization + case folding
+
+### Metadata Investigation Bureau
+
+- Optional **MusicBrainz** enrichment for incomplete tracks
+- Local tags are never replaced merely because the web disagrees
+- Filename `Artist - Title` fallback when tags are sparse
+- Confidence checks plus local-vs-remote duration sanity checking
+- Serialized/rate-limited network work in a background worker
+- Persistent provenance: source, MusicBrainz ID, query, status, and fetch time
+- Different cache TTLs for success, genuine miss, and transient failure
+
+### Playback
+
 - Real queueing through **The Catnip Stash**
-- Save/load Catnip Stash playlists as `.m3u` / `.m3u8`
+- `.m3u` / `.m3u8` save + load
 - Persistent no-repeat **Pounce Bag** shuffle
-- Persistent Previous-history with shuffle-aware back/forward behavior
+- Persistent Previous-history with shuffle-aware forward/back behavior
 - Tail-Chase repeat
 - Automatic next-track playback
-- **Gapless playback** with one-track-ahead mpv playlist priming
-- Native **ReplayGain** loudness normalization through mpv
-- Synchronized **LRC lyrics** with automatic LRCLIB download/cache plus embedded/plain lyrics support
-- Dedicated live-follow **Songbook** lyrics view with adaptive **lyrics + album-art split view** on wide Kitty terminals
-- Optional **CAVA spectrum visualizer** with raw FFT bar integration
-- Persistent session state and paused resume
-- Linux MPRIS / D-Bus integration
-- `playerctl`, desktop media keys, and MPRIS-aware widget support
-- Native Termux defaults and a narrower phone-friendly layout
-- **Album art in supported Kitty terminals**, using embedded artwork or common folder-cover files
-- Album-art cache plus MPRIS `mpris:artUrl` exposure for desktop integrations
-- Reactive cat moods, rotating cat quotes, paw markers, and Maximum Meow mode
-- **Pet the Cat** with session Scritches, milestone reactions, and temporary Cat Incidents
-- Volume-reactive **Whispering** and **Screaming** moods plus intentionally unnecessary status jokes
-- Cat rating verdicts, review-board incidents, and an expanded pool of deeply unnecessary feline commentary
-- Proper Python packaging with `pyproject.toml`
-- Package smoke tests and unit tests through GitHub Actions
+- One-track-ahead **gapless playback** using mpv's internal playlist
+- Verification/recovery around awkward mpv handoff states
+- Native **ReplayGain** through mpv
 
-## Quick start
+### Personal library memory
+
+- Persistent **Pawmarks** favorites
+- Independent persistent **0–5 star ratings**
+- Play counts, last-played timestamps, and listening history
+- Session restore for queue, Pounce Bag, active Smart Mix sequence, volume, current track, and position
+
+### Smart Mixes
+
+- Built-ins for Pawmarks, recently played, most played, **Top Rated**, fresh additions, never played, and detected genres
+- Custom rule parser with AND / OR / NOT, parentheses, text matching, numeric comparisons, sorting, and limits
+- Rating-aware rules such as `rating >= 4`
+- No Python `eval()` hiding under the rug
+
+### Songbook / lyrics
+
+- Same-name `.lrc` and `.txt` sidecars
+- Embedded synchronized/plain lyrics
+- Optional **LRCLIB** synchronized lookup
+- Background download + persistent local LRC cache
+- Truthful `Searching`, `network error`, and `not found` states instead of instantly blaming the song
+- Live timestamp following and manual scroll
+- Adaptive **lyrics + album-art split view** on wide Kitty terminals
+
+### Terminal / desktop integration
+
+- Kitty album art from embedded or folder artwork
+- Pillow-based PNG artwork cache
+- Optional **CAVA** FFT spectrum
+- Linux MPRIS / D-Bus integration
+- `playerctl`, media keys, MPRIS metadata, and `mpris:artUrl`
+- Native Termux defaults and narrower phone-friendly behavior
+
+### Necessary feline infrastructure
+
+- Reactive moods: Waiting, Purring, Loafing, Zoomies, Tail-Chasing, Guarding Catnip, Whispering, Screaming
+- Volume can transform `Now Purring` into **Now YOWLING**
+- `G` pets the cat and increments session Scritches
+- Every tenth Scritch is treated with unjustified ceremony
+- Temporary **Cat Incidents**
+- Rating review-board verdicts
+- Maximum Meow mode
+- Serious Mode for people who need to open the application during a meeting
+
+Underneath the jokes, these systems are intentionally separated: the presentation-only chaos layer does not get permission to reorder playback, mutate ratings by itself, alter music files, or rewrite Smart Mix rules.
+
+## Quick start — summon the cat
 
 ### Arch Linux
 
@@ -274,11 +400,11 @@ Install the system runtime dependency and `pipx`:
 sudo pacman -S mpv python-pipx
 pipx ensurepath
 
-# Optional: live spectrum visualizer
+# Optional: make the bars wiggle
 sudo pacman -S cava
 ```
 
-Clone and install MeowPlayer:
+Clone and install:
 
 ```bash
 git clone https://github.com/Luqman234/MeowPlayer.git
@@ -286,16 +412,22 @@ cd MeowPlayer
 pipx install .
 ```
 
-Then launch it from anywhere:
+Release the cat:
 
 ```bash
 meowplayer
 ```
 
-Useful examples:
+Point it at another nest:
 
 ```bash
 meowplayer ~/Music
+meowplayer /mnt/big-drive/music
+```
+
+Useful launch variants:
+
+```bash
 meowplayer --maximum-meow
 meowplayer --serious-mode
 meowplayer --no-mpris
@@ -313,7 +445,7 @@ meowplayer --no-watch
 meowplayer --version
 ```
 
-To update an existing local `pipx` installation:
+Update an existing local `pipx` install:
 
 ```bash
 cd MeowPlayer
@@ -323,38 +455,21 @@ pipx reinstall meowplayer-terminal
 
 ### Debian / Ubuntu
 
-Install the system runtime dependency:
-
 ```bash
 sudo apt install python3 mpv
-```
-
-Then install from the repository:
-
-```bash
 git clone https://github.com/Luqman234/MeowPlayer.git
 cd MeowPlayer
 python3 -m pip install .
+meowplayer
 ```
 
 ### Termux / Android
 
-Install the runtime packages:
-
 ```bash
 pkg update
 pkg install python python-pip mpv git
-```
-
-Grant access to Android shared storage:
-
-```bash
 termux-setup-storage
-```
 
-Then:
-
-```bash
 cd ~
 git clone https://github.com/Luqman234/MeowPlayer.git
 cd MeowPlayer
@@ -362,7 +477,7 @@ python -m pip install .
 meowplayer
 ```
 
-MeowPlayer detects Termux automatically. With no explicit music directory it prefers:
+With no explicit music directory, Termux prefers:
 
 ```text
 ~/storage/music
@@ -370,26 +485,28 @@ MeowPlayer detects Termux automatically. With no explicit music directory it pre
 ~/Music
 ```
 
-Keep the MeowPlayer repository itself in Termux's private home directory. Shared storage is appropriate for music files, but not ideal for executable project files.
+Keep the repository itself in Termux's private home directory; shared storage is fine for the music but is a bad place to raise executable Python kittens.
 
 MPRIS is intentionally disabled on Termux because a normal Linux desktop D-Bus session is usually unavailable there.
 
-## Requirements
+## Requirements — food, water, mpv
 
 - Python **3.10+**
 - `mpv`
 - Mutagen
-- Internet access *(optional, for LRCLIB lyrics and MusicBrainz metadata enrichment)*
 - `dbus-next` for Linux MPRIS integration
-- Pillow for album-art normalization and caching
+- Pillow for album-art normalization/cache
 - Watchdog 6.x for live filesystem events
-- CAVA *(optional)* for the live audio spectrum visualizer
+- CAVA *(optional)* for the spectrum
+- Internet access *(optional)* for LRCLIB lyrics and MusicBrainz metadata enrichment
 - A terminal with curses support
 - Unix-domain socket support
 
-Python dependencies are declared in `pyproject.toml` and installed automatically when using `pip` or `pipx`.
+Python dependencies live in `pyproject.toml` and are installed by normal `pip` / `pipx` installation.
 
-If Mutagen cannot be imported, MeowPlayer can still fall back to filenames/folders for newly scanned music, but rich tags such as artist, album, year, genre, and cached duration will be unavailable for those files.
+If Mutagen is unavailable, MeowPlayer can still discover and play files using filename/folder fallbacks, but rich metadata and cached duration will naturally be worse.
+
+If the internet disappears, the local player still plays. Downloaded lyrics and cached metadata remain available according to what was already stored. This is a music player, not a login screen with an audio feature.
 
 ## Music library views
 
@@ -506,6 +623,7 @@ Built-in mixes include:
 Pawmarked Mix
 Recently Purrred
 Most Purrred
+Top Rated
 Fresh Finds
 Never Purrred
 Genre Mix · Dream Pop
@@ -521,6 +639,7 @@ Music Nest / Smart Mixes
 >^.^< Pawmarked Mix · 31 track(s) ›
       Recently Purrred · 126 track(s) ›
       Most Purrred · 91 track(s) ›
+      Top Rated · 54 track(s) ›
       Fresh Finds · 100 track(s) ›
       Never Purrred · 403 track(s) ›
       Genre Mix · Dream Pop · 47 track(s) ›
@@ -568,8 +687,8 @@ Example:
     {
       "name": "Late Night Purrs",
       "description": "Dreamy favorites with some listening history.",
-      "rule": "genre ~ \"Dream\" and favorite = true and play_count >= 3",
-      "sort": "-play_count",
+      "rule": "genre ~ \"Dream\" and favorite = true and rating >= 4",
+      "sort": "-rating",
       "limit": 100
     },
     {
@@ -596,6 +715,7 @@ filename
 folder
 duration
 play_count      (alias: plays)
+rating
 favorite        (aliases: pawmarked, favourite)
 played
 tagged
@@ -622,6 +742,7 @@ Examples:
 
 ```text
 genre ~ "Dream Pop" and favorite = true
+rating >= 4 and play_count >= 3
 duration < 300 and play_count >= 5
 year >= 2015 and (genre ~ "Rock" or genre ~ "Metal")
 not artist = "Unknown Artist" and tagged = true
@@ -678,9 +799,9 @@ Controls while searching:
 | `Enter` | Keep the current filter |
 | `Esc` | Clear the filter |
 
-## The Cat Catalog
+## The Cat Catalog — SQLite remembers what the cat will not
 
-The **Cat Catalog** is MeowPlayer's persistent SQLite library database.
+The **Cat Catalog** is MeowPlayer's persistent SQLite library model.
 
 Default location:
 
@@ -688,15 +809,14 @@ Default location:
 ~/.local/share/meowplayer/library.sqlite3
 ```
 
-If `XDG_DATA_HOME` is set, MeowPlayer uses that instead.
+With `XDG_DATA_HOME`, the database follows that location instead.
 
-It stores both cacheable metadata and MeowPlayer-specific library data:
+It stores ordinary library facts:
 
 ```text
 path
 library root
-size
-mtime
+size + mtime
 title
 artist
 album
@@ -708,17 +828,32 @@ duration
 folder
 filename
 tagged/fallback status
+```
 
+It also stores MeowPlayer-specific memory:
+
+```text
 Pawmark
+0–5 rating
 play count
 last played
 added-at time
-individual listening-history events
+listening-history events
+```
+
+And as of schema v5, it can remember online metadata provenance:
+
+```text
+online lookup status
+source
+MusicBrainz recording ID
+query
+fetch timestamp
 ```
 
 ### Incremental metadata caching
 
-First scan:
+Cold sniff:
 
 ```text
 music file
@@ -728,7 +863,7 @@ Mutagen reads tags + duration
 Cat Catalog stores metadata
 ```
 
-Warm scan:
+Warm sniff:
 
 ```text
 path + size + mtime
@@ -741,7 +876,7 @@ SQLite    Mutagen
  cache    re-sniff
 ```
 
-A normal warm launch may report:
+A normal warm launch can therefore look like:
 
 ```text
 Cat Catalog checked: 842 remembered, 3 re-sniffed, 1 vanished; 821/844 tagged meow(s).
@@ -749,26 +884,27 @@ Cat Catalog checked: 842 remembered, 3 re-sniffed, 1 vanished; 821/844 tagged me
 
 ### Rebuild metadata
 
-If tags were changed externally or you suspect stale metadata:
-
 ```bash
 meowplayer --rebuild-catalog
 ```
 
-This forces metadata refresh for the current music root while preserving:
+This invalidates cached file metadata for the selected root and forces a fresh local sniff while preserving personal library state such as:
 
 - Pawmarks
+- ratings
 - play counts
 - last-played values
 - listening history
 
-It does **not** modify the music files.
+Changed/rebuilt metadata can become eligible for fresh online enrichment again when fields remain incomplete.
 
-Do not treat `library.sqlite3` as disposable cache. Deleting it leaves your audio files untouched, but erases MeowPlayer-specific Pawmarks and history.
+Do **not** casually treat `library.sqlite3` as disposable cache. Deleting it leaves the audio files untouched, but removes MeowPlayer-owned Pawmarks, ratings, play history, cached enrichment, and other database state.
 
-### Upgrading from older Cat Catalog versions
+### Schema migrations
 
-MeowPlayer 0.8.0 moved the catalog from:
+The Cat Catalog is versioned and migrated forward. Older schema upgrades are designed to preserve personal library data even when cacheable metadata needs to be re-sniffed.
+
+MeowPlayer 0.8.0 also moved the database from:
 
 ```text
 ~/.cache/meowplayer/library.sqlite3
@@ -780,9 +916,91 @@ to:
 ~/.local/share/meowplayer/library.sqlite3
 ```
 
-The old database is migrated automatically.
+and migrates the legacy database automatically when appropriate.
 
-MeowPlayer 0.9.0 added genre and duration to the catalog schema. Existing Pawmarks and listening history were preserved, but cached tracks were deliberately re-sniffed once so those fields could be populated. Later launches return to normal incremental caching.
+## Online metadata enrichment — the Metadata Investigation Bureau
+
+MeowPlayer's online metadata layer exists to answer a narrow question:
+
+> "This track is missing information. Can we fill the holes without pretending the internet knows my library better than I do?"
+
+The answer is **yes, cautiously**.
+
+### Local-first precedence
+
+For every field, local data wins when it is already meaningful.
+
+```text
+Local Artist = Beach House
+Remote Artist = something else
+        ↓
+keep Beach House
+```
+
+But:
+
+```text
+Local Artist = Unknown Artist
+Remote Artist = Beach House
+        ↓
+fill Beach House
+```
+
+The same missing-only rule applies to title, album, album artist, year, and genre.
+
+### Finding the song
+
+When tags are sparse, MeowPlayer can derive fallback clues from filenames such as:
+
+```text
+01 - Artist - Title.flac
+```
+
+MusicBrainz candidates must clear a confidence threshold. When both sides have useful durations, MeowPlayer also compares the MusicBrainz recording length against the actual local audio duration and rejects large mismatches.
+
+That matters for covers, live versions, remasters, reprises, and the approximately seventeen billion songs named `Home`.
+
+### Background worker and cache policy
+
+Network I/O happens away from the curses loop. One metadata worker processes jobs serially, while the main thread remains responsible for merging results into in-memory `TrackMetadata` and writing SQLite.
+
+```text
+TUI / playback / SQLite
+          ↕ result queue
+MusicBrainz worker
+          ↓
+rate-limited HTTP
+```
+
+Cached outcomes are intentionally not treated equally:
+
+| Result | Normal refresh window |
+| --- | --- |
+| Found | ~30 days |
+| Not found | ~7 days |
+| Network/transient failure | ~15 minutes |
+
+The catalog also records the MusicBrainz source/ID/query used, which makes the enrichment traceable instead of magical.
+
+### What gets sent
+
+MeowPlayer sends MusicBrainz **search queries derived from available tags/filename clues**. It does not upload the audio file. Local duration is used for candidate validation.
+
+### Disable it
+
+One launch:
+
+```bash
+meowplayer --no-online-metadata
+```
+
+Persistent config:
+
+```json
+"online_metadata_enabled": false
+```
+
+The rest of MeowPlayer continues normally.
 
 ## Live filesystem watching
 
@@ -839,13 +1057,11 @@ Disable it for one run:
 meowplayer --no-watch
 ```
 
-## Lyrics / Songbook
+## Lyrics / Songbook — the cat has obtained the words
 
-MeowPlayer 0.12.0 added a dedicated lyrics system.
+Press `L` to open the **Songbook**.
 
-Press `L` at any time to open the **Songbook**.
-
-Lyrics are resolved in this order:
+MeowPlayer resolves lyrics in this order:
 
 ```text
 same-name .lrc sidecar
@@ -861,7 +1077,7 @@ same-name .txt sidecar
 embedded plain lyrics
 ```
 
-For example:
+A local sidecar can simply live beside the song:
 
 ```text
 Music/
@@ -870,7 +1086,7 @@ Music/
     └── 01 Song.lrc
 ```
 
-A synchronized `.lrc` file can look like:
+Synchronized LRC example:
 
 ```text
 [00:12.40]First line
@@ -878,61 +1094,79 @@ A synchronized `.lrc` file can look like:
 [00:22.10]Third line
 ```
 
-Multiple timestamps on one line and standard `[offset:+/-milliseconds]` tags are supported.
+Multiple timestamps per line and standard `[offset:+/-milliseconds]` tags are supported.
 
-If no local synchronized lyric exists, MeowPlayer automatically asks **LRCLIB** for synchronized lyrics in the background. Playback and the TUI stay responsive while the request is running. Successful results are stored under:
+### Online LRCLIB lookup
+
+If synchronized lyrics are not available locally, MeowPlayer can ask **LRCLIB** in the background.
+
+The UI distinguishes real states instead of immediately declaring defeat:
+
+```text
+Searching LRCLIB for: Artist Title
+        ↓
+found        → load + cache synchronized LRC
+not found    → report the query that actually missed
+network fail → report failure and allow a later retry
+```
+
+Transient network failure gets an automatic retry. Failed requests are not cached as permanent `None`, so one bad connection cannot curse the track for the rest of the session.
+
+Search fallback is intentionally forgiving of messy files: MeowPlayer can fall back from tagged metadata to artist/title search, filename stem, and title-only search.
+
+Successful downloads are cached under:
 
 ```text
 ~/.cache/meowplayer/lyrics/
 ```
 
-(or `$XDG_CACHE_HOME/meowplayer/lyrics/` when `XDG_CACHE_HOME` is set).
+or `$XDG_CACHE_HOME/meowplayer/lyrics/`. Once cached, they can be reused later without another network lookup. A user-provided same-name `.lrc` still has priority.
 
-The cache is reused on later plays, including offline runs. A user-provided same-name `.lrc` file always takes priority over downloaded lyrics.
-
-Disable only online lookup for one run while keeping local/embedded lyrics enabled:
+Disable only online lookup:
 
 ```bash
 meowplayer --no-online-lyrics
 ```
 
-When synchronized lyrics are available, MeowPlayer also shows the current lyric directly in the normal player:
-
-```text
-♫ And this is the line being sung right now
-```
-
-Inside the Songbook:
-
-| Key | Action |
-| --- | --- |
-| `L` | Open / close lyrics |
-| `↑` / `↓` | Temporarily scroll manually |
-| `Enter` | Resume live timestamp following |
-| `N` / `P` | Next / previous track |
-| `[` / `]` | Lower / raise current track rating |
-| `Space` | Pause / resume |
-
-The currently active synchronized line is highlighted and automatically centered while follow mode is active.
-
-When Kitty album art is available and the terminal is wide enough, Songbook reserves a right-side panel for the current cover while lyrics continue scrolling on the left. The split is adaptive and disappears automatically when space or artwork is unavailable.
-
-Plain lyrics from `.txt` files or unsynchronized embedded tags are displayed as a normal scrollable text view.
-
-Disable lyric loading for one launch with:
+Disable the entire lyrics subsystem:
 
 ```bash
 meowplayer --no-lyrics
 ```
 
-The persistent config supports:
+Persistent config:
 
 ```json
 "lyrics_enabled": true,
 "lyrics_online_enabled": true
 ```
 
-Set `lyrics_online_enabled` to `false` to keep the Songbook fully local while still reading sidecar, cached, and embedded lyrics.
+### Songbook controls
+
+| Key | Action |
+| --- | --- |
+| `L` | Open / close Songbook |
+| `↑` / `↓` | Scroll manually |
+| `Enter` | Resume timestamp following |
+| `N` / `P` | Next / previous track |
+| `[` / `]` | Lower / raise rating |
+| `Space` | Paws / resume |
+
+The active synchronized line is highlighted and centered while follow mode is active.
+
+On a sufficiently wide supported Kitty terminal, the Songbook may split itself:
+
+```text
+┌──────────────────── Songbook ────────────────────┬──── cover ────┐
+│                                                 │               │
+│   previous lyric                                │   album art   │
+│ >♫< current lyric                               │               │
+│   next lyric                                    │               │
+│                                                 │               │
+└─────────────────────────────────────────────────┴───────────────┘
+```
+
+Narrow terminals, unsupported terminals, Termux, or tracks without artwork simply keep the full-width text view. The cat has been instructed not to demand a 4K monitor.
 
 ## Audio visualizer
 
@@ -1256,27 +1490,25 @@ Loaded playlist entries must resolve to tracks already indexed in the current li
 | `+` / `-` | Adjust Meow Level |
 | `S` | Toggle Pounce Mode |
 | `R` | Toggle Tail-Chase |
-| `X` | Quit |
+| `X` | Quit / escape before the cat notices |
 
-## Persistent config and state
+## Persistent config and state — because the cat has a memory now
 
 MeowPlayer follows the XDG base-directory layout.
 
 ### Config
 
-Main settings:
-
 ```text
 ~/.config/meowplayer/config.json
 ```
 
-Custom Smart Mix definitions live separately at:
+Custom Smart Mix definitions:
 
 ```text
 ~/.config/meowplayer/smart-mixes.json
 ```
 
-Example:
+Representative config:
 
 ```json
 {
@@ -1285,6 +1517,7 @@ Example:
   "gapless_mode": "weak",
   "lyrics_enabled": true,
   "lyrics_online_enabled": true,
+  "online_metadata_enabled": true,
   "mpris_enabled": true,
   "music_dir": "/home/you/Music",
   "replaygain_mode": "track",
@@ -1300,14 +1533,13 @@ Example:
 ~/.local/state/meowplayer/state.json
 ```
 
-It remembers:
+It remembers things such as:
 
-- volume
+- volume / Meow Level
 - Pounce Mode
 - Tail-Chase
 - current library view
-- last track
-- playback position
+- last track + playback position
 - Catnip Stash
 - remaining Pounce Bag
 - Previous-history
@@ -1315,7 +1547,7 @@ It remembers:
 
 State is written periodically and again during shutdown.
 
-Session restore loads the last track at the saved position **paused**. Opening MeowPlayer never intentionally blasts yesterday's track immediately.
+Session restore loads the saved track at its saved position **paused**. Launching MeowPlayer is not supposed to surprise the entire room with whatever you were listening to at 02:17 yesterday.
 
 ## MPRIS and media keys
 
@@ -1370,59 +1602,80 @@ busctl --user list | grep org.mpris.MediaPlayer2.meowplayer
 
 MeowPlayer stays usable if MPRIS registration fails and displays the startup error in its status line.
 
-## Cat chaos
+## Cat chaos — carefully sandboxed workplace misconduct
 
-Normal mode now includes a deliberately non-functional **cat chaos layer**.
+MeowPlayer contains a presentation layer whose job description can best be summarized as **unhelpful cat**.
 
-It can:
+It may:
 
 - rotate increasingly questionable footer quotes
-- trigger temporary Cat Incidents
-- track session Scritches from the `G` key
-- celebrate every tenth Scritch
-- change the mascot to **Whispering** or **Screaming** based on Meow Level
-- rename the live playback label to `Now YOWLING` or `Now tiny-purring`
-- use randomized startup messages such as asking mpv to do the difficult part
-- issue melodramatic rating verdicts and temporary review-board incidents
-- make questionable comments about album art, lyrics, SQLite, and Unicode stars
+- trigger temporary **Cat Incidents**
+- count Scritches from the `G` key
+- celebrate every tenth Scritch as if a release candidate just passed certification
+- change the mascot according to playback state and Meow Level
+- rename `Now Playing` to `Now Purring`, `Now tiny-purring`, or **Now YOWLING**
+- issue melodramatic rating verdicts
+- convene an unauthorized review board
+- comment on SQLite, D-Bus, Unicode stars, album art, lyrics, and the Metadata Investigation Bureau
+- claim credit for successful background work it absolutely did not personally perform
 
-It cannot:
+It may **not**, merely because a random Cat Incident fired:
 
-- modify your music files
-- change the queue
+- modify your audio files
+- add/remove queue entries
 - reorder the Pounce Bag
-- edit the Cat Catalog
-- change Smart Mix rules
-- alter ReplayGain/gapless behavior
-- make network requests
+- change a rating
+- toggle a Pawmark
+- rewrite Smart Mix rules
+- alter gapless/ReplayGain state
+- write different metadata
+- initiate network work
 
-The chaos is intentionally presentation-only.
+Those actions only happen through the actual feature logic or explicit user input.
+
+In other words:
+
+```text
+cat jokes = allowed to be unstable
+music state = absolutely not
+```
+
+This separation is deliberate. The joke is part of the product personality; it is not allowed to become an excuse for unreliable playback.
 
 ## Cat modes
 
-### Normal mode
+### Normal mode — recommended dosage
 
 ```bash
 meowplayer
 ```
 
-### Serious Mode
+All normal features, plus the standard amount of feline misconduct.
+
+### Serious Mode — the cat is wearing a tie
 
 ```bash
 meowplayer --serious-mode
 ```
 
-Uses conventional labels and removes most feline presentation.
+Uses conventional labels and suppresses most feline presentation while keeping the actual player features intact.
 
-### Maximum Meow
+Useful for:
+
+- screen sharing
+- classrooms
+- work
+- pretending this repository contains no `G = pet cat` keybinding
+
+### Maximum Meow — insufficiently peer-reviewed
 
 ```bash
 meowplayer --maximum-meow
 ```
 
-For situations where the existing quantity of cat is scientifically insufficient.
+For situations where Normal Mode fails the laboratory's minimum cat requirement.
 
-The two modes are mutually exclusive.
+Serious Mode and Maximum Meow are mutually exclusive because even this project has boundaries.
 
 ## Cat moods
 
@@ -1445,9 +1698,9 @@ The mascot reacts to player state:
  > ^ <  ...
 ```
 
-## Feline vocabulary
+## Feline vocabulary — translation guide for responsible adults
 
-| Conventional | MeowPlayer |
+| Conventional software term | MeowPlayer has decided to call it |
 | --- | --- |
 | Library | Music Nest |
 | Folders | Nests |
@@ -1458,6 +1711,7 @@ The mascot reacts to player state:
 | Listening history | Purr History |
 | Smart playlists | Smart Mixes |
 | Lyrics | Songbook |
+| Online metadata enrichment | Metadata Investigation Bureau |
 | Audio visualizer | Spectrum |
 | Now Playing | Now Purring |
 | Volume | Meow Level |
@@ -1468,68 +1722,85 @@ The mascot reacts to player state:
 | Seek | Scritch |
 | Save playlist | Bury stash |
 | Load playlist | Dig up stash |
+| Press `G` | Pet the cat, obviously |
 
-## Architecture
+Serious Mode translates most of the visible vocabulary back into something fit for a project-management meeting.
+
+## Architecture — far too much engineering for a cat
 
 ```text
-                     Music files
-                         │
-              recursive scan + Watchdog
-                         │
-                         ▼
-                ┌─────────────────┐
-                │   Cat Catalog   │
-                │     SQLite      │
-                ├─────────────────┤
-                │ cached metadata │
-                │ genre/duration  │
-                │ Pawmarks        │
-                │ 0–5 ratings     │
-                │ Purr History    │
-                │ Smart Mix data  │
-                └────────┬────────┘
-                         │
-            ┌────────────┼─────────────┐
-            ▼            ▼             ▼
-         Artists       Albums       Smart Mixes
-            │            │             │
-            │            │       custom rule engine
-            └────────────┼─────────────┘
-                         ▼
-                    Scent Search
-                         │
-                         ▼
-                    Music Nest
-                   │
-            ┌──────┴────────┐
-            ▼               ▼
-      Catnip Stash      Pounce Bag
-            └──────┬────────┘
-                   ▼
-             MeowPlayer TUI
-              │         │
-              │         ├── Lyrics / Songbook
-              │         │     └── split album art
-              │         └── CAVA raw spectrum
-              │
-             mpv JSON IPC
-                   │
-             next-track priming
-                   │
-                   ▼
-                  mpv
-          gapless + ReplayGain
-                   │
-                   ▼
-              audio output
+                           LOCAL MUSIC FILES
+                                  │
+                 recursive scan + Watchdog/inotify
+                                  │
+                  ┌───────────────┴───────────────┐
+                  ▼                               ▼
+              Mutagen                       file changes
+          tags / duration                        │
+                  │                              │
+                  └──────────────┬───────────────┘
+                                 ▼
+                       ┌─────────────────┐
+                       │   CAT CATALOG   │
+                       │     SQLite      │
+                       ├─────────────────┤
+                       │ file metadata   │
+                       │ Pawmarks        │
+                       │ 0–5 ratings     │
+                       │ Purr History    │
+                       │ lookup state    │
+                       │ provenance      │
+                       └────────┬────────┘
+                                │
+          ┌─────────────────────┼──────────────────────┐
+          │                     │                      │
+          ▼                     ▼                      ▼
+   MusicBrainz worker     Smart Mix engine      library views
+   (missing fields)        + rule parser      + Scent Search
+          │
+          └── result queue ───────────────┐
+                                         ▼
+                                  MAIN TUI THREAD
+                               curses + library state
+                                │              │
+                     ┌──────────┘              └──────────┐
+                     ▼                                    ▼
+              Catnip Stash                         Lyrics manager
+              Pounce Bag                           local / embedded
+              playback sequence                    + LRCLIB thread
+                     │                                    │
+                     └──────────────┬─────────────────────┘
+                                    ▼
+                             MeowPlayer scheduler
+                                    │
+                             mpv JSON IPC
+                                    │
+                      one-track-ahead gapless priming
+                                    │
+                                    ▼
+                                   mpv
+                         decoding + ReplayGain + audio
 
-                   ↕
-              MPRIS / D-Bus
-                   ↕
-         playerctl / media keys
+                 Kitty art / CAVA             MPRIS / D-Bus
+                        │                          │
+                        ▼                          ▼
+                   terminal UI              playerctl/media keys
 ```
 
-Python owns the interface, library model, built-in/custom Smart Mix generation, live library remapping, lyrics synchronization, spectrum rendering, search, persistence, queueing, shuffle logic, one-track-ahead gapless scheduling, album-art resolution, the presentation-only cat-chaos layer, and other cat-related responsibilities. Watchdog supplies filesystem events while MeowPlayer deliberately keeps SQLite and library mutation on the main thread. Mutagen reads metadata, embedded artwork, and stream duration. SQLite stores the persistent library model. Pillow normalizes artwork into cached PNG files. CAVA optionally supplies FFT spectrum data. `mpv` handles decoding, ReplayGain, audio output, seeking, and the actual gapless handoff between primed playlist entries.
+### Responsibility boundaries
+
+- **Python / MeowPlayer** owns the UI, library model, queue, Pounce Bag, ratings, Pawmarks, Smart Mixes, persistence, lyrics state, search, metadata merge policy, and gapless scheduling decisions.
+- **mpv** owns decoding, actual audio output, seeking, ReplayGain processing, and the final handoff between primed playlist entries.
+- **Mutagen** reads local tags, embedded artwork, embedded lyrics where supported, and stream duration.
+- **SQLite** persists the Cat Catalog.
+- **Watchdog** supplies filesystem events; library mutation remains in the main application logic.
+- **MusicBrainz** is an optional enrichment source for missing metadata.
+- **LRCLIB** is an optional synchronized-lyrics source.
+- **Pillow** normalizes artwork into cached PNGs.
+- **CAVA** optionally supplies spectrum values.
+- **MPRIS / D-Bus** exposes desktop media controls.
+
+Most importantly, the cat-chaos presentation layer sits **above** these systems rather than being allowed to rummage through them.
 
 ## Build packages
 
@@ -1563,20 +1834,20 @@ meowplayer
 
 ```text
 MeowPlayer/
-├── meowplayer.py
-├── album_art.py
-├── lyrics_support.py
-├── library_watcher.py
-├── meow_catalog.py
-├── meow_smart.py
-├── meow_persistence.py
-├── mpris_support.py
-├── online_metadata.py
-├── visualizer.py
+├── meowplayer.py              # TUI, playback state, orchestration, cat
+├── album_art.py               # artwork resolution/cache/Kitty rendering
+├── lyrics_support.py          # LRC/plain lyrics + LRCLIB
+├── online_metadata.py         # MusicBrainz enrichment worker/client
+├── library_watcher.py         # Watchdog event collection/debounce
+├── meow_catalog.py            # SQLite Cat Catalog + migrations
+├── meow_smart.py              # Smart Mix parser/generator
+├── meow_persistence.py        # XDG config + runtime state
+├── mpris_support.py           # Linux MPRIS bridge
+├── visualizer.py              # CAVA raw spectrum integration
 ├── pyproject.toml
 ├── requirements.txt
 ├── README.md
-├── LICENSE
+├── LICENSE                    # the only adult in the room
 ├── examples/
 │   └── smart-mixes.json
 ├── tests/
@@ -1585,6 +1856,7 @@ MeowPlayer/
 │   ├── test_catalog.py
 │   ├── test_goofy.py
 │   ├── test_lyrics.py
+│   ├── test_online_metadata.py
 │   ├── test_rescan.py
 │   ├── test_shuffle.py
 │   ├── test_smart.py
@@ -1596,68 +1868,126 @@ MeowPlayer/
         └── package-smoke.yml
 ```
 
-## Development and tests
+There is a non-zero amount of code whose purpose is to make a cat react to volume. This is documented here for transparency.
 
-Compile the modules:
+## Development and tests — prove the cat still works
+
+Compile first-party modules:
 
 ```bash
-python -m py_compile meowplayer.py album_art.py lyrics_support.py library_watcher.py meow_catalog.py meow_smart.py meow_persistence.py mpris_support.py visualizer.py
+python -m py_compile \
+  meowplayer.py \
+  album_art.py \
+  lyrics_support.py \
+  online_metadata.py \
+  library_watcher.py \
+  meow_catalog.py \
+  meow_smart.py \
+  meow_persistence.py \
+  mpris_support.py \
+  visualizer.py
 ```
 
-Run tests:
+Run the tests:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-Build-test the package:
+Build the package:
 
 ```bash
 python -m build
 ```
 
-The GitHub Actions package-smoke workflow automatically checks relevant pushes and pull requests by:
+### CI
+
+The lightweight package-smoke workflow checks the normal packaging path:
 
 ```text
-compile Python modules
-        ↓
-run unit tests
-        ↓
-build wheel + source distribution
-        ↓
-install wheel in a clean venv
-        ↓
-meowplayer --version
-meowplayer --help
+compile
+  ↓
+unit/regression tests
+  ↓
+build wheel + sdist
+  ↓
+clean venv install
+  ↓
+CLI version/help smoke
 ```
 
-## Roadmap
+The comprehensive workflow goes substantially further. It is designed to exercise:
 
-Potential next upgrades:
+- Python 3.10, 3.11, 3.12, 3.13, and 3.14
+- minimum declared dependency versions
+- coverage
+- source/config/version consistency
+- wheel + sdist contents and clean installation
+- real Linux mpv JSON IPC
+- real gapless playlist priming / top-level playback
+- Watchdog/inotify delivery
+- MPRIS registration on a session D-Bus
+- Pillow album-art cache behavior
+- a final **Comprehensive test gate** used by protected `main`
 
-- additional terminal graphics protocols beyond Kitty
-- in-TUI editor for custom Smart Mix rules
-- automatic reload when `smart-mixes.json` itself changes
+The goal is not to prove that the jokes are funny. The goal is to prove that adding jokes did not break the music player.
+
+## Roadmap — possible future crimes
+
+Ideas, not promises:
+
+- broader terminal graphics protocols beyond Kitty
+- an in-TUI inspector for local vs enriched metadata + provenance
+- manual metadata refresh / reject controls
+- in-TUI Smart Mix rule editing
+- automatic reload when `smart-mixes.json` changes
 - per-track lyric timing offsets and lyric editing
-- additional visualizer backends / dedicated per-player capture
-- ReplayGain tag inspection / loudness diagnostics
-- broader gapless stress testing across mixed sample rates and codecs
-- release automation and tagged GitHub releases
+- additional visualizer backends / more player-specific capture
+- ReplayGain tag inspection and loudness diagnostics
+- broader gapless stress testing across mixed codecs/sample rates
+- tagged release automation
 - Arch `PKGBUILD` / AUR packaging
-- additional scientifically unnecessary cat behavior
+- optional remote/self-hosted music-library sources such as an OpenSubsonic-compatible server, without making local files second-class citizens
+- more scientifically unnecessary cat behavior, provided it remains presentation-safe
+
+A future feature has to fit the project's identity: **terminal-native, local-first, keyboard-first, and capable of being used seriously even if a cat is currently filing a bug report against gravity.**
 
 ## License
 
 MeowPlayer is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
 
+The README may call a queue "The Catnip Stash." The license, mercifully, does not.
+
 ## Why "MeowPlayer"?
 
-Because every respectable terminal deserves at least one cat-themed application.
+Because every respectable terminal deserves at least one application that is simultaneously:
 
 ```text
+useful
+keyboard-first
+weirdly over-engineered
+and supervised by this employee:
+
  /\_/\
 ( o.o )
  > ^ <
 ```
 
-And because apparently naming it MeowPlayer was not enough. We had to commit to the bit.
+The project is intentionally not trying to hide the joke as it becomes more capable.
+
+The point is the contrast:
+
+```text
+SQLite migrations                 → serious
+mpv JSON IPC                     → serious
+gapless handoff recovery         → serious
+MusicBrainz matching             → serious
+MPRIS / D-Bus                   → serious
+Python 3.10–3.14 CI             → serious
+
+G = pet cat                     → absolutely critical
+```
+
+MeowPlayer should remain a player you can depend on **and** a player that occasionally informs you that `Unknown Artist has been placed under investigation.`
+
+That is the bit. We are committing to it.
