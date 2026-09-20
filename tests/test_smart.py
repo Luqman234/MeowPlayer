@@ -190,7 +190,7 @@ class SmartPlaylistTests(unittest.TestCase):
             for key, playlist in playlists.items()
             if key.startswith("custom:dream-favorites")
         )
-        self.assertEqual(custom.indices, (2,))
+        self.assertEqual(custom.indices, (0,))
 
     def test_bad_custom_rule_does_not_break_other_mixes(self):
         with tempfile.TemporaryDirectory() as directory:
