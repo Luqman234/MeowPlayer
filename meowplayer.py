@@ -40,7 +40,7 @@ from mpris_support import MPRISBridge
 from visualizer import AudioVisualizer
 
 
-__version__ = "0.14.0"
+__version__ = "0.14.1"
 
 
 SUPPORTED_EXTENSIONS = {
