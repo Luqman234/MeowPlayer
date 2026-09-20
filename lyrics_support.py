@@ -28,6 +28,13 @@ class LyricLine:
 
 
 @dataclass(frozen=True)
+class LyricsFetchResult:
+    text: str
+    status: str
+    query: str = ""
+
+
+@dataclass(frozen=True)
 class LyricsDocument:
     lines: tuple
     synced: bool
@@ -308,6 +315,7 @@ def _track_lookup_metadata(track_path):
         "artist": artist.strip(),
         "album": album.strip(),
         "duration": max(0.0, duration),
+        "filename_stem": track_path.stem.strip(),
         "audio": audio,
         "tags": tags,
     }
@@ -342,7 +350,7 @@ def _lrclib_request(path, params, timeout):
         headers={
             "Accept": "application/json",
             "User-Agent": (
-                "MeowPlayer/0.13 "
+                "MeowPlayer "
                 "(https://github.com/Luqman234/MeowPlayer)"
             ),
         },
@@ -351,13 +359,19 @@ def _lrclib_request(path, params, timeout):
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = response.read()
-    except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
-        return None
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None, "not-found"
+        if exc.code == 429 or 500 <= exc.code < 600:
+            return None, "network-error"
+        return None, "http-error"
+    except (OSError, urllib.error.URLError, TimeoutError):
+        return None, "network-error"
 
     try:
-        return json.loads(payload.decode("utf-8"))
+        return json.loads(payload.decode("utf-8")), "ok"
     except (UnicodeError, json.JSONDecodeError, TypeError):
-        return None
+        return None, "invalid-response"
 
 
 def _synced_lyrics_from_payload(payload):
@@ -376,14 +390,17 @@ def _synced_lyrics_from_payload(payload):
     return ""
 
 
-def _fetch_lrclib(metadata, timeout=3.0):
+def _fetch_lrclib_result(metadata, timeout=5.0):
     title = metadata.get("title", "").strip()
     artist = metadata.get("artist", "").strip()
     album = metadata.get("album", "").strip()
     duration = metadata.get("duration", 0.0)
 
+    query = " ".join(part for part in (artist, title) if part).strip()
     if not title:
-        return ""
+        return LyricsFetchResult("", "not-found", query)
+
+    saw_network_error = False
 
     if artist:
         params = {
@@ -395,21 +412,49 @@ def _fetch_lrclib(metadata, timeout=3.0):
         if duration > 0:
             params["duration"] = int(round(duration))
 
-        payload = _lrclib_request("/api/get", params, timeout)
+        payload, status = _lrclib_request("/api/get", params, timeout)
+        saw_network_error = saw_network_error or status == "network-error"
         synced = _synced_lyrics_from_payload(payload)
         if synced:
-            return synced
+            return LyricsFetchResult(synced, "found", query)
 
-    query = " ".join(part for part in (artist, title) if part).strip()
-    if not query:
-        return ""
+    search_queries = []
+    for candidate in (
+        query,
+        metadata.get("filename_stem", "").strip(),
+        title,
+    ):
+        normalized = " ".join(candidate.split())
+        if normalized and normalized.casefold() not in {
+            existing.casefold()
+            for existing in search_queries
+        }:
+            search_queries.append(normalized)
 
-    payload = _lrclib_request(
-        "/api/search",
-        {"q": query},
-        timeout,
-    )
-    return _synced_lyrics_from_payload(payload)
+    if not search_queries:
+        return LyricsFetchResult("", "not-found", query)
+
+    saw_successful_search = False
+    for search_query in search_queries:
+        payload, status = _lrclib_request(
+            "/api/search",
+            {"q": search_query},
+            timeout,
+        )
+        saw_network_error = saw_network_error or status == "network-error"
+        saw_successful_search = saw_successful_search or status == "ok"
+        synced = _synced_lyrics_from_payload(payload)
+        if synced:
+            return LyricsFetchResult(synced, "found", search_query)
+
+    if saw_network_error and not saw_successful_search:
+        return LyricsFetchResult("", "network-error", query)
+
+    return LyricsFetchResult("", "not-found", query)
+
+
+def _fetch_lrclib(metadata, timeout=5.0):
+    return _fetch_lrclib_result(metadata, timeout=timeout).text
 
 
 class LyricsManager:
@@ -418,7 +463,7 @@ class LyricsManager:
         enabled=True,
         online_enabled=True,
         cache_dir=None,
-        request_timeout=3.0,
+        request_timeout=5.0,
     ):
         self.enabled = bool(enabled)
         self.online_enabled = bool(online_enabled)
@@ -430,9 +475,10 @@ class LyricsManager:
         try:
             self.request_timeout = max(0.25, float(request_timeout))
         except (TypeError, ValueError):
-            self.request_timeout = 3.0
+            self.request_timeout = 5.0
         self._cache = {}
         self._pending = {}
+        self._online_status = {}
         self._pending_lock = threading.Lock()
 
     def _cache_identity(self, path):
@@ -480,34 +526,105 @@ class LyricsManager:
 
     def _start_online_fetch(self, identity, metadata):
         if not self.online_enabled:
-            return
+            return False
+
+        query = " ".join(
+            part
+            for part in (
+                metadata.get("artist", "").strip(),
+                metadata.get("title", "").strip(),
+            )
+            if part
+        ).strip()
 
         with self._pending_lock:
             if identity in self._pending:
-                return
+                return False
             state = {
                 "done": False,
                 "text": "",
+                "status": "searching",
+                "query": query,
+                "attempts": 0,
                 "metadata": metadata,
             }
             self._pending[identity] = state
+            self._online_status[identity] = {
+                "status": "searching",
+                "query": query,
+                "attempts": 0,
+            }
 
         def worker():
-            text = _fetch_lrclib(
-                metadata,
-                timeout=self.request_timeout,
-            )
+            result = None
+            for attempt in range(1, 3):
+                result = _fetch_lrclib_result(
+                    metadata,
+                    timeout=self.request_timeout,
+                )
+                state["attempts"] = attempt
+                if result.status != "network-error":
+                    break
+
+            if result is None:
+                result = LyricsFetchResult("", "network-error", query)
+
             with self._pending_lock:
                 current = self._pending.get(identity)
                 if current is state:
-                    state["text"] = text
+                    state["text"] = result.text
+                    state["status"] = result.status
+                    state["query"] = result.query or query
                     state["done"] = True
+                    self._online_status[identity] = {
+                        "status": result.status,
+                        "query": result.query or query,
+                        "attempts": state["attempts"],
+                    }
 
         threading.Thread(
             target=worker,
             name="meowplayer-lyrics",
             daemon=True,
         ).start()
+        return True
+
+    def online_status(self, track_path):
+        if not self.enabled:
+            return {"status": "disabled", "query": "", "attempts": 0}
+        if not self.online_enabled:
+            return {"status": "offline", "query": "", "attempts": 0}
+
+        identity = self._cache_identity(Path(track_path).expanduser())
+        with self._pending_lock:
+            state = self._pending.get(identity)
+            if state is not None and not state.get("done"):
+                return {
+                    "status": "searching",
+                    "query": state.get("query", ""),
+                    "attempts": state.get("attempts", 0),
+                }
+            return dict(
+                self._online_status.get(
+                    identity,
+                    {"status": "idle", "query": "", "attempts": 0},
+                )
+            )
+
+    def retry_online(self, track_path):
+        if not self.enabled or not self.online_enabled:
+            return False
+
+        track_path = Path(track_path).expanduser()
+        identity = self._cache_identity(track_path)
+        metadata = _track_lookup_metadata(track_path)
+
+        with self._pending_lock:
+            if identity in self._pending:
+                return False
+            self._online_status.pop(identity, None)
+
+        return self._start_online_fetch(identity, metadata)
 
     def poll(self, track_path):
         if not self.enabled or not self.online_enabled:
@@ -535,6 +652,12 @@ class LyricsManager:
 
         self._save_cached_lrc(state["metadata"], synced_text)
         self._cache[identity] = document
+        with self._pending_lock:
+            self._online_status[identity] = {
+                "status": "found",
+                "query": state.get("query", ""),
+                "attempts": state.get("attempts", 1),
+            }
         return document
 
     def load(self, track_path):
@@ -544,7 +667,9 @@ class LyricsManager:
         track_path = Path(track_path).expanduser()
         identity = self._cache_identity(track_path)
         if identity in self._cache:
-            return self._cache[identity]
+            cached = self._cache[identity]
+            if cached is not None:
+                return cached
 
         # 1. User-provided synchronized sidecar always wins.
         lrc_path = track_path.with_suffix(".lrc")
@@ -589,5 +714,6 @@ class LyricsManager:
                 self._cache[identity] = document
                 return document
 
-        self._cache[identity] = embedded_plain
+        if embedded_plain is not None:
+            self._cache[identity] = embedded_plain
         return embedded_plain

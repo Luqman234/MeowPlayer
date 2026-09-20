@@ -1,11 +1,11 @@
 # MeowPlayer 🐱🎵
 
-**MeowPlayer 0.14.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
+**MeowPlayer 0.14.1** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
 
 Python and `curses` provide the interface, `mpv` handles playback, Mutagen reads music metadata, SQLite powers the persistent **Cat Catalog**, Watchdog keeps the library live, and Linux desktops can control the player through MPRIS / D-Bus.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.14.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.14.1 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -18,6 +18,32 @@ Tail-Chase: OFF   Catnip: 4   Verdict: ★★★★☆   Mood: Zoomies
 Music Nest / Songs — 842 meow(s)
 🐾 Space Song — Beach House · Depression Cherry · Dream Pop · ★★★★☆ · 05:20
 ```
+
+## What's new in 0.14.1 — The Cat Stops Lying About Lyrics
+
+0.14.1 fixes the online Songbook state so a background LRCLIB lookup is no longer reported as an immediate false negative.
+
+While a request is pending, Songbook now shows the exact lookup state:
+
+```text
+Searching LRCLIB for: Artist Title
+```
+
+If the network request fails transiently, MeowPlayer retries once automatically with a longer timeout. A failed request is **not** cached as permanent `None`, so later attempts can recover.
+
+LRCLIB matching is also more forgiving when audio tags are wrong or overly decorated. MeowPlayer now tries, in order:
+
+```text
+exact tagged metadata
+        ↓
+artist + title search
+        ↓
+filename stem
+        ↓
+title-only search
+```
+
+After synchronized lyrics arrive, Songbook immediately switches to the downloaded document and reports the LRCLIB source. If the lookup genuinely finds nothing, the UI shows the exact query that was tried instead of the generic `No lyrics found` message.
 
 ## What's new in 0.14.0 — The Cat Has Opinions
 
@@ -1366,7 +1392,7 @@ The mascot reacts to player state:
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.14.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.14.1 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -1475,8 +1501,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.14.0-py3-none-any.whl
-└── meowplayer_terminal-0.14.0.tar.gz
+├── meowplayer_terminal-0.14.1-py3-none-any.whl
+└── meowplayer_terminal-0.14.1.tar.gz
 ```
 
 The installed CLI is still:

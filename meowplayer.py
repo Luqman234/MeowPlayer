@@ -40,7 +40,7 @@ from mpris_support import MPRISBridge
 from visualizer import AudioVisualizer
 
 
-__version__ = "0.14.0"
+__version__ = "0.14.1"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -2998,7 +2998,67 @@ class MeowPlayer:
         self.lyrics_track_index = self.current
         self.lyrics_follow = True
         self.lyrics_scroll = 0
+        self.set_status(
+            f"Lyrics downloaded: {document.source}.",
+            "Lyrics acquired. The cat can now sing them incorrectly."
+        )
         return True
+
+    def lyrics_lookup_message(self):
+        if self.current is None:
+            return self.text(
+                "Play a track to view lyrics.",
+                "Pick a meow before opening the songbook."
+            )
+
+        state = self.lyrics.online_status(self.songs[self.current])
+        status = state.get("status", "idle")
+        query = state.get("query", "").strip()
+
+        if status == "searching":
+            if query:
+                return self.text(
+                    f"Searching LRCLIB for: {query}",
+                    f"The cat is sniffing LRCLIB for: {query}"
+                )
+            return self.text(
+                "Searching LRCLIB for synchronized lyrics...",
+                "The cat is sniffing LRCLIB for words..."
+            )
+
+        if status == "network-error":
+            return self.text(
+                "LRCLIB lookup failed after retry. Reopen Songbook to retry.",
+                "LRCLIB escaped twice. Close and reopen the Songbook for another pounce."
+            )
+
+        if status == "not-found":
+            if query:
+                return self.text(
+                    f"No synchronized lyrics found on LRCLIB for: {query}",
+                    f"LRCLIB found no timed words for this scent: {query}"
+                )
+            return self.text(
+                "No synchronized lyrics found on LRCLIB.",
+                "LRCLIB found no timed words for this meow."
+            )
+
+        if status == "offline":
+            return self.text(
+                "No local lyrics found. Online lyrics are disabled.",
+                "No local words found, and the cat is not allowed onto the internet."
+            )
+
+        if status == "disabled":
+            return self.text(
+                "Lyrics are disabled.",
+                "The Songbook is currently sleeping."
+            )
+
+        return self.text(
+            "No local lyrics found yet.",
+            "No lyrics found yet. The cat may still be improvising."
+        )
 
     def current_lyric_text(self):
         if (
@@ -3035,10 +3095,12 @@ class MeowPlayer:
         self.lyrics_follow = True
 
         if self.current_lyrics is None:
-            self.set_status(
-                "No lyrics found for the current track.",
-                "The cat found no words for this meow."
-            )
+            if self.current is not None:
+                state = self.lyrics.online_status(self.songs[self.current])
+                if state.get("status") == "network-error":
+                    self.lyrics.retry_online(self.songs[self.current])
+            message = self.lyrics_lookup_message()
+            self.status_message = message
         else:
             source = self.current_lyrics.source
             self.set_status(
@@ -3072,10 +3134,7 @@ class MeowPlayer:
             return
 
         if document is None or not document.lines:
-            message = self.text(
-                "No sidecar or embedded lyrics found.",
-                "No lyrics found. The cat may be improvising."
-            )
+            message = self.lyrics_lookup_message()
             try:
                 stdscr.addstr(
                     list_start,

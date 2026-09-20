@@ -70,6 +70,12 @@ class AudioEngineTests(unittest.TestCase):
         player.lyrics = SimpleNamespace(
             load=lambda path: None,
             poll=lambda path: None,
+            online_status=lambda path: {
+                "status": "idle",
+                "query": "",
+                "attempts": 0,
+            },
+            retry_online=lambda path: False,
         )
         player.current_lyrics = None
         player.lyrics_track_index = None
@@ -185,6 +191,67 @@ class AudioEngineTests(unittest.TestCase):
             player.library_stats[str(player.songs[0].resolve())]["rating"],
             0,
         )
+
+    def test_songbook_reports_live_lrclib_search_instead_of_false_negative(self):
+        player = self.make_player(count=1, current=0)
+        player.serious_mode = True
+        player.lyrics.online_status = lambda path: {
+            "status": "searching",
+            "query": "Beach House Space Song",
+            "attempts": 1,
+        }
+
+        message = player.lyrics_lookup_message()
+
+        self.assertIn("Searching LRCLIB", message)
+        self.assertIn("Beach House Space Song", message)
+        self.assertNotIn("No lyrics found", message)
+
+    def test_reopening_songbook_retries_after_network_failure(self):
+        player = self.make_player(count=1, current=0)
+        player.serious_mode = True
+        player.view = "library"
+        player.previous_view = "library"
+        retries = []
+        state = {
+            "status": "network-error",
+            "query": "Artist Song",
+            "attempts": 2,
+        }
+
+        player.lyrics.online_status = lambda path: dict(state)
+
+        def retry(path):
+            retries.append(Path(path))
+            state["status"] = "searching"
+            return True
+
+        player.lyrics.retry_online = retry
+
+        player.toggle_lyrics_view()
+
+        self.assertEqual(player.view, "lyrics")
+        self.assertEqual(retries, [Path("/music/0.flac")])
+        self.assertIn("Searching LRCLIB", player.status_message)
+
+    def test_downloaded_lyrics_replace_search_state_and_update_status(self):
+        player = self.make_player(count=1, current=0)
+        player.serious_mode = True
+        player.view = "lyrics"
+        document = SimpleNamespace(
+            source="LRCLIB · downloaded",
+            synced=True,
+            lines=(SimpleNamespace(time=1.0, text="line"),),
+        )
+        player.lyrics.poll = lambda path: document
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        changed = player.refresh_current_lyrics()
+
+        self.assertTrue(changed)
+        self.assertIs(player.current_lyrics, document)
+        self.assertIn("Lyrics downloaded", statuses[-1][0])
 
     def test_meowplayer_constructor_accepts_online_lyrics_flag(self):
         parameters = inspect.signature(MeowPlayer.__init__).parameters
