@@ -65,6 +65,25 @@ def needs_online_metadata(metadata):
     return bool(missing_metadata_fields(metadata))
 
 
+def metadata_lookup_due(state, now_ns=None):
+    status = str((state or {}).get("status") or "")
+    fetched_at = int((state or {}).get("fetched_at_ns") or 0)
+    now_ns = int(now_ns or time.time_ns())
+
+    if not status or fetched_at <= 0:
+        return True
+
+    age = max(0, now_ns - fetched_at)
+    if status == "found":
+        ttl = 30 * 24 * 60 * 60 * 1_000_000_000
+    elif status == "not-found":
+        ttl = 7 * 24 * 60 * 60 * 1_000_000_000
+    else:
+        ttl = 15 * 60 * 1_000_000_000
+
+    return age >= ttl
+
+
 def merge_missing_metadata(metadata, result):
     values = {
         "title": metadata.title,
