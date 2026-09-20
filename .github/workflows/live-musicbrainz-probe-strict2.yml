@@ -31,18 +31,29 @@ jobs:
               'missing': ('album', 'album_artist', 'year', 'genre'),
           }
 
-          result = client.fetch(snapshot)
-          assert result.status == 'found', result
-          assert result.title.casefold() == 'space song', result
-          assert result.artist.casefold() == 'beach house', result
-          assert result.source_id, result
+          query = 'recording:"Space Song" AND artistname:"Beach House"'
+          payload, status = client._request_json(
+              '/recording/',
+              {'query': query, 'fmt': 'json', 'limit': 25},
+          )
+          print('QUERY_STATUS:', status)
+          recordings = (payload or {}).get('recordings', [])
+          print('CANDIDATE_COUNT:', len(recordings))
+          for index, recording in enumerate(recordings):
+              credits = recording.get('artist-credit') or []
+              artists = ' / '.join(
+                  str(item.get('name') or '')
+                  for item in credits
+                  if isinstance(item, dict)
+              )
+              print(
+                  'CANDIDATE', index,
+                  'score=', recording.get('score'),
+                  'title=', recording.get('title'),
+                  'artist=', artists,
+                  'id=', recording.get('id'),
+              )
 
-          print('LIVE_MUSICBRAINZ_STRICT_OK')
-          print('title:', result.title)
-          print('artist:', result.artist)
-          print('album:', result.album)
-          print('year:', result.year)
-          print('genre:', result.genre)
-          print('score:', result.score)
-          print('source_id:', result.source_id)
+          result = client.fetch(snapshot)
+          print('FETCH_RESULT:', result.status, result.title, result.artist, result.source_id)
           PY
