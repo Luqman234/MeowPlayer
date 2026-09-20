@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _xdg_cache_home():
@@ -73,7 +73,7 @@ class LibraryCatalog:
             "PRAGMA user_version"
         ).fetchone()[0]
 
-        if version not in (0, 1, 2, 3, SCHEMA_VERSION):
+        if version not in (0, 1, 2, 3, 4, SCHEMA_VERSION):
             raise RuntimeError(
                 f"Unsupported Cat Catalog schema version {version}; "
                 f"expected <= {SCHEMA_VERSION}."
@@ -103,7 +103,12 @@ class LibraryCatalog:
                 last_played_ns INTEGER,
                 added_at_ns INTEGER NOT NULL DEFAULT 0,
                 genre TEXT NOT NULL DEFAULT '',
-                duration REAL NOT NULL DEFAULT 0
+                duration REAL NOT NULL DEFAULT 0,
+                online_metadata_status TEXT NOT NULL DEFAULT '',
+                online_metadata_source TEXT NOT NULL DEFAULT '',
+                online_metadata_id TEXT NOT NULL DEFAULT '',
+                online_metadata_query TEXT NOT NULL DEFAULT '',
+                online_metadata_fetched_ns INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -142,6 +147,26 @@ class LibraryCatalog:
             (
                 "duration",
                 "ALTER TABLE tracks ADD COLUMN duration REAL NOT NULL DEFAULT 0",
+            ),
+            (
+                "online_metadata_status",
+                "ALTER TABLE tracks ADD COLUMN online_metadata_status TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "online_metadata_source",
+                "ALTER TABLE tracks ADD COLUMN online_metadata_source TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "online_metadata_id",
+                "ALTER TABLE tracks ADD COLUMN online_metadata_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "online_metadata_query",
+                "ALTER TABLE tracks ADD COLUMN online_metadata_query TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "online_metadata_fetched_ns",
+                "ALTER TABLE tracks ADD COLUMN online_metadata_fetched_ns INTEGER NOT NULL DEFAULT 0",
             ),
         )
         for name, statement in migrations:
@@ -281,7 +306,12 @@ class LibraryCatalog:
                 folder = excluded.folder,
                 filename = excluded.filename,
                 tagged = excluded.tagged,
-                last_scanned_ns = excluded.last_scanned_ns
+                last_scanned_ns = excluded.last_scanned_ns,
+                online_metadata_status = '',
+                online_metadata_source = '',
+                online_metadata_id = '',
+                online_metadata_query = '',
+                online_metadata_fetched_ns = 0
             """,
             (
                 resolved,
@@ -304,6 +334,120 @@ class LibraryCatalog:
                 time.time_ns(),
             ),
         )
+
+    def online_metadata_state(self, path):
+        row = self.connection.execute(
+            """
+            SELECT
+                online_metadata_status,
+                online_metadata_source,
+                online_metadata_id,
+                online_metadata_query,
+                online_metadata_fetched_ns
+            FROM tracks
+            WHERE path = ? AND root = ?
+            """,
+            (
+                str(Path(path).resolve()),
+                str(self.music_dir),
+            ),
+        ).fetchone()
+
+        if row is None:
+            return {
+                "status": "",
+                "source": "",
+                "source_id": "",
+                "query": "",
+                "fetched_at_ns": 0,
+            }
+
+        return {
+            "status": row["online_metadata_status"],
+            "source": row["online_metadata_source"],
+            "source_id": row["online_metadata_id"],
+            "query": row["online_metadata_query"],
+            "fetched_at_ns": int(row["online_metadata_fetched_ns"] or 0),
+        }
+
+    def store_online_metadata_result(
+        self,
+        path,
+        metadata,
+        status,
+        source="musicbrainz",
+        source_id="",
+        query="",
+        fetched_at_ns=None,
+    ):
+        fetched_at_ns = int(fetched_at_ns or time.time_ns())
+        cursor = self.connection.execute(
+            """
+            UPDATE tracks
+            SET
+                title = ?,
+                artist = ?,
+                album = ?,
+                album_artist = ?,
+                year = ?,
+                genre = ?,
+                online_metadata_status = ?,
+                online_metadata_source = ?,
+                online_metadata_id = ?,
+                online_metadata_query = ?,
+                online_metadata_fetched_ns = ?
+            WHERE path = ? AND root = ?
+            """,
+            (
+                metadata.title,
+                metadata.artist,
+                metadata.album,
+                metadata.album_artist,
+                metadata.year,
+                metadata.genre,
+                str(status),
+                str(source),
+                str(source_id),
+                str(query),
+                fetched_at_ns,
+                str(Path(path).resolve()),
+                str(self.music_dir),
+            ),
+        )
+        return cursor.rowcount > 0
+
+    def mark_online_metadata_result(
+        self,
+        path,
+        status,
+        source="musicbrainz",
+        source_id="",
+        query="",
+        fetched_at_ns=None,
+    ):
+        fetched_at_ns = int(fetched_at_ns or time.time_ns())
+        cursor = self.connection.execute(
+            """
+            UPDATE tracks
+            SET
+                online_metadata_status = ?,
+                online_metadata_source = ?,
+                online_metadata_id = ?,
+                online_metadata_query = ?,
+                online_metadata_fetched_ns = ?
+            WHERE path = ? AND root = ?
+            """,
+            (
+                str(status),
+                str(source),
+                str(source_id),
+                str(query),
+                fetched_at_ns,
+                str(Path(path).resolve()),
+                str(self.music_dir),
+            ),
+        )
+        return cursor.rowcount > 0
 
     def invalidate_root(self):
         cursor = self.connection.execute(
