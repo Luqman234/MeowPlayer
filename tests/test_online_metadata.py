@@ -48,6 +48,21 @@ class OnlineMetadataTests(unittest.TestCase):
         self.assertIn("genre", fields)
         self.assertTrue(needs_online_metadata(item))
 
+    def test_tagged_title_matching_filename_is_preserved(self):
+        item = metadata(
+            path=Path("/music/Space Song.flac"),
+            filename="Space Song.flac",
+            title="Space Song",
+            artist="Beach House",
+            album="Unknown Album",
+            album_artist="Beach House",
+            year="",
+            genre="",
+            tagged=True,
+        )
+
+        self.assertNotIn("title", missing_metadata_fields(item))
+
     def test_complete_local_tags_do_not_need_web_lookup(self):
         item = metadata(
             title="Space Song",
