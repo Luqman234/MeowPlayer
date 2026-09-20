@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -131,6 +132,25 @@ def filename_artist_title(path):
 def _lucene_quote(value):
     text = str(value or "").replace("\\", "\\\\").replace('"', '\\"')
     return f'"{text}"'
+
+
+def _normalized_identity(value):
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(
+        char
+        for char in normalized
+        if char.isalnum()
+    )
+
+
+def _identity_matches(expected, actual):
+    expected_key = _normalized_identity(expected)
+    actual_key = _normalized_identity(actual)
+
+    if not expected_key or not actual_key:
+        return False
+
+    return expected_key == actual_key
 
 
 def _artist_credit_text(credits):
@@ -318,14 +338,35 @@ class MusicBrainzClient:
         return unique
 
     @staticmethod
-    def _candidate_acceptable(recording, duration, has_artist):
+    def _candidate_acceptable(
+        recording,
+        duration,
+        expected_title,
+        expected_artist,
+    ):
         try:
             score = int(recording.get("score") or 0)
         except (TypeError, ValueError):
             score = 0
 
-        threshold = 82 if has_artist else 90
+        threshold = 82 if expected_artist else 90
         if score < threshold:
+            return False
+
+        remote_title = str(recording.get("title") or "").strip()
+        if expected_title and not _identity_matches(
+            expected_title,
+            remote_title,
+        ):
+            return False
+
+        remote_artist = _artist_credit_text(
+            recording.get("artist-credit")
+        )
+        if expected_artist and not _identity_matches(
+            expected_artist,
+            remote_artist,
+        ):
             return False
 
         try:
@@ -336,6 +377,15 @@ class MusicBrainzClient:
         if duration > 0 and remote_duration > 0:
             tolerance = max(10.0, duration * 0.08)
             if abs(duration - remote_duration) > tolerance:
+                return False
+
+        # A title-only lookup is ambiguous by nature. Require a usable local
+        # duration and a fairly close remote duration before trusting it to
+        # supply identity metadata such as artist/album.
+        if not expected_artist:
+            if duration <= 0 or remote_duration <= 0:
+                return False
+            if abs(duration - remote_duration) > max(4.0, duration * 0.03):
                 return False
 
         return True
@@ -349,7 +399,7 @@ class MusicBrainzClient:
         saw_network_error = False
         last_query = ""
 
-        for query, _, artist in self._queries_for(snapshot):
+        for query, expected_title, expected_artist in self._queries_for(snapshot):
             last_query = query
             payload, status = self._request_json(
                 "/recording/",
@@ -375,7 +425,8 @@ class MusicBrainzClient:
                 if self._candidate_acceptable(
                     recording,
                     duration,
-                    bool(artist),
+                    expected_title,
+                    expected_artist,
                 ):
                     return recording, query, saw_network_error
 
