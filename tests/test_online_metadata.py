@@ -187,6 +187,42 @@ class OnlineMetadataTests(unittest.TestCase):
         self.assertEqual(result.source_id, "recording-id")
         self.assertEqual(calls[1][0], "/recording/recording-id")
 
+    def test_high_score_wrong_artist_is_rejected(self):
+        client = MusicBrainzClient()
+        client._request_json = lambda path, params=None: (
+            {
+                "recordings": [
+                    {
+                        "id": "wrong-artist",
+                        "score": 100,
+                        "title": "Space Song",
+                        "length": 320000,
+                        "artist-credit": [
+                            {"name": "Definitely Not Beach House"}
+                        ],
+                    }
+                ]
+            },
+            "ok",
+        )
+        item = metadata(
+            title="Space Song",
+            artist="Beach House",
+            duration=320.0,
+        )
+        snapshot = {
+            "path": str(item.path),
+            "title": item.title,
+            "artist": item.artist,
+            "album": item.album,
+            "duration": item.duration,
+            "missing": missing_metadata_fields(item),
+        }
+
+        result = client.fetch(snapshot)
+
+        self.assertEqual(result.status, "not-found")
+
     def test_large_duration_mismatch_rejects_false_match(self):
         client = MusicBrainzClient()
         client._request_json = lambda path, params=None: (
