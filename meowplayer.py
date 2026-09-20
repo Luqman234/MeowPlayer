@@ -40,7 +40,7 @@ from mpris_support import MPRISBridge
 from visualizer import AudioVisualizer
 
 
-__version__ = "0.13.1"
+__version__ = "0.14.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -94,6 +94,14 @@ CAT_QUOTES = [
     "The terminal is warm. This is now legally a cat bed.",
     "ReplayGain: because apparently the cat has standards.",
     "The cat has read the documentation. This changes nothing.",
+    "The cat has discovered Unicode stars and become judgmental.",
+    "The album art has been inspected for legally sufficient rectangles.",
+    "The cat insists the lyrics are about it. Evidence remains weak.",
+    "One paw on the keyboard is apparently a valid UI event.",
+    "Your queue has developed a small but manageable ecosystem.",
+    "The visualizer is expensive string wiggling. The cat approves.",
+    "SQLite remembers. The cat absolutely does not.",
+    "Five stars were found in Unicode. Authority has been abused.",
 ]
 
 CAT_INCIDENTS = (
@@ -112,6 +120,13 @@ CAT_INCIDENTS = (
     "found one byte under the sofa. Ownership remains disputed.",
     "pressed a key nobody mapped. Somehow nothing exploded.",
     "has determined that 100% volume is an indoor voice.",
+    "gave the current track one star, then knocked the scorecard off the desk.",
+    "attempted to climb into the album art. Perspective remains confusing.",
+    "misheard the lyrics and is now confidently singing the wrong song.",
+    "has begun rating every silence between tracks.",
+    "found five Unicode stars and immediately formed a review board.",
+    "sat on the right half of the split view and called it usability testing.",
+    "declared the lyrics panel a legally protected sunbeam.",
 )
 
 PET_REACTIONS = (
@@ -123,7 +138,37 @@ PET_REACTIONS = (
     "approved the current track by closing both eyes.",
     "received affection and immediately demanded another interrupt.",
     "is now emotionally cached.",
+    "has started purring in semver.",
+    "accepted the scritch and closed one unresolved issue.",
+    "bapped the rating system and accidentally gave you five stars.",
 )
+
+RATING_REACTIONS = {
+    0: (
+        "The scorecard has been shredded. This track is officially unjudged.",
+        "The cat has recused itself from musical criticism.",
+    ),
+    1: (
+        "One star. The cat stared at the speaker and slowly left the room.",
+        "The cat requests that the waveform explain itself.",
+    ),
+    2: (
+        "Two stars. The cat has heard worse and refuses to provide examples.",
+        "Two stars. One ear moved. No further praise was authorized.",
+    ),
+    3: (
+        "Three stars. The cat remains cautiously seated.",
+        "Three stars. Acceptable purring conditions have been detected.",
+    ),
+    4: (
+        "Four stars. One ear has perked up with measurable enthusiasm.",
+        "Four stars. The cat has stopped pretending not to enjoy it.",
+    ),
+    5: (
+        "FIVE STARS. The cat has declared this legally excellent.",
+        "Five stars. The track has passed the extremely unofficial sniff test.",
+    ),
+}
 
 CAT_MASCOT = (
     " /\\_/\\",
@@ -1771,6 +1816,7 @@ class MeowPlayer:
             str(self.songs[index].resolve()),
             {
                 "favorite": False,
+                "rating": 0,
                 "play_count": 0,
                 "last_played_ns": None,
                 "added_at_ns": 0,
@@ -2000,6 +2046,26 @@ class MeowPlayer:
 
         return indices
 
+    def rating_stars(self, index, include_unrated=False):
+        if index is None or index < 0 or index >= len(self.songs):
+            return ""
+
+        rating = int(self.stats_for(index).get("rating", 0) or 0)
+        rating = max(0, min(5, rating))
+        if rating == 0 and not include_unrated:
+            return ""
+        return "★" * rating + "☆" * (5 - rating)
+
+    def decorate_track_row(self, index, text):
+        stats = self.stats_for(index)
+        prefix = ""
+        if stats.get("favorite"):
+            prefix = "♥ " if self.serious_mode else "🐾 "
+
+        stars = self.rating_stars(index)
+        suffix = f" · {stars}" if stars else ""
+        return f"{prefix}{text}{suffix}"
+
     def track_row_text(self, index):
         meta = self.meta(index)
         duration = (
@@ -2015,14 +2081,13 @@ class MeowPlayer:
                 text += f" · {meta.album}"
             if meta.genre:
                 text += genre
-            if self.stats_for(index)["favorite"]:
-                text = f"★ {text}"
-            return text + duration
+            return self.decorate_track_row(index, text) + duration
 
         if self.library_view == "history":
             stats = self.stats_for(index)
             count = stats["play_count"]
-            return f"{meta.artist_title} · played {count}×{duration}"
+            text = f"{meta.artist_title} · played {count}×"
+            return self.decorate_track_row(index, text) + duration
 
         if self.library_view == "artists":
             text = meta.title
@@ -2032,7 +2097,7 @@ class MeowPlayer:
                 text += f" ({meta.year})"
             if meta.genre:
                 text += genre
-            return text + duration
+            return self.decorate_track_row(index, text) + duration
 
         if self.library_view == "albums":
             number = (
@@ -2040,9 +2105,10 @@ class MeowPlayer:
                 if meta.track_number
                 else "    "
             )
-            return f"{number}{meta.title} — {meta.artist}{duration}"
+            text = f"{number}{meta.title} — {meta.artist}"
+            return self.decorate_track_row(index, text) + duration
 
-        return f"{meta.filename}{duration}"
+        return self.decorate_track_row(index, meta.filename) + duration
 
     def library_rows(self):
         if self.smart_top_level():
@@ -2318,6 +2384,75 @@ class MeowPlayer:
                 f"{meta.artist_title}"
             )
         )
+
+    def rating_target_index(self):
+        if self.view == "library":
+            if not self.library_selection_is_track():
+                return None
+            return self.selected_library_song()
+
+        if self.view == "stash" and self.catnip_stash:
+            position = max(
+                0,
+                min(self.stash_selected, len(self.catnip_stash) - 1),
+            )
+            return self.catnip_stash[position]
+
+        return self.current
+
+    def adjust_rating(self, delta):
+        index = self.rating_target_index()
+        if index is None:
+            self.set_status(
+                "Select a track before changing its rating.",
+                "Open a real meow before the cat can judge it."
+            )
+            return False
+
+        if self.catalog is None:
+            self.set_status(
+                "Ratings unavailable without the Cat Catalog.",
+                "The rating clipboard fell out of the Cat Catalog."
+            )
+            return False
+
+        old_rating = int(self.stats_for(index).get("rating", 0) or 0)
+        new_rating = max(0, min(5, old_rating + int(delta)))
+        if new_rating == old_rating:
+            self.set_status(
+                f"Rating already at {new_rating}/5.",
+                "The cat has reached the edge of its extremely scientific scale."
+            )
+            return False
+
+        stored = self.catalog.set_rating(self.songs[index], new_rating)
+        if stored is None:
+            self.set_status(
+                "Could not store rating for this track.",
+                "The Cat Catalog ate the scorecard."
+            )
+            return False
+
+        self.refresh_library_stats()
+        meta = self.meta(index)
+        stars = self.rating_stars(index, include_unrated=True)
+        reaction = random.choice(RATING_REACTIONS[new_rating])
+
+        self.set_status(
+            (
+                f"Rating {new_rating}/5: {meta.artist_title}"
+                if new_rating
+                else f"Rating cleared: {meta.artist_title}"
+            ),
+            f"Cat verdict {stars}: {meta.artist_title} — {reaction}"
+        )
+
+        if not self.serious_mode:
+            self.trigger_cat_incident(
+                f"REVIEW BOARD: {reaction}",
+                duration=6.0,
+            )
+        return True
 
     def play(
         self,
@@ -3011,6 +3146,40 @@ class MeowPlayer:
             "text_width": max(46, column - 2),
         }
 
+    def lyrics_album_art_layout(
+        self,
+        height,
+        width,
+        image_path,
+        list_start,
+        list_height,
+    ):
+        if (
+            image_path is None
+            or width < 88
+            or height < 18
+            or list_height < 6
+        ):
+            return None
+
+        columns = min(30, max(18, width // 3))
+        column = width - columns - 2
+        lyrics_width = column - 1
+        if lyrics_width < 42:
+            return None
+
+        rows = min(list_height, max(6, min(14, list_height)))
+        row = list_start + max(0, (list_height - rows) // 2)
+
+        return {
+            "row": row,
+            "column": column + 1,
+            "columns": columns,
+            "rows": rows,
+            "lyrics_width": lyrics_width,
+            "divider_column": column,
+        }
+
     def draw_header(self, stdscr, width):
         if self.serious_mode:
             try:
@@ -3392,10 +3561,14 @@ class MeowPlayer:
                 continue
 
             album_art_path = self.current_album_art()
-            art_layout = self.album_art_layout(
-                height,
-                width,
-                album_art_path,
+            art_layout = (
+                None
+                if self.view == "lyrics"
+                else self.album_art_layout(
+                    height,
+                    width,
+                    album_art_path,
+                )
             )
             top_width = (
                 art_layout["text_width"]
@@ -3483,6 +3656,17 @@ class MeowPlayer:
                 except curses.error:
                     pass
 
+            current_rating = (
+                int(self.stats_for(self.current).get("rating", 0) or 0)
+                if self.current is not None
+                else 0
+            )
+            current_stars = (
+                self.rating_stars(self.current, include_unrated=True)
+                if self.current is not None
+                else "☆☆☆☆☆"
+            )
+
             if self.serious_mode:
                 shuffle_info = (
                     f"ON ({len(self.shuffle_bag)} left)"
@@ -3493,7 +3677,8 @@ class MeowPlayer:
                     f"Volume: {self.volume}%   "
                     f"Shuffle: {shuffle_info}   "
                     f"Repeat: {'ON' if self.repeat else 'OFF'}   "
-                    f"Queue: {len(self.catnip_stash)}"
+                    f"Queue: {len(self.catnip_stash)}   "
+                    f"Rating: {current_rating}/5"
                 )
             else:
                 pounce_info = (
@@ -3506,6 +3691,7 @@ class MeowPlayer:
                     f"Pounce: {pounce_info}   "
                     f"Tail-Chase: {'ON' if self.repeat else 'OFF'}   "
                     f"Catnip: {len(self.catnip_stash)}   "
+                    f"Verdict: {current_stars}   "
                     f"Mood: {self.cat_mood()}"
                     + (
                         f"   Scritches: {self.scritches}"
@@ -3640,10 +3826,36 @@ class MeowPlayer:
                 height - list_start - footer_lines - 1
             )
 
+            lyrics_art_layout = None
             if self.view == "lyrics":
+                lyrics_art_layout = self.lyrics_album_art_layout(
+                    height,
+                    width,
+                    album_art_path,
+                    list_start,
+                    list_height,
+                )
+                lyrics_width = (
+                    lyrics_art_layout["lyrics_width"]
+                    if lyrics_art_layout is not None
+                    else width
+                )
+
+                if lyrics_art_layout is not None:
+                    try:
+                        stdscr.vline(
+                            list_start,
+                            lyrics_art_layout["divider_column"],
+                            curses.ACS_VLINE,
+                            list_height,
+                            curses.A_DIM,
+                        )
+                    except curses.error:
+                        pass
+
                 self.draw_lyrics(
                     stdscr,
-                    width,
+                    lyrics_width,
                     list_start,
                     list_height,
                 )
@@ -3676,13 +3888,13 @@ class MeowPlayer:
             if self.view == "lyrics":
                 if self.serious_mode:
                     controls = (
-                        "↑↓ Scroll  ENTER Follow  L Back  V Visualizer  "
+                        "↑↓ Scroll  ENTER Follow  [ ] Rate  L Back  V Visualizer  "
                         "N/P Track  Space Pause  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
-                        "↑↓ Scroll  ENTER Follow  L Close Songbook  V Spectrum  "
+                        "↑↓ Scroll  ENTER Follow  [ ] Judge  L Close Songbook  "
                         "N/P Meow  G Pet  Space Paws  X Escape"
                     )
                     quote = self.cat_footer_message()
@@ -3690,26 +3902,26 @@ class MeowPlayer:
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Open/Play  1-7 Views  F Favorite  "
-                        "L Lyrics  V Viz  M Mixes  Q Queue  X Quit"
+                        "[ ] Rate  L Lyrics  V Viz  M Mixes  Q Queue  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Open/Purr  1-7 Nests  F Pawmark  "
-                        "L Songbook  V Spectrum  M Mixes  G Pet  Q Catnip  X Escape"
+                        "[ ] Judge  L Songbook  M Mixes  G Pet  Q Catnip  X Escape"
                     )
                     quote = self.cat_footer_message()
             else:
                 if self.serious_mode:
                     controls = (
-                        "↑↓ Select  ENTER Play  D Remove  J/K Move  C Clear  "
-                        "W Save .m3u  O Load .m3u  Q Library  X Quit"
+                        "↑↓ Select  ENTER Play  [ ] Rate  D Remove  J/K Move  "
+                        "C Clear  W Save .m3u  O Load .m3u  Q Library  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
-                        "↑↓ Choose  ENTER Devour  D Yeet  J/K Rearrange  C Spill  "
-                        "W Bury .m3u  O Dig up .m3u  G Pet  Q Nest  X Escape"
+                        "↑↓ Choose  ENTER Devour  [ ] Judge  D Yeet  J/K Rearrange  "
+                        "C Spill  W Bury .m3u  O Dig up .m3u  G Pet  Q Nest  X Escape"
                     )
                     quote = self.cat_footer_message()
 
@@ -3735,13 +3947,18 @@ class MeowPlayer:
 
             stdscr.refresh()
 
-            if art_layout is not None:
+            render_art_layout = (
+                lyrics_art_layout
+                if self.view == "lyrics"
+                else art_layout
+            )
+            if render_art_layout is not None:
                 self.album_art.render(
                     album_art_path,
-                    art_layout["row"],
-                    art_layout["column"],
-                    art_layout["columns"],
-                    art_layout["rows"],
+                    render_art_layout["row"],
+                    render_art_layout["column"],
+                    render_art_layout["columns"],
+                    render_art_layout["rows"],
                 )
             else:
                 self.album_art.clear(free_data=False)
@@ -3796,6 +4013,14 @@ class MeowPlayer:
 
             if key in (ord("g"), ord("G")):
                 self.pet_cat()
+                continue
+
+            if key == ord("["):
+                self.adjust_rating(-1)
+                continue
+
+            if key == ord("]"):
+                self.adjust_rating(1)
                 continue
 
             if key in (ord("v"), ord("V")):
