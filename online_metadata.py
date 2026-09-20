@@ -285,7 +285,8 @@ class MusicBrainzClient:
         artist = str(snapshot.get("artist") or "").strip()
         album = str(snapshot.get("album") or "").strip()
 
-        if title == path.stem:
+        missing = set(snapshot.get("missing") or ())
+        if "title" in missing:
             title = ""
 
         if artist == "Unknown Artist":
