@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _xdg_cache_home():
@@ -73,7 +73,7 @@ class LibraryCatalog:
             "PRAGMA user_version"
         ).fetchone()[0]
 
-        if version not in (0, 1, 2, SCHEMA_VERSION):
+        if version not in (0, 1, 2, 3, SCHEMA_VERSION):
             raise RuntimeError(
                 f"Unsupported Cat Catalog schema version {version}; "
                 f"expected <= {SCHEMA_VERSION}."
@@ -98,6 +98,7 @@ class LibraryCatalog:
                 tagged INTEGER NOT NULL,
                 last_scanned_ns INTEGER NOT NULL,
                 favorite INTEGER NOT NULL DEFAULT 0,
+                rating INTEGER NOT NULL DEFAULT 0,
                 play_count INTEGER NOT NULL DEFAULT 0,
                 last_played_ns INTEGER,
                 added_at_ns INTEGER NOT NULL DEFAULT 0,
@@ -117,6 +118,10 @@ class LibraryCatalog:
             (
                 "favorite",
                 "ALTER TABLE tracks ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "rating",
+                "ALTER TABLE tracks ADD COLUMN rating INTEGER NOT NULL DEFAULT 0",
             ),
             (
                 "play_count",
@@ -383,6 +388,42 @@ class LibraryCatalog:
         self.connection.commit()
         return favorite
 
+    def rating(self, path):
+        row = self.connection.execute(
+            """
+            SELECT rating
+            FROM tracks
+            WHERE path = ? AND root = ?
+            """,
+            (str(Path(path).resolve()), str(self.music_dir)),
+        ).fetchone()
+        return int(row["rating"]) if row is not None else 0
+
+    def set_rating(self, path, rating):
+        try:
+            rating = int(rating)
+        except (TypeError, ValueError):
+            rating = 0
+        rating = max(0, min(5, rating))
+
+        cursor = self.connection.execute(
+            """
+            UPDATE tracks
+            SET rating = ?
+            WHERE path = ? AND root = ?
+            """,
+            (
+                rating,
+                str(Path(path).resolve()),
+                str(self.music_dir),
+            ),
+        )
+        if cursor.rowcount <= 0:
+            return None
+
+        self.connection.commit()
+        return rating
+
     def record_play(self, path, played_at_ns=None):
         resolved = str(Path(path).resolve())
         played_at_ns = int(played_at_ns or time.time_ns())
@@ -412,7 +453,7 @@ class LibraryCatalog:
     def play_stats(self):
         rows = self.connection.execute(
             """
-            SELECT path, favorite, play_count, last_played_ns, added_at_ns
+            SELECT path, favorite, rating, play_count, last_played_ns, added_at_ns
             FROM tracks
             WHERE root = ?
             """,
@@ -421,6 +462,7 @@ class LibraryCatalog:
         return {
             row["path"]: {
                 "favorite": bool(row["favorite"]),
+                "rating": int(row["rating"]),
                 "play_count": int(row["play_count"]),
                 "last_played_ns": row["last_played_ns"],
                 "added_at_ns": int(row["added_at_ns"]),
