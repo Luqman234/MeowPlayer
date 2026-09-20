@@ -1,0 +1,48 @@
+name: Live MusicBrainz Probe Strict
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/live-musicbrainz-probe-strict.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  live-musicbrainz-strict:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Probe strict MusicBrainz matching
+        run: |
+          python - <<'PY'
+          from online_metadata import MusicBrainzClient
+
+          client = MusicBrainzClient(timeout=12.0)
+          snapshot = {
+              'path': '/tmp/Space Song.flac',
+              'title': 'Space Song',
+              'artist': 'Beach House',
+              'album': '',
+              'duration': 0.0,
+              'missing': ('album', 'album_artist', 'year', 'genre'),
+          }
+
+          result = client.fetch(snapshot)
+          assert result.status == 'found', result
+          assert result.title.casefold() == 'space song', result
+          assert result.artist.casefold() == 'beach house', result
+          assert result.source_id, result
+
+          print('LIVE_MUSICBRAINZ_STRICT_OK')
+          print('title:', result.title)
+          print('artist:', result.artist)
+          print('album:', result.album)
+          print('year:', result.year)
+          print('genre:', result.genre)
+          print('score:', result.score)
+          print('source_id:', result.source_id)
+          PY
