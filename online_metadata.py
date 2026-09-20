@@ -297,10 +297,15 @@ class MusicBrainzClient:
         candidates = []
 
         if title and artist:
-            query = (
-                f"recording:{_lucene_quote(title)} AND "
-                f"artist:{_lucene_quote(artist)}"
-            )
+            query_parts = [
+                f"recording:{_lucene_quote(title)}",
+                f"artistname:{_lucene_quote(artist)}",
+            ]
+            if album:
+                query_parts.append(
+                    f"release:{_lucene_quote(album)}"
+                )
+            query = " AND ".join(query_parts)
             candidates.append((query, title, artist))
         elif title:
             candidates.append(
@@ -314,7 +319,7 @@ class MusicBrainzClient:
             if file_artist:
                 query = (
                     f"recording:{_lucene_quote(file_title)} AND "
-                    f"artist:{_lucene_quote(file_artist)}"
+                    f"artistname:{_lucene_quote(file_artist)}"
                 )
                 candidates.append((query, file_title, file_artist))
             else:
@@ -406,7 +411,7 @@ class MusicBrainzClient:
                 {
                     "query": query,
                     "fmt": "json",
-                    "limit": 5,
+                    "limit": 10,
                 },
             )
             if status == "network-error":
