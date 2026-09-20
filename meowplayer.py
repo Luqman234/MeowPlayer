@@ -533,6 +533,25 @@ class MPVController:
         value = self.get_property("path")
         return str(value) if value else None
 
+    def wait_for_path(self, filename, timeout=0.35):
+        try:
+            expected = Path(filename).expanduser().resolve()
+        except (OSError, RuntimeError, TypeError):
+            return False
+
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while time.monotonic() < deadline:
+            current = self.current_path()
+            if current:
+                try:
+                    if Path(current).expanduser().resolve() == expected:
+                        return True
+                except (OSError, RuntimeError, TypeError):
+                    pass
+            time.sleep(0.01)
+
+        return False
+
     def pause(self):
         self.set_property("pause", True)
 
@@ -2510,6 +2529,17 @@ class MeowPlayer:
                 response
                 and response.get("error") == "success"
             )
+
+            # mpv can acknowledge playlist-play-index while an EOF handoff is
+            # happening, then briefly end up between entries
+            # (playlist-current-pos == -1). Verify the target really became
+            # current before trusting the successful command. If it did not,
+            # recover through an explicit load below.
+            if advanced:
+                advanced = self.mpv.wait_for_path(
+                    self.songs[index],
+                    timeout=0.35,
+                )
 
         if not advanced:
             self.mpv.clear_future_playlist()
