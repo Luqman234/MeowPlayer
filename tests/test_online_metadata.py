@@ -116,6 +116,23 @@ class OnlineMetadataTests(unittest.TestCase):
         self.assertEqual(artist, "Beach House")
         self.assertEqual(title, "Space Song")
 
+    def test_query_keeps_authoritative_title_equal_to_filename(self):
+        client = MusicBrainzClient()
+        snapshot = {
+            "path": "/music/Space Song.flac",
+            "title": "Space Song",
+            "artist": "Beach House",
+            "album": "",
+            "duration": 0.0,
+            "missing": ("album", "year", "genre"),
+        }
+
+        queries = client._queries_for(snapshot)
+
+        self.assertTrue(queries)
+        self.assertIn('recording:"Space Song"', queries[0][0])
+        self.assertIn('artistname:"Beach House"', queries[0][0])
+
     def test_musicbrainz_query_uses_recording_artist_name_field(self):
         client = MusicBrainzClient()
         item = metadata(
