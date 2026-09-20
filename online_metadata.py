@@ -45,7 +45,8 @@ def missing_metadata_fields(metadata):
     year = str(getattr(metadata, "year", "") or "").strip()
     genre = str(getattr(metadata, "genre", "") or "").strip()
 
-    if not title or title == path.stem:
+    tagged = bool(getattr(metadata, "tagged", False))
+    if not title or (title == path.stem and not tagged):
         missing.append("title")
     if not artist or artist == "Unknown Artist":
         missing.append("artist")
