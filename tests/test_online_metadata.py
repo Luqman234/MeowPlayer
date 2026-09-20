@@ -116,6 +116,30 @@ class OnlineMetadataTests(unittest.TestCase):
         self.assertEqual(artist, "Beach House")
         self.assertEqual(title, "Space Song")
 
+    def test_musicbrainz_query_uses_recording_artist_name_field(self):
+        client = MusicBrainzClient()
+        item = metadata(
+            title="Space Song",
+            artist="Beach House",
+            album="Depression Cherry",
+            duration=320.0,
+        )
+        snapshot = {
+            "path": str(item.path),
+            "title": item.title,
+            "artist": item.artist,
+            "album": item.album,
+            "duration": item.duration,
+            "missing": missing_metadata_fields(item),
+        }
+
+        queries = client._queries_for(snapshot)
+
+        self.assertTrue(queries)
+        self.assertIn('recording:"Space Song"', queries[0][0])
+        self.assertIn('artistname:"Beach House"', queries[0][0])
+        self.assertIn('release:"Depression Cherry"', queries[0][0])
+
     def test_musicbrainz_result_extracts_metadata_and_genre(self):
         client = MusicBrainzClient()
         responses = [
