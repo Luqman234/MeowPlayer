@@ -211,6 +211,7 @@ class LyricsTests(unittest.TestCase):
                 manager = LyricsManager(
                     enabled=True,
                     online_enabled=True,
+                    cache_dir=root / "cache",
                     request_timeout=0.25,
                 )
                 self.assertIsNone(manager.load(track))
@@ -247,6 +248,7 @@ class LyricsTests(unittest.TestCase):
                 manager = LyricsManager(
                     enabled=True,
                     online_enabled=True,
+                    cache_dir=root / "cache",
                     request_timeout=0.25,
                 )
                 self.assertIsNone(manager.load(track))
