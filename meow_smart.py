@@ -57,6 +57,7 @@ _TEXT_FIELDS = {
 }
 _NUMBER_FIELDS = {
     "duration",
+    "rating",
     "play_count",
     "last_played_ns",
     "added_at_ns",
@@ -80,6 +81,7 @@ def _stats_for(metadata, stats_by_path, index):
         path,
         {
             "favorite": False,
+            "rating": 0,
             "play_count": 0,
             "last_played_ns": None,
             "added_at_ns": 0,
@@ -223,6 +225,8 @@ def _field_value(metadata, stats_by_path, index, field):
 
     if field == "favorite":
         return bool(stats["favorite"])
+    if field == "rating":
+        return int(stats.get("rating", 0) or 0)
     if field == "played":
         return int(stats["play_count"]) > 0
     if field == "play_count":
@@ -557,6 +561,40 @@ def build_smart_playlists(
         ),
     )
 
+    top_rated = sorted(
+        (
+            index
+            for index in indices
+            if int(
+                _stats_for(
+                    metadata,
+                    stats_by_path,
+                    index,
+                ).get("rating", 0)
+                or 0
+            )
+            > 0
+        ),
+        key=lambda index: (
+            -int(
+                _stats_for(
+                    metadata,
+                    stats_by_path,
+                    index,
+                ).get("rating", 0)
+                or 0
+            ),
+            -int(
+                _stats_for(
+                    metadata,
+                    stats_by_path,
+                    index,
+                )["play_count"]
+            ),
+            metadata[index].title.casefold(),
+        ),
+    )
+
     playlists = [
         SmartPlaylist(
             "pawmarked",
@@ -587,6 +625,12 @@ def build_smart_playlists(
             "Never Purrred",
             "Tracks with a play count of zero.",
             tuple(unplayed),
+        ),
+        SmartPlaylist(
+            "top-rated",
+            "Top Rated",
+            "Tracks ordered by your 0-5 star rating.",
+            tuple(top_rated),
         ),
     ]
 
