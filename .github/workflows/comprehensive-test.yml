@@ -545,6 +545,7 @@ jobs:
               replaygain_mode="track",
               lyrics_enabled=True,
               lyrics_online_enabled=False,
+              online_metadata_enabled=False,
               visualizer_enabled=False,
               filesystem_watch_enabled=False,
           )
