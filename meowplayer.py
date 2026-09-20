@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 try:
@@ -37,6 +37,12 @@ from meow_persistence import (
     smart_mixes_path,
 )
 from mpris_support import MPRISBridge
+from online_metadata import (
+    OnlineMetadataManager,
+    merge_missing_metadata,
+    metadata_lookup_due,
+    needs_online_metadata,
+)
 from visualizer import AudioVisualizer
 
 
@@ -605,6 +611,7 @@ class MeowPlayer:
         replaygain_preamp=0.0,
         lyrics_enabled=True,
         lyrics_online_enabled=True,
+        online_metadata_enabled=True,
         visualizer_enabled=True,
         filesystem_watch_enabled=True,
     ):
@@ -622,6 +629,9 @@ class MeowPlayer:
             online_enabled=lyrics_online_enabled,
         )
         self.visualizer = AudioVisualizer(enabled=visualizer_enabled)
+        self.online_metadata = OnlineMetadataManager(
+            enabled=online_metadata_enabled
+        )
         self.current_lyrics = None
         self.lyrics_track_index = None
         self.lyrics_follow = True
@@ -665,6 +675,9 @@ class MeowPlayer:
         self.song_lookup = {
             song.resolve(): index for index, song in enumerate(self.songs)
         }
+        self.metadata_lookup_queued = (
+            self.queue_missing_metadata_enrichment()
+        )
         self.reload_custom_smart_mixes(silent=True)
 
         self.selected = 0
@@ -762,6 +775,15 @@ class MeowPlayer:
             f" Audio paws: gapless={self.gapless_mode}, "
             f"ReplayGain={self.replaygain_mode}."
         )
+        if self.metadata_lookup_queued:
+            initial_serious += (
+                f" Online metadata queued for "
+                f"{self.metadata_lookup_queued} incomplete track(s)."
+            )
+            initial_cat += (
+                f" The metadata cat is sniffing the internet for "
+                f"{self.metadata_lookup_queued} incomplete meow(s)."
+            )
 
         self.status_message = self.text(initial_serious, initial_cat)
         self.quote = random.choice(CAT_QUOTES)
@@ -1270,6 +1292,7 @@ class MeowPlayer:
 
     def shutdown(self):
         self.persist_state(force=True)
+        self.online_metadata.stop()
         self.mpris.stop()
         self.library_watcher.stop()
         self.album_art.clear(free_data=True)
@@ -1567,6 +1590,7 @@ class MeowPlayer:
             self.selected = 0
 
         self.sanitize_shuffle_bag()
+        self.queue_missing_metadata_enrichment()
 
         if self.current is not None:
             self.load_current_lyrics(self.current)
@@ -1603,6 +1627,108 @@ class MeowPlayer:
 
         self.rescan_library(summary)
         return True
+
+    def queue_missing_metadata_enrichment(self):
+        queued = 0
+        for metadata in self.metadata:
+            if not needs_online_metadata(metadata):
+                continue
+
+            if self.catalog is not None:
+                try:
+                    state = self.catalog.online_metadata_state(
+                        metadata.path
+                    )
+                except sqlite3.Error:
+                    state = None
+                if state is not None and not metadata_lookup_due(state):
+                    continue
+
+            if self.online_metadata.enqueue(metadata):
+                queued += 1
+        return queued
+
+    def process_online_metadata(self):
+        results = self.online_metadata.poll()
+        if not results:
+            return 0
+
+        changed_current = False
+        stored = False
+
+        for result in results:
+            try:
+                resolved = Path(result.path).expanduser().resolve()
+            except (OSError, RuntimeError, TypeError):
+                continue
+
+            index = self.song_lookup.get(resolved)
+            if index is None:
+                continue
+
+            metadata = self.metadata[index]
+
+            if result.status == "found":
+                merged_values = merge_missing_metadata(
+                    metadata,
+                    result,
+                )
+                merged = replace(metadata, **merged_values)
+                self.metadata[index] = merged
+
+                if self.catalog is not None:
+                    try:
+                        stored = (
+                            self.catalog.store_online_metadata_result(
+                                resolved,
+                                merged,
+                                status="found",
+                                source="musicbrainz",
+                                source_id=result.source_id,
+                                query=result.query,
+                            )
+                            or stored
+                        )
+                    except sqlite3.Error:
+                        pass
+
+                if index == self.current:
+                    changed_current = True
+                    self.set_status(
+                        (
+                            f"Metadata enriched from MusicBrainz: "
+                            f"{merged.artist_title}"
+                        ),
+                        (
+                            f"The internet cat identified this meow: "
+                            f"{merged.artist_title}"
+                        )
+                    )
+            elif self.catalog is not None:
+                try:
+                    stored = (
+                        self.catalog.mark_online_metadata_result(
+                            resolved,
+                            status=result.status,
+                            source="musicbrainz",
+                            source_id=result.source_id,
+                            query=result.query,
+                        )
+                        or stored
+                    )
+                except sqlite3.Error:
+                    pass
+
+        if stored and self.catalog is not None:
+            try:
+                self.catalog.commit()
+            except sqlite3.Error:
+                pass
+
+        if changed_current:
+            self.sync_mpris(force=True)
+
+        return len(results)
 
     def metadata_from_catalog(self, path, cached):
         return TrackMetadata(
@@ -3617,6 +3743,7 @@ class MeowPlayer:
         while True:
             self.process_external_actions()
             self.process_filesystem_watch()
+            self.process_online_metadata()
             self.persist_state()
             self.sync_mpris()
 
@@ -4458,6 +4585,14 @@ def parse_args():
         help="disable automatic LRCLIB lookup while keeping local lyrics enabled"
     )
     parser.add_argument(
+        "--no-online-metadata",
+        action="store_true",
+        help=(
+            "disable automatic MusicBrainz metadata enrichment "
+            "for incomplete tracks"
+        )
+    )
+    parser.add_argument(
         "--no-visualizer",
         action="store_true",
         help="disable the optional CAVA spectrum visualizer"
@@ -4551,6 +4686,10 @@ def main():
         bool(config.get("lyrics_online_enabled", True))
         and not args.no_online_lyrics
     )
+    online_metadata_enabled = (
+        bool(config.get("online_metadata_enabled", True))
+        and not args.no_online_metadata
+    )
     visualizer_enabled = (
         bool(config.get("visualizer_enabled", True))
         and not args.no_visualizer
@@ -4575,6 +4714,7 @@ def main():
             replaygain_preamp=replaygain_preamp,
             lyrics_enabled=lyrics_enabled,
             lyrics_online_enabled=lyrics_online_enabled,
+            online_metadata_enabled=online_metadata_enabled,
             visualizer_enabled=visualizer_enabled,
             filesystem_watch_enabled=filesystem_watch_enabled,
         )
