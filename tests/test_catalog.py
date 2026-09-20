@@ -71,6 +71,66 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(cached["duration"], 243.5)
         self.assertTrue(cached["tagged"])
 
+    def test_online_metadata_enrichment_is_cached_with_provenance(self):
+        song = self.make_song()
+        stat_result = song.stat()
+        self.cache_song(song)
+
+        enriched = fake_metadata(song)
+        enriched.artist = "Remote Cat"
+        enriched.album = "Remote Album"
+        enriched.year = "2024"
+        enriched.genre = "Dream Pop"
+
+        self.assertTrue(
+            self.catalog.store_online_metadata_result(
+                song,
+                enriched,
+                status="found",
+                source="musicbrainz",
+                source_id="mbid-123",
+                query='recording:"song"',
+                fetched_at_ns=123456,
+            )
+        )
+        self.catalog.commit()
+
+        cached = self.catalog.get(song, stat_result)
+        state = self.catalog.online_metadata_state(song)
+
+        self.assertEqual(cached["artist"], "Remote Cat")
+        self.assertEqual(cached["album"], "Remote Album")
+        self.assertEqual(cached["year"], "2024")
+        self.assertEqual(cached["genre"], "Dream Pop")
+        self.assertEqual(state["status"], "found")
+        self.assertEqual(state["source"], "musicbrainz")
+        self.assertEqual(state["source_id"], "mbid-123")
+        self.assertEqual(state["fetched_at_ns"], 123456)
+
+    def test_file_change_resets_online_metadata_lookup_state(self):
+        song = self.make_song(data=b"first")
+        self.cache_song(song)
+        enriched = fake_metadata(song)
+
+        self.catalog.store_online_metadata_result(
+            song,
+            enriched,
+            status="not-found",
+            query="old query",
+            fetched_at_ns=123,
+        )
+        self.catalog.commit()
+
+        song.write_bytes(b"a changed song body")
+        self.catalog.put(song, song.stat(), fake_metadata(song))
+        self.catalog.commit()
+
+        state = self.catalog.online_metadata_state(song)
+
+        self.assertEqual(state["status"], "")
+        self.assertEqual(state["query"], "")
+        self.assertEqual(state["fetched_at_ns"], 0)
+
     def test_changed_file_invalidates_cache_entry(self):
         song = self.make_song(data=b"first")
         original_stat = song.stat()
