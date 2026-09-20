@@ -1,11 +1,11 @@
 # MeowPlayer 🐱🎵
 
-**MeowPlayer 0.14.1** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
+**MeowPlayer 0.15.0** is a lightweight, keyboard-first, aggressively cat-themed terminal music player for Linux and Termux.
 
 Python and `curses` provide the interface, `mpv` handles playback, Mutagen reads music metadata, SQLite powers the persistent **Cat Catalog**, Watchdog keeps the library live, and Linux desktops can control the player through MPRIS / D-Bus.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.14.1 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.15.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -18,6 +18,49 @@ Tail-Chase: OFF   Catnip: 4   Verdict: ★★★★☆   Mood: Zoomies
 Music Nest / Songs — 842 meow(s)
 🐾 Space Song — Beach House · Depression Cherry · Dream Pop · ★★★★☆ · 05:20
 ```
+
+## What's new in 0.15.0 — The Metadata Cat Goes Online
+
+MeowPlayer can now automatically enrich incomplete track metadata from **MusicBrainz** without rewriting the audio file itself.
+
+Local tags always win. Online metadata is only allowed to fill missing or fallback values such as:
+
+```text
+filename-stem title
+Unknown Artist
+Unknown Album
+missing album artist
+missing year
+missing genre
+```
+
+The lookup happens in a single background worker so the TUI and playback stay responsive. MeowPlayer validates search confidence and compares MusicBrainz duration against the actual local file before accepting a result.
+
+```text
+local tags / filename
+        ↓
+missing metadata?
+        ↓ yes
+MusicBrainz recording search
+        ↓
+confidence + duration check
+        ↓
+fill missing fields only
+        ↓
+Cat Catalog cache
+```
+
+Results are cached in the SQLite Cat Catalog together with MusicBrainz provenance and lookup state. Successful results are normally reused for 30 days, misses for 7 days, and transient network failures become retryable after 15 minutes.
+
+MusicBrainz requests are serialized and rate-limited instead of launching one web request per track at once.
+
+Disable the feature for a run with:
+
+```bash
+meowplayer --no-online-metadata
+```
+
+The feature does **not** modify tags inside your MP3/FLAC/etc. files. It enriches MeowPlayer's own library view and cache only.
 
 ## What's new in 0.14.1 — The Cat Stops Lying About Lyrics
 
@@ -180,6 +223,9 @@ Library state is remapped by **file path**, not by old numeric index, so queue e
 - Recursive local music-library scanning
 - MP3, FLAC, OGG, Opus, WAV, M4A, AAC, and WMA discovery
 - Metadata for title, artist, album, album artist, track number, year, **genre**, and **duration**
+- Automatic **MusicBrainz metadata enrichment** for incomplete tracks
+- Local tags remain authoritative; online data only fills missing fields
+- Rate-limited background metadata lookup with persistent Cat Catalog caching and provenance
 - Persistent SQLite **Cat Catalog**
 - Incremental metadata caching for fast warm startups
 - Automatic invalidation for modified files and pruning for deleted files
@@ -261,6 +307,7 @@ meowplayer --replaygain track
 meowplayer --replaygain album --replaygain-preamp -1.0
 meowplayer --no-lyrics
 meowplayer --no-online-lyrics
+meowplayer --no-online-metadata
 meowplayer --no-visualizer
 meowplayer --no-watch
 meowplayer --version
@@ -332,6 +379,7 @@ MPRIS is intentionally disabled on Termux because a normal Linux desktop D-Bus s
 - Python **3.10+**
 - `mpv`
 - Mutagen
+- Internet access *(optional, for LRCLIB lyrics and MusicBrainz metadata enrichment)*
 - `dbus-next` for Linux MPRIS integration
 - Pillow for album-art normalization and caching
 - Watchdog 6.x for live filesystem events
@@ -1392,7 +1440,7 @@ The mascot reacts to player state:
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.14.1 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.15.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -1501,8 +1549,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.14.1-py3-none-any.whl
-└── meowplayer_terminal-0.14.1.tar.gz
+├── meowplayer_terminal-0.15.0-py3-none-any.whl
+└── meowplayer_terminal-0.15.0.tar.gz
 ```
 
 The installed CLI is still:
@@ -1523,6 +1571,7 @@ MeowPlayer/
 ├── meow_smart.py
 ├── meow_persistence.py
 ├── mpris_support.py
+├── online_metadata.py
 ├── visualizer.py
 ├── pyproject.toml
 ├── requirements.txt
