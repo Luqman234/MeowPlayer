@@ -1,3 +1,4 @@
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -252,8 +253,13 @@ class OnlineMetadataTests(unittest.TestCase):
         )
 
     def test_manager_deduplicates_pending_track(self):
+        release = threading.Event()
+        started = threading.Event()
+
         class FakeClient:
             def fetch(self, snapshot):
+                started.set()
+                release.wait(timeout=1.0)
                 return OnlineMetadataResult(
                     path=snapshot["path"],
                     status="found",
@@ -268,8 +274,10 @@ class OnlineMetadataTests(unittest.TestCase):
         item = metadata()
 
         self.assertTrue(manager.enqueue(item))
+        self.assertTrue(started.wait(timeout=1.0))
         self.assertFalse(manager.enqueue(item))
 
+        release.set()
         result = None
         for _ in range(100):
             polled = manager.poll()
