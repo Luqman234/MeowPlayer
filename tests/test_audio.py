@@ -3,7 +3,13 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from meowplayer import MPVController, MeowPlayer, build_mpv_command
+from meowplayer import (
+    MPVController,
+    MeowPlayer,
+    TrackMetadata,
+    build_mpv_command,
+)
+from online_metadata import OnlineMetadataResult
 
 
 class FakeMPV:
@@ -252,6 +258,76 @@ class AudioEngineTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertIs(player.current_lyrics, document)
         self.assertIn("Lyrics downloaded", statuses[-1][0])
+
+    def test_online_metadata_enrichment_only_fills_missing_fields(self):
+        player = self.make_player(count=1, current=0)
+        player.metadata = [
+            TrackMetadata(
+                path=player.songs[0],
+                title="Local Title",
+                artist="Local Artist",
+                album="Unknown Album",
+                album_artist="Local Artist",
+                track_number=0,
+                track_text="",
+                year="",
+                genre="",
+                duration=200.0,
+                folder="Music Root",
+                filename="0.flac",
+                tagged=True,
+            )
+        ]
+        result = OnlineMetadataResult(
+            path=str(player.songs[0].resolve()),
+            status="found",
+            query="test query",
+            source_id="mbid",
+            title="Remote Wrong Title",
+            artist="Remote Wrong Artist",
+            album="Remote Album",
+            album_artist="Remote Wrong Album Artist",
+            year="2020",
+            genre="dream pop",
+        )
+        player.online_metadata = SimpleNamespace(
+            poll=lambda: [result],
+        )
+
+        stored = []
+
+        class Catalog:
+            def store_online_metadata_result(
+                self,
+                path,
+                metadata,
+                **kwargs,
+            ):
+                stored.append((Path(path), metadata, kwargs))
+                return True
+
+            def commit(self):
+                return None
+
+        player.catalog = Catalog()
+        player.sync_mpris = lambda *args, **kwargs: None
+        player.set_status = lambda *args, **kwargs: None
+
+        self.assertEqual(player.process_online_metadata(), 1)
+
+        enriched = player.metadata[0]
+        self.assertEqual(enriched.title, "Local Title")
+        self.assertEqual(enriched.artist, "Local Artist")
+        self.assertEqual(enriched.album_artist, "Local Artist")
+        self.assertEqual(enriched.album, "Remote Album")
+        self.assertEqual(enriched.year, "2020")
+        self.assertEqual(enriched.genre, "dream pop")
+        self.assertEqual(stored[0][2]["source"], "musicbrainz")
+
+    def test_meowplayer_constructor_accepts_online_metadata_flag(self):
+        parameters = inspect.signature(MeowPlayer.__init__).parameters
+
+        self.assertIn("online_metadata_enabled", parameters)
 
     def test_meowplayer_constructor_accepts_online_lyrics_flag(self):
         parameters = inspect.signature(MeowPlayer.__init__).parameters

@@ -66,6 +66,7 @@ jobs:
             meow_smart.py \
             meow_persistence.py \
             mpris_support.py \
+            online_metadata.py \
             visualizer.py
 
       - name: Import every first-party module
@@ -80,6 +81,7 @@ jobs:
               "meow_smart",
               "meow_persistence",
               "mpris_support",
+              "online_metadata",
               "visualizer",
           ]
 
@@ -180,6 +182,7 @@ jobs:
           grep -q -- "--replaygain-preamp" /tmp/meowplayer-help.txt
           grep -q -- "--no-lyrics" /tmp/meowplayer-help.txt
           grep -q -- "--no-online-lyrics" /tmp/meowplayer-help.txt
+          grep -q -- "--no-online-metadata" /tmp/meowplayer-help.txt
           grep -q -- "--no-visualizer" /tmp/meowplayer-help.txt
           grep -q -- "--no-watch" /tmp/meowplayer-help.txt
           meowplayer --version
@@ -202,11 +205,13 @@ jobs:
           config = load_config()
           config["volume_test_marker"] = "ignored-extra-key"
           config["lyrics_online_enabled"] = False
+          config["online_metadata_enabled"] = False
           config["filesystem_watch_enabled"] = False
           assert save_config(config)
 
           loaded = load_config()
           assert loaded["lyrics_online_enabled"] is False
+          assert loaded["online_metadata_enabled"] is False
           assert loaded["filesystem_watch_enabled"] is False
 
           state = load_state()
@@ -540,6 +545,7 @@ jobs:
               replaygain_mode="track",
               lyrics_enabled=True,
               lyrics_online_enabled=False,
+              online_metadata_enabled=False,
               visualizer_enabled=False,
               filesystem_watch_enabled=False,
           )
