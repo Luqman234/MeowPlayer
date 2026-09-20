@@ -315,6 +315,7 @@ def _track_lookup_metadata(track_path):
         "artist": artist.strip(),
         "album": album.strip(),
         "duration": max(0.0, duration),
+        "filename_stem": track_path.stem.strip(),
         "audio": audio,
         "tags": tags,
     }
@@ -417,20 +418,36 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
         if synced:
             return LyricsFetchResult(synced, "found", query)
 
-    if not query:
+    search_queries = []
+    for candidate in (
+        query,
+        metadata.get("filename_stem", "").strip(),
+        title,
+    ):
+        normalized = " ".join(candidate.split())
+        if normalized and normalized.casefold() not in {
+            existing.casefold()
+            for existing in search_queries
+        }:
+            search_queries.append(normalized)
+
+    if not search_queries:
         return LyricsFetchResult("", "not-found", query)
 
-    payload, status = _lrclib_request(
-        "/api/search",
-        {"q": query},
-        timeout,
-    )
-    saw_network_error = saw_network_error or status == "network-error"
-    synced = _synced_lyrics_from_payload(payload)
-    if synced:
-        return LyricsFetchResult(synced, "found", query)
+    saw_successful_search = False
+    for search_query in search_queries:
+        payload, status = _lrclib_request(
+            "/api/search",
+            {"q": search_query},
+            timeout,
+        )
+        saw_network_error = saw_network_error or status == "network-error"
+        saw_successful_search = saw_successful_search or status == "ok"
+        synced = _synced_lyrics_from_payload(payload)
+        if synced:
+            return LyricsFetchResult(synced, "found", search_query)
 
-    if saw_network_error and payload is None:
+    if saw_network_error and not saw_successful_search:
         return LyricsFetchResult("", "network-error", query)
 
     return LyricsFetchResult("", "not-found", query)
