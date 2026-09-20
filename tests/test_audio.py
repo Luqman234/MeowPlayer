@@ -82,6 +82,104 @@ class AudioEngineTests(unittest.TestCase):
         )
         return player
 
+    def test_lyrics_album_art_split_layout_is_adaptive(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+
+        layout = player.lyrics_album_art_layout(
+            30,
+            120,
+            Path("/tmp/cover.png"),
+            10,
+            12,
+        )
+
+        self.assertIsNotNone(layout)
+        self.assertGreaterEqual(layout["lyrics_width"], 42)
+        self.assertGreater(layout["column"], layout["lyrics_width"])
+        self.assertLessEqual(layout["rows"], 12)
+
+        self.assertIsNone(
+            player.lyrics_album_art_layout(
+                30,
+                70,
+                Path("/tmp/cover.png"),
+                10,
+                12,
+            )
+        )
+        self.assertIsNone(
+            player.lyrics_album_art_layout(
+                30,
+                120,
+                None,
+                10,
+                12,
+            )
+        )
+
+    def test_cat_track_decoration_separates_pawmark_and_rating(self):
+        player = self.make_player(count=1, current=0)
+        player.serious_mode = False
+        player.library_stats = {
+            str(player.songs[0].resolve()): {
+                "favorite": True,
+                "rating": 4,
+                "play_count": 0,
+                "last_played_ns": None,
+                "added_at_ns": 0,
+            }
+        }
+
+        decorated = player.decorate_track_row(0, "Track 0")
+
+        self.assertTrue(decorated.startswith("🐾 "))
+        self.assertIn("★★★★☆", decorated)
+
+    def test_adjust_rating_updates_selected_library_track(self):
+        player = self.make_player(count=3, current=0)
+        player.view = "library"
+        player.library_view = "songs"
+        player.selected = 1
+        player.drill_artist = None
+        player.drill_album = None
+        player.smart_playlist_key = None
+        player.serious_mode = False
+        player.library_stats = {
+            str(path.resolve()): {
+                "favorite": False,
+                "rating": 0,
+                "play_count": 0,
+                "last_played_ns": None,
+                "added_at_ns": 0,
+            }
+            for path in player.songs
+        }
+
+        class RatingCatalog:
+            def __init__(self, stats):
+                self.stats = stats
+
+            def set_rating(self, path, rating):
+                self.stats[str(Path(path).resolve())]["rating"] = rating
+                return rating
+
+            def play_stats(self):
+                return self.stats
+
+        player.catalog = RatingCatalog(player.library_stats)
+        player.trigger_cat_incident = lambda *args, **kwargs: True
+        player.set_status = lambda *args, **kwargs: None
+
+        self.assertTrue(player.adjust_rating(1))
+        self.assertEqual(
+            player.library_stats[str(player.songs[1].resolve())]["rating"],
+            1,
+        )
+        self.assertEqual(
+            player.library_stats[str(player.songs[0].resolve())]["rating"],
+            0,
+        )
+
     def test_meowplayer_constructor_accepts_online_lyrics_flag(self):
         parameters = inspect.signature(MeowPlayer.__init__).parameters
 
