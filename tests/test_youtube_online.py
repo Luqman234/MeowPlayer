@@ -1,4 +1,3 @@
-import json
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -64,38 +63,18 @@ class YouTubeOnlineTests(unittest.TestCase):
         )
         self.assertEqual(tracks[1].duration_label, "--:--")
 
-    def test_search_uses_keyless_ytsearch_without_downloading(self):
-        payload = {
-            "entries": [
-                {
-                    "id": "cat001",
-                    "title": "Search Result",
-                    "uploader": "Meow Channel",
-                    "duration": 120,
-                }
-            ]
-        }
-        completed = SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(payload),
-            stderr="",
-        )
-        catalog = YouTubeCatalog(
-            enabled=True,
-            executable="/usr/bin/yt-dlp",
-        )
-
-        with mock.patch(
-            "youtube_online.subprocess.run",
-            return_value=completed,
-        ) as run:
-            tracks = catalog.search("porter robinson shelter", limit=5)
-
-        self.assertEqual(len(tracks), 1)
-        command = run.call_args.args[0]
-        self.assertIn("--flat-playlist", command)
-        self.assertIn("--skip-download", command)
-        self.assertIn("ytsearch5:porter robinson shelter", command)
+    def test_search_aggregates_background_results(self):
+        import queue
+        results = queue.SimpleQueue()
+        track = YouTubeTrack("cat001", "Search Result", "Meow Channel", 120, "https://youtube.com/watch?v=cat001")
+        results.put(("track", track))
+        results.put(("done", None))
+        catalog = YouTubeCatalog(enabled=True, executable="/usr/bin/yt-dlp")
+        with mock.patch("youtube_online.YouTubeSearchSession") as session:
+            session.return_value.results = results
+            self.assertEqual(catalog.search("shelter", limit=5), [track])
+            session.assert_called_once_with(catalog, "shelter", limit=5)
+            session.return_value.close.assert_called_once()
 
     def test_search_fails_soft_when_yt_dlp_is_missing(self):
         catalog = YouTubeCatalog(enabled=True, executable=None)
@@ -147,7 +126,7 @@ class YouTubeOnlineTests(unittest.TestCase):
         self.assertFalse(player._awaiting_mpv_path)
         self.assertEqual(player.mpv.loaded, [track.url])
         self.assertEqual(player.mpv.play_calls, 1)
-        self.assertIn("Resolving YouTube stream", statuses[-1][0])
+        self.assertIn("Loading YouTube stream", statuses[-1][0])
 
     def test_repeated_enter_does_not_restart_same_online_stream(self):
         player = MeowPlayer.__new__(MeowPlayer)
@@ -208,13 +187,13 @@ class YouTubeOnlineTests(unittest.TestCase):
         player.mpv.properties["time-pos"] = None
         player.mpv.properties["duration"] = None
 
-        self.assertTrue(player.refresh_online_playback_state(now=18.1))
+        self.assertTrue(player.refresh_online_playback_state(now=player._online_load_sent + 31))
         self.assertEqual(player.online_load_state, "failed")
 
         self.assertTrue(player.play_online(track, now=18.2))
         self.assertEqual(player.mpv.loaded, [track.url, track.url])
         self.assertEqual(player.mpv.play_calls, 2)
-        self.assertEqual(player.online_load_state, "resolving")
+        self.assertEqual(player.online_load_state, "loading")
 
     def test_online_stream_transitions_from_resolving_to_streaming(self):
         player = MeowPlayer.__new__(MeowPlayer)
@@ -243,7 +222,9 @@ class YouTubeOnlineTests(unittest.TestCase):
         player.mpv.properties["duration"] = None
         self.assertTrue(player.play_online(track, now=20.0))
 
-        player.mpv.properties["time-pos"] = 0.0
+        player.mpv.playback_events = {name: player._online_load_sent + 0.1
+                                      for name in ("start-file", "file-loaded", "playback-restart")}
+        player.mpv.properties["time-pos"] = 0.1
         player.mpv.properties["duration"] = 180.0
         self.assertTrue(player.refresh_online_playback_state(now=21.0))
 

@@ -6,6 +6,7 @@ on:
     paths:
       - "*.py"
       - "tests/**"
+      - "tools/**"
       - "examples/**"
       - "pyproject.toml"
       - "requirements.txt"
@@ -15,6 +16,7 @@ on:
     paths:
       - "*.py"
       - "tests/**"
+      - "tools/**"
       - "examples/**"
       - "pyproject.toml"
       - "requirements.txt"
@@ -713,6 +715,8 @@ jobs:
               )
 
           try:
+              assert player.stream_resolver is None
+              assert player.youtube_search_session is None
               assert len(player.songs) == 2, player.songs
               assert len(player.metadata) == 2
 
@@ -754,6 +758,11 @@ jobs:
           finally:
               player.shutdown()
           PY
+
+      - name: Exercise direct HTTP streams and observed mpv properties
+        env:
+          MEOW_REAL_MPV: "1"
+        run: python -m unittest discover -s tests -p test_mpv_http.py -v
 
       - name: Exercise real Watchdog/inotify event delivery
         run: |

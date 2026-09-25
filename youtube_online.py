@@ -1,8 +1,16 @@
 import json
 import logging
+import os
+import queue
+import selectors
 import shutil
 import subprocess
+import threading
+import time
+from collections import OrderedDict
+from concurrent.futures import CancelledError, Future
 from dataclasses import dataclass
+from urllib.parse import parse_qs, urlsplit
 
 
 LOGGER = logging.getLogger("meowplayer.youtube")
@@ -98,83 +106,21 @@ class YouTubeCatalog:
         if not query:
             return []
 
-        limit = self.default_limit if limit is None else int(limit)
-        limit = max(1, min(50, limit))
-        target = f"ytsearch{limit}:{query}"
-
-        command = [
-            self.executable,
-            "--flat-playlist",
-            "--dump-single-json",
-            "--skip-download",
-            "--no-warnings",
-            target,
-        ]
-
-        LOGGER.info(
-            "yt-dlp search start query=%r limit=%s executable=%s",
-            query,
-            limit,
-            self.executable,
-        )
-
+        # Compatibility helper for non-TUI callers. The UI consumes the session
+        # queue directly, so it can navigate and prefetch before search finishes.
+        session = YouTubeSearchSession(self, query, limit=limit)
+        tracks = []
         try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            LOGGER.warning(
-                "yt-dlp search timed out query=%r timeout=%s",
-                query,
-                self.timeout,
-            )
-            raise YouTubeSearchError(
-                f"YouTube search timed out after {self.timeout:.0f}s."
-            ) from exc
-        except OSError as exc:
-            LOGGER.exception("Could not launch yt-dlp executable=%s", self.executable)
-            raise YouTubeSearchError(
-                f"Could not launch yt-dlp: {exc}"
-            ) from exc
-
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "").strip()
-            LOGGER.warning(
-                "yt-dlp search failed query=%r returncode=%s stderr_tail=%r",
-                query,
-                completed.returncode,
-                detail[-500:],
-            )
-            if len(detail) > 240:
-                detail = detail[-240:]
-            raise YouTubeSearchError(
-                "yt-dlp search failed"
-                + (f": {detail}" if detail else ".")
-            )
-
-        try:
-            payload = json.loads(completed.stdout)
-        except (TypeError, json.JSONDecodeError) as exc:
-            LOGGER.warning(
-                "yt-dlp returned invalid JSON query=%r stdout_tail=%r",
-                query,
-                (completed.stdout or "")[-500:],
-            )
-            raise YouTubeSearchError(
-                "yt-dlp returned invalid search metadata."
-            ) from exc
-
-        tracks = self._tracks_from_payload(payload, limit=limit)
-        LOGGER.info(
-            "yt-dlp search complete query=%r results=%s",
-            query,
-            len(tracks),
-        )
-        return tracks
+            while True:
+                kind, value = session.results.get(timeout=self.timeout + 2)
+                if kind == "track":
+                    tracks.append(value)
+                elif kind == "error":
+                    raise YouTubeSearchError(value)
+                else:
+                    return tracks
+        finally:
+            session.close()
 
     @classmethod
     def _tracks_from_payload(cls, payload, limit=12):
@@ -277,3 +223,301 @@ class YouTubeCatalog:
                     return value
 
         return ""
+
+
+# Stream URLs and headers are deliberately held only in memory.
+class StreamResolutionError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class ResolvedStream:
+    video_id: str
+    url: str
+    headers: dict[str, str]
+    format_id: str | None
+    resolved_at: float
+    expires_at: float
+
+    def valid(self, now=None):
+        return (time.monotonic() if now is None else now) < self.expires_at
+
+
+def resolver_command(executable, track):
+    return [executable, "--ignore-config", "--no-playlist", "--no-warnings",
+            "--skip-download", "-f", "bestaudio/best", "--print",
+            "%(.{url,http_headers,format_id})j", track.url]
+
+
+def parse_stream(track, output, ttl=180.0):
+    try:
+        data = json.loads(output)
+        url = data["url"]
+        parsed = urlsplit(url)
+        if parsed.scheme not in ("https", "http") or not parsed.netloc:
+            raise ValueError("invalid stream URL")
+        headers = data.get("http_headers") or {}
+        if not isinstance(headers, dict):
+            raise ValueError("invalid headers")
+        # Preserve extractor-supplied authentication/UA headers per file only.
+        headers = {str(k): str(v) for k, v in headers.items()}
+        if any("\r" in k + v or "\n" in k + v for k, v in headers.items()):
+            raise ValueError("invalid header newline")
+        now = time.monotonic()
+        expiry = parse_qs(parsed.query).get("expire", [None])[0]
+        lifetime = float(ttl)
+        if expiry is not None:
+            lifetime = min(lifetime, float(expiry) - time.time() - 30.0)
+        if lifetime <= 0:
+            raise ValueError("expired stream URL")
+        return ResolvedStream(track.video_id, url, headers,
+                              data.get("format_id"), now, now + lifetime)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise StreamResolutionError("Invalid or expired stream metadata") from exc
+
+
+@dataclass
+class _ResolveJob:
+    track: YouTubeTrack
+    future: Future
+    due: float
+    cancel: threading.Event
+    prefetch: bool
+
+
+class YouTubeStreamResolver:
+    """One worker, one replaceable queued selection, bounded ephemeral LRU.
+
+    Callbacks never touch curses or player state. Enter shares the exact Future
+    used by prefetch. A foreground request supersedes unrelated background work.
+    """
+
+    def __init__(self, executable, timeout=20.0, ttl=180.0, capacity=16):
+        self.executable = executable
+        self.timeout = timeout
+        self.ttl = ttl
+        self.capacity = capacity
+        self._condition = threading.Condition()
+        self._cache = OrderedDict()
+        self._jobs = {}
+        self._next = None
+        self._active = None
+        self._closed = False
+        self._thread = threading.Thread(target=self._work, name="yt-resolver", daemon=True)
+        self._thread.start()
+
+    def cached(self, track):
+        with self._condition:
+            key = ("youtube", track.video_id)
+            stream = self._cache.get(key)
+            if stream and stream.valid():
+                self._cache.move_to_end(key)
+                return stream
+            self._cache.pop(key, None)
+            return None
+
+    def invalidate(self, track):
+        with self._condition:
+            self._cache.pop(("youtube", track.video_id), None)
+
+    def request(self, track, *, prefetch=False, debounce=0.0):
+        with self._condition:
+            future = Future()
+            if self._closed:
+                future.cancel()
+                return future
+            # Returning to a cached/active selection must also discard a stale
+            # queued background selection. Never displace an Enter request.
+            if (self._next and self._next.prefetch
+                    and self._next.track.video_id != track.video_id):
+                self._next.future.cancel()
+                self._jobs.pop(self._next.track.video_id, None)
+                self._next = None
+            cached = self.cached(track)
+            if cached:
+                future.set_result(cached)
+                return future
+            existing = self._jobs.get(track.video_id)
+            if existing:
+                if not prefetch:
+                    existing.due = 0.0
+                    existing.prefetch = False
+                    if self._active and self._active is not existing:
+                        self._active.cancel.set()
+                    self._condition.notify_all()
+                return existing.future
+            if prefetch and self._next and not self._next.prefetch:
+                future.cancel()
+                return future
+            if self._next:
+                self._next.future.cancel()
+                self._jobs.pop(self._next.track.video_id, None)
+            job = _ResolveJob(track, future, time.monotonic() + debounce,
+                              threading.Event(), prefetch)
+            self._next = job
+            self._jobs[track.video_id] = job
+            if not prefetch and self._active:
+                self._active.cancel.set()
+            self._condition.notify_all()
+            return future
+
+    def resolve(self, track):
+        return self.request(track).result(timeout=self.timeout + 2)
+
+    def _extract(self, track, cancel):
+        if not self.executable:
+            raise StreamResolutionError("yt-dlp is unavailable")
+        started = time.monotonic()
+        LOGGER.debug("YT_LATENCY resolver_process_started=%.6f video_id=%s", started, track.video_id)
+        try:
+            process = subprocess.Popen(resolver_command(self.executable, track),
+                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                       text=True)
+        except OSError as exc:
+            raise StreamResolutionError("Could not launch yt-dlp") from exc
+        try:
+            while True:
+                if cancel.is_set():
+                    raise CancelledError()
+                if time.monotonic() - started >= self.timeout:
+                    raise StreamResolutionError("Stream resolution timed out")
+                try:
+                    output, _ = process.communicate(timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if process.returncode:
+                raise StreamResolutionError("yt-dlp stream resolution failed")
+            result = parse_stream(track, output, self.ttl)
+            LOGGER.debug("YT_LATENCY direct_stream_url_ready=%.6f resolve_ms=%.3f video_id=%s",
+                         time.monotonic(), (time.monotonic() - started) * 1000, track.video_id)
+            return result
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+            LOGGER.debug("YT_LATENCY resolver_process_finished=%.6f video_id=%s",
+                         time.monotonic(), track.video_id)
+
+    def _work(self):
+        while True:
+            with self._condition:
+                while not self._closed:
+                    if self._next:
+                        delay = self._next.due - time.monotonic()
+                        if delay <= 0:
+                            break
+                        self._condition.wait(delay)
+                    else:
+                        self._condition.wait()
+                if self._closed:
+                    return
+                job = self._next
+                self._next = None
+                self._active = job
+                if not job.future.set_running_or_notify_cancel():
+                    self._jobs.pop(job.track.video_id, None)
+                    self._active = None
+                    continue
+            track, future = job.track, job.future
+            cancel, prefetch = job.cancel, job.prefetch
+            started = time.monotonic()
+            LOGGER.debug("YT_PREFETCH begin video_id=%s prefetch=%s prefetch_start=%.6f",
+                         track.video_id, prefetch, started)
+            try:
+                stream = self._extract(track, cancel)
+            except Exception as exc:
+                LOGGER.debug("YT_PREFETCH failed video_id=%s error=%s", track.video_id, type(exc).__name__)
+                with self._condition:
+                    self._jobs.pop(track.video_id, None)
+                    self._active = None
+                    future.set_exception(exc)
+            else:
+                with self._condition:
+                    self._cache[("youtube", track.video_id)] = stream
+                    while len(self._cache) > self.capacity:
+                        self._cache.popitem(last=False)
+                    self._jobs.pop(track.video_id, None)
+                    self._active = None
+                    future.set_result(stream)
+                LOGGER.debug("YT_PREFETCH complete video_id=%s elapsed_ms=%.3f",
+                             track.video_id, (time.monotonic() - started) * 1000)
+
+    def close(self):
+        with self._condition:
+            self._closed = True
+            if self._next:
+                self._next.future.cancel()
+            if self._active:
+                self._active.cancel.set()
+            self._condition.notify_all()
+        self._thread.join(timeout=2.0)
+
+
+class YouTubeSearchSession:
+    """Line-oriented search delivery. No curses calls from this worker."""
+
+    def __init__(self, catalog, query, limit=None):
+        self.results = queue.SimpleQueue()
+        self.cancel = threading.Event()
+        self.thread = threading.Thread(target=self._run, args=(catalog, query, limit),
+                                       name="yt-search", daemon=True)
+        self.thread.start()
+
+    def _run(self, catalog, query, limit):
+        started = time.monotonic()
+        process = None
+        LOGGER.debug("YT_LATENCY search_start=%.6f", started)
+        try:
+            if not catalog.available:
+                raise YouTubeUnavailable(catalog.unavailable_reason)
+            limit = catalog.default_limit if limit is None else max(1, min(50, int(limit)))
+            command = [catalog.executable, "--ignore-config", "--flat-playlist",
+                       "--skip-download", "--no-warnings", "--lazy-playlist",
+                       "--print", "%(.{id,title,uploader,channel,duration,webpage_url})j",
+                       f"ytsearch{limit}:{query}"]
+            process = subprocess.Popen(command, stdout=subprocess.PIPE,
+                                       stderr=subprocess.DEVNULL,
+                                       env={**os.environ, "PYTHONUNBUFFERED": "1"})
+            seen = set()
+            buffer = b""
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while not self.cancel.is_set():
+                    if time.monotonic() - started >= catalog.timeout:
+                        raise YouTubeSearchError("YouTube search timed out")
+                    if not selector.select(timeout=0.1):
+                        continue
+                    chunk = os.read(process.stdout.fileno(), 65536)
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    while b"\n" in buffer:
+                        line, buffer = buffer.split(b"\n", 1)
+                        data = json.loads(line)
+                        tracks = catalog._tracks_from_payload({"entries": [data]})
+                        for track in tracks:
+                            if track.video_id in seen:
+                                continue
+                            if not seen:
+                                LOGGER.debug("YT_LATENCY first_search_result=%.6f search_first_result_ms=%.3f",
+                                             time.monotonic(), (time.monotonic() - started) * 1000)
+                            seen.add(track.video_id)
+                            self.results.put(("track", track))
+            if not self.cancel.is_set() and process.wait(timeout=1) != 0:
+                raise YouTubeSearchError("yt-dlp search failed")
+            self.results.put(("done", None))
+        except Exception:
+            # Never expose extractor output: it can include signed URLs/cookies.
+            self.results.put(("error", "YouTube search failed or timed out."))
+        finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
+            LOGGER.debug("YT_LATENCY search_complete=%.6f search_total_ms=%.3f",
+                         time.monotonic(), (time.monotonic() - started) * 1000)
+
+    def close(self):
+        self.cancel.set()
+        self.thread.join(timeout=2.0)
