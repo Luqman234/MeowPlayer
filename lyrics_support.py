@@ -961,6 +961,7 @@ class LyricsManager:
             results = []
             attempts = 0
             final = None
+            plain_fallback = None
 
             for provider in providers:
                 with self._pending_lock:
@@ -997,9 +998,16 @@ class LyricsManager:
                 if result is None:
                     continue
                 results.append(result)
-                if result.status == "found":
+                if result.status == "found" and result.synced:
                     final = result
                     break
+                if result.status == "found" and plain_fallback is None:
+                    # Keep a plain result, but allow later providers to upgrade
+                    # it to synchronized lyrics before settling for the fallback.
+                    plain_fallback = result
+
+            if final is None and plain_fallback is not None:
+                final = plain_fallback
 
             if final is None:
                 auth = next((item for item in results if item.status == "auth-error"), None)
