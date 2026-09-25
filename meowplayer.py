@@ -22,6 +22,12 @@ except ImportError:
     MutagenFile = None
 
 from album_art import AlbumArtManager
+from bad_larry import (
+    DANGEROUS_DISMISS_PHRASE,
+    PlaybackSaboteur,
+    apology_matches,
+    confirm_dangerous_cat,
+)
 from lyrics_support import LyricsManager
 from library_watcher import LibraryWatcher
 from meow_catalog import LibraryCatalog
@@ -617,10 +623,17 @@ class MeowPlayer:
         online_metadata_enabled=True,
         visualizer_enabled=True,
         filesystem_watch_enabled=True,
+        cat_chaos_mode=None,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.serious_mode = serious_mode
         self.maximum_meow = maximum_meow
+        self.cat_chaos_mode = (
+            cat_chaos_mode
+            if cat_chaos_mode in {"bad-bad", "very-bad", "dangerous"}
+            else None
+        )
+        self.playback_saboteur = PlaybackSaboteur(self.cat_chaos_mode)
         self.saved_state = saved_state or {}
         self.restore_session_enabled = restore_session
         self.mpris_enabled = mpris_enabled and not _is_termux()
@@ -778,6 +791,10 @@ class MeowPlayer:
             f" Audio paws: gapless={self.gapless_mode}, "
             f"ReplayGain={self.replaygain_mode}."
         )
+        if self.playback_saboteur.enabled:
+            initial_cat += (
+                f" {self.playback_saboteur.label} has playback access."
+            )
         if self.metadata_lookup_queued:
             initial_serious += (
                 f" Online metadata queued for "
@@ -1295,6 +1312,7 @@ class MeowPlayer:
 
     def shutdown(self):
         self.persist_state(force=True)
+        self.playback_saboteur.dismiss(self)
         self.online_metadata.stop()
         self.mpris.stop()
         self.library_watcher.stop()
@@ -1316,6 +1334,24 @@ class MeowPlayer:
 
     def set_status(self, serious, cat):
         self.status_message = self.text(serious, cat)
+
+    def cat_intercepts(self, action):
+        return self.playback_saboteur.handle_user_action(self, action)
+
+    def cat_chaos_summary(self):
+        saboteur = self.playback_saboteur
+        if not saboteur.enabled:
+            return ""
+        if saboteur.mode == "dangerous":
+            return (
+                f"BAD LARRY {saboteur.malice}% · "
+                f"Human Authority {saboteur.human_authority}% · "
+                f"Sabotages {saboteur.sabotage_count}"
+            )
+        return (
+            f"{saboteur.label} · Malice {saboteur.malice}% · "
+            f"Sabotages {saboteur.sabotage_count}"
+        )
 
     def cat_mood(self):
         if self.current is None:
@@ -1407,6 +1443,24 @@ class MeowPlayer:
         return True
 
     def live_cat_mascot(self):
+        if self.playback_saboteur.mode == "dangerous":
+            return (
+                " /\\_/\\",
+                r"( O_O )",
+                r" > ^ <  !!",
+            )
+        if self.playback_saboteur.mode == "very-bad":
+            return (
+                " /\\_/\\",
+                r"( >.< )",
+                r" > ~ <  ...",
+            )
+        if self.playback_saboteur.mode == "bad-bad":
+            return (
+                " /\\_/\\",
+                r"( -_- )",
+                r" > ~ <",
+            )
         if self.maximum_meow:
             mood = self.cat_mood()
             middle = {
@@ -3070,6 +3124,33 @@ class MeowPlayer:
 
         stdscr.erase()
         height, width = stdscr.getmaxyx()
+
+        if self.playback_saboteur.mode == "dangerous":
+            mascot = (
+                " /\\_/\\",
+                r"( O_O )",
+                r" > ^ <",
+            )
+            lines = list(mascot) + [
+                "",
+                "BAD LARRY HAS ENTERED THE ROOM",
+                "Playback authority: CONTESTED",
+            ]
+            start_y = max(0, (height - len(lines)) // 2)
+            for offset, line in enumerate(lines):
+                x = max(0, (width - len(line)) // 2)
+                try:
+                    stdscr.addstr(
+                        start_y + offset,
+                        x,
+                        line[:max(0, width - x - 1)],
+                    )
+                except curses.error:
+                    pass
+            stdscr.refresh()
+            time.sleep(1.3)
+            return
+
         mascot = MAXIMUM_MEOW_MASCOT if self.maximum_meow else CAT_MASCOT
         startup_lines = (
             "Sniffing metadata and indexing your music nest...",
@@ -3413,7 +3494,15 @@ class MeowPlayer:
 
         mascot = self.live_cat_mascot()
         mood = self.cat_mood()
-        title = f"♫ MEOWPLAYER v{__version__} — {mood}"
+        if self.playback_saboteur.mode == "dangerous":
+            title = f"♫ MEOWPLAYER v{__version__} — BAD LARRY IN THE ROOM"
+        elif self.playback_saboteur.enabled:
+            title = (
+                f"♫ MEOWPLAYER v{__version__} — "
+                f"{self.playback_saboteur.label}"
+            )
+        else:
+            title = f"♫ MEOWPLAYER v{__version__} — {mood}"
 
         for row, cat_line in enumerate(mascot):
             try:
@@ -3436,6 +3525,56 @@ class MeowPlayer:
                 pass
 
         return len(mascot) + 1
+
+    def prompt_bad_larry_apology(self, stdscr):
+        phrase = DANGEROUS_DISMISS_PHRASE
+        stdscr.nodelay(False)
+        stdscr.timeout(-1)
+        curses.echo()
+
+        try:
+            curses.curs_set(1)
+        except curses.error:
+            pass
+
+        try:
+            stdscr.erase()
+            height, width = stdscr.getmaxyx()
+            lines = [
+                "BAD LARRY EMERGENCY EXIT",
+                "",
+                "Bad Larry requires a formal apology.",
+                "Type exactly:",
+                phrase,
+                "",
+            ]
+            start_y = max(0, min(2, height - len(lines) - 2))
+            for offset, line in enumerate(lines):
+                stdscr.addstr(
+                    start_y + offset,
+                    1,
+                    line[:max(1, width - 2)],
+                )
+
+            input_y = min(height - 1, start_y + len(lines))
+            stdscr.addstr(input_y, 0, "> "[:max(1, width - 1)])
+            stdscr.refresh()
+            raw = stdscr.getstr(
+                input_y,
+                min(2, max(0, width - 2)),
+                max(1, width - 3),
+            )
+            return raw.decode("utf-8", errors="replace")
+        except curses.error:
+            return ""
+        finally:
+            curses.noecho()
+            try:
+                curses.curs_set(0)
+            except curses.error:
+                pass
+            stdscr.nodelay(True)
+            stdscr.timeout(100)
 
     def prompt_path(self, stdscr, prompt, default):
         height, width = stdscr.getmaxyx()
@@ -3745,6 +3884,7 @@ class MeowPlayer:
 
         while True:
             self.process_external_actions()
+            self.playback_saboteur.tick(self)
             self.process_filesystem_watch()
             self.process_online_metadata()
             self.persist_state()
@@ -3915,6 +4055,11 @@ class MeowPlayer:
                     + (
                         f"   Scritches: {self.scritches}"
                         if self.scritches
+                        else ""
+                    )
+                    + (
+                        f"   {self.cat_chaos_summary()}"
+                        if self.playback_saboteur.enabled
                         else ""
                     )
                 )
@@ -4215,7 +4360,32 @@ class MeowPlayer:
                 self.handle_search_key(key)
                 continue
 
+            if (
+                key == 5
+                and self.playback_saboteur.mode == "dangerous"
+            ):
+                apology = self.prompt_bad_larry_apology(stdscr)
+                if apology_matches(apology):
+                    self.playback_saboteur.dismiss(self)
+                    self.cat_chaos_mode = None
+                    self.set_status(
+                        "Dangerous Cat Mode disabled.",
+                        "Bad Larry accepts your apology and has left The Room.",
+                    )
+                else:
+                    self.set_status(
+                        "Emergency dismissal denied.",
+                        "Bad Larry: that did not sound sincere. Try again, human.",
+                    )
+                    self.trigger_cat_incident(
+                        "BAD LARRY: FORMAL APOLOGY REJECTED.",
+                        duration=6.0,
+                    )
+                continue
+
             if key in (ord("x"), ord("X")):
+                if self.cat_intercepts("quit"):
+                    continue
                 self.set_status(
                     "Quitting.",
                     "Escaping before the cat notices..."
@@ -4285,6 +4455,8 @@ class MeowPlayer:
                 continue
 
             if key == ord(" "):
+                if self.cat_intercepts("pause"):
+                    continue
                 paused = self.mpv.toggle_pause()
                 if paused:
                     self.set_status(
@@ -4299,6 +4471,8 @@ class MeowPlayer:
                 continue
 
             if key == curses.KEY_RIGHT:
+                if self.cat_intercepts("seek_forward"):
+                    continue
                 self.mpv.seek(5)
                 self.set_status(
                     "Seeked forward 5 seconds.",
@@ -4307,6 +4481,8 @@ class MeowPlayer:
                 continue
 
             if key == curses.KEY_LEFT:
+                if self.cat_intercepts("seek_backward"):
+                    continue
                 self.mpv.seek(-5)
                 self.set_status(
                     "Seeked backward 5 seconds.",
@@ -4315,19 +4491,23 @@ class MeowPlayer:
                 continue
 
             if key in (ord("n"), ord("N")):
-                self.next_song()
+                if not self.cat_intercepts("next"):
+                    self.next_song()
                 continue
 
             if key in (ord("p"), ord("P")):
-                self.previous_song()
+                if not self.cat_intercepts("previous"):
+                    self.previous_song()
                 continue
 
             if key in (ord("+"), ord("=")):
-                self.update_volume(5)
+                if not self.cat_intercepts("volume_up"):
+                    self.update_volume(5)
                 continue
 
             if key == ord("-"):
-                self.update_volume(-5)
+                if not self.cat_intercepts("volume_down"):
+                    self.update_volume(-5)
                 continue
 
             if key in (ord("s"), ord("S")):
@@ -4503,7 +4683,7 @@ class MeowPlayer:
         self.sync_mpris(force=True)
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
             "MeowPlayer — a cat-themed terminal music player powered by mpv."
@@ -4534,6 +4714,21 @@ def parse_args():
         "--maximum-meow",
         action="store_true",
         help="enable maximum feline energy"
+    )
+    mode.add_argument(
+        "--bad-bad-cat",
+        action="store_true",
+        help="let a mildly malicious cat occasionally interfere with playback"
+    )
+    mode.add_argument(
+        "--very-bad-cat",
+        action="store_true",
+        help="let a hostile cat actively fight your playback controls"
+    )
+    mode.add_argument(
+        "--dangerous-cat",
+        action="store_true",
+        help="summon Bad Larry after three explicit confirmations"
     )
 
     parser.add_argument(
@@ -4606,11 +4801,24 @@ def parse_args():
         help="disable live filesystem watching for the music library"
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main():
     args = parse_args()
+
+    if args.dangerous_cat and not confirm_dangerous_cat():
+        return
+
+    if args.dangerous_cat:
+        cat_chaos_mode = "dangerous"
+    elif args.very_bad_cat:
+        cat_chaos_mode = "very-bad"
+    elif args.bad_bad_cat:
+        cat_chaos_mode = "bad-bad"
+    else:
+        cat_chaos_mode = None
+
     config = load_config()
 
     configured_music_dir = config.get("music_dir")
@@ -4720,6 +4928,7 @@ def main():
             online_metadata_enabled=online_metadata_enabled,
             visualizer_enabled=visualizer_enabled,
             filesystem_watch_enabled=filesystem_watch_enabled,
+            cat_chaos_mode=cat_chaos_mode,
         )
     except FileNotFoundError:
         print(
