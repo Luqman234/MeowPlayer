@@ -7,6 +7,8 @@ from youtube_online import (
     YouTubeCatalog,
     YouTubeTrack,
     YouTubeUnavailable,
+    normalize_youtube_search,
+    youtube_search_target,
 )
 
 
@@ -73,9 +75,50 @@ class YouTubeOnlineTests(unittest.TestCase):
         with mock.patch("youtube_online.YouTubeSearchSession") as session:
             session.return_value.results = results
             self.assertEqual(catalog.search("shelter", limit=5), [track])
-            session.assert_called_once_with(catalog, "shelter", limit=5)
+            session.assert_called_once_with(catalog, "shelter", limit=5, search_mode="all")
             session.return_value.close.assert_called_once()
 
+    def test_artist_prefix_selects_artist_search_mode(self):
+        query, mode = normalize_youtube_search("artist:Porter Robinson")
+        self.assertEqual(query, "Porter Robinson")
+        self.assertEqual(mode, "artist")
+
+    def test_artist_search_target_biases_youtube_search_toward_artist(self):
+        target = youtube_search_target("Porter Robinson", 12, "artist")
+        self.assertEqual(target, 'ytsearch12:"Porter Robinson" music')
+
+    def test_artist_search_target_sanitizes_embedded_quotes(self):
+        target = youtube_search_target('A "Quoted" Artist', 12, "artist")
+        self.assertEqual(target, 'ytsearch12:"A Quoted Artist" music')
+
+    def test_internet_nest_artist_search_tracks_mode_and_query(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        player.youtube = SimpleNamespace(enabled=True, available=True)
+        player.youtube_search_session = None
+        player.youtube_results = [object()]
+        player.youtube_selected = 4
+        player._prefetch_selection = "old"
+        player.view = "library"
+        player.text = lambda serious, cat: serious
+        player.prompt_text = mock.Mock(return_value="Porter Robinson")
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        with mock.patch("meowplayer.YouTubeSearchSession") as session:
+            self.assertTrue(player.open_youtube_search(object(), search_mode="artist"))
+
+        self.assertEqual(player.youtube_query, "Porter Robinson")
+        self.assertEqual(player.youtube_search_mode, "artist")
+        self.assertEqual(player.youtube_results, [])
+        self.assertEqual(player.youtube_selected, 0)
+        self.assertIsNone(player._prefetch_selection)
+        self.assertEqual(player.view, "online")
+        session.assert_called_once_with(
+            player.youtube,
+            "Porter Robinson",
+            search_mode="artist",
+        )
+        self.assertIn("artist: Porter Robinson", statuses[-1][0])
     def test_search_fails_soft_when_yt_dlp_is_missing(self):
         catalog = YouTubeCatalog(enabled=True, executable=None)
         catalog.executable = None

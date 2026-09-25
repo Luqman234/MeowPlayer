@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.16.4** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.17.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.4 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.17.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,394 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.17.0 — The Cat Has Discovered That Songs Come From Humans
+
+A major scientific breakthrough has occurred inside the Internet Nest.
+
+Until now, MeowPlayer understood YouTube roughly like this:
+
+```text
+human types words
+        ↓
+internet produces videos
+        ↓
+cat points at one
+        ↓
+music probably happens
+```
+
+This was sufficient.
+
+Then somebody asked the dangerous question:
+
+> “Can I search for the **artist**?”
+
+The cat stared into the middle distance.
+
+The database went quiet.
+
+Somewhere, an SQLite connection closed itself respectfully.
+
+After several minutes of intense feline research, MeowPlayer has now discovered that multiple songs can apparently come from the **same human**.
+
+This concept is called an **artist**.
+
+We are calling the resulting feature:
+
+# 🐾 ARTIST SCENT™
+
+because “artist-name search” was rejected for insufficient whiskers.
+
+### Press A to deploy Detective Cat
+
+Inside the Internet Nest:
+
+```text
+A
+↓
+ARTIST SCENT DEPLOYED
+↓
+human enters: Porter Robinson
+↓
+cat sniffs the internet
+↓
+"Porter Robinson" music
+↓
+possible Porter Robinson-shaped objects detected
+```
+
+In practical terms, `A` opens a dedicated artist search prompt.
+
+Example:
+
+```text
+Internet Nest artist scent: Porter Robinson
+```
+
+Behind the curtain, MeowPlayer asks yt-dlp for something equivalent to:
+
+```text
+ytsearch12:"Porter Robinson" music
+```
+
+The cat has therefore advanced from:
+
+```text
+"find Shelter"
+```
+
+to:
+
+```text
+"find the creature responsible for Shelter,
+then bring me more evidence"
+```
+
+This is progress.
+
+Probably.
+
+### The secret second entrance: artist:
+
+If pressing `A` feels insufficiently dramatic, the normal YouTube search box also understands:
+
+```text
+artist:Porter Robinson
+artist:Beach House
+artist:YOASOBI
+artist:Radiohead
+```
+
+So Internet Nest now has two hunting licenses:
+
+```text
+/ or Y
+   ↓
+GENERAL HUNT
+   ↓
+"find these words on YouTube"
+   ↓
+song titles / mixed queries / internet nonsense
+
+
+A or artist:Name
+   ↓
+ARTIST SCENT
+   ↓
+"follow this musician specifically"
+   ↓
+artist-biased music results
+```
+
+The cat is still not permitted to lick the network cable.
+
+### Why doesn't Artist Scent just filter by channel name?
+
+Because YouTube metadata is a box of cables someone shook violently.
+
+A perfectly legitimate song may be uploaded by:
+
+```text
+the artist
+the artist's "- Topic" channel
+VEVO
+a record label
+a distributor
+an official partner
+some mysterious sanctioned cupboard with 14 million subscribers
+```
+
+A strict rule like:
+
+```text
+uploader == artist
+```
+
+would look elegant for approximately six seconds.
+
+Then it would start throwing away real songs.
+
+So Artist Scent does **not** say:
+
+```text
+"If the channel name is not exactly Porter Robinson,
+THIS MOUSE IS COUNTERFEIT."
+```
+
+Instead it biases the YouTube search toward the artist name and music, then lets the normal result machinery do its job.
+
+This is less pure.
+
+It is also substantially less stupid.
+
+### The cat now checks more nametags
+
+Search results now ask yt-dlp for more identity clues:
+
+```text
+artist
+artists
+creator
+uploader
+channel
+```
+
+MeowPlayer then behaves approximately like this:
+
+```text
+          incoming YouTube result
+                    │
+                    ▼
+           artist metadata exists?
+             /              \
+           yes               no
+            │                 │
+            ▼                 ▼
+     use artist/creator   check uploader
+                              │
+                              ▼
+                         check channel
+                              │
+                              ▼
+                    "fine, you may enter"
+```
+
+The goal is not to construct a perfect global ontology of musicians.
+
+The goal is to stop displaying:
+
+```text
+SomeRecordLabelOfficialVEVOThing
+```
+
+as the artist when YouTube already gave us an actual artist field two properties away.
+
+### The Internet Nest now displays what kind of nonsense it is doing
+
+Normal search:
+
+```text
+Internet Nest — scent: shelter · 12 meow(s)
+```
+
+Artist search:
+
+```text
+Internet Nest — artist scent: Porter Robinson · 12 meow(s)
+```
+
+The footer also gained another tiny command because apparently we had spare room:
+
+```text
+/  normal hunt
+A  artist scent
+Y  YouTube search
+```
+
+In Serious Mode this is explained like respectable software.
+
+In normal mode, the cat is tracking musicians.
+
+### Important: the cat did not knock over the architecture
+
+Artist Scent uses the **same Internet Nest machinery** already built in the 0.16.x series:
+
+```text
+artist query
+    ↓
+background JSON-line search
+    ↓
+results appear incrementally
+    ↓
+first / highlighted result
+    ↓
+150 ms "are you actually staying there?" debounce
+    ↓
+one resolver worker
+    ↓
+one replaceable queued request
+    ↓
+short-lived direct-stream cache
+    ↓
+Enter
+    ↓
+mpv gets dinner
+```
+
+Still preserved:
+
+```text
+background search                  ✓
+incremental results                ✓
+first-result prefetch              ✓
+highlight prefetch                 ✓
+150 ms selection debounce          ✓
+one active resolver                ✓
+one queued replacement             ✓
+direct-stream caching              ✓
+scoped glibc DNS workaround        ✓
+mpv fallback path                  ✓
+ephemeral online results           ✓
+Cat Catalog contamination          ✗
+mysterious automatic downloads     ✗
+cat promoted to root               absolutely not
+```
+
+Artist search results remain **ephemeral**.
+
+They are not inserted into the Cat Catalog.
+
+They are not downloaded.
+
+They do not become fake local files.
+
+They do not wake up tomorrow with a mortgage and an inode.
+
+### The cat's official artist-identification policy
+
+For legal and feline clarity:
+
+```text
+Artist Scent is:
+
+artist-biased search
++ better metadata extraction
++ existing Internet Nest playback
+
+Artist Scent is NOT:
+
+an official YouTube Music API
+a channel-only browser
+a discography database
+a recommendation engine
+a remote library importer
+Spotify wearing terminal makeup
+```
+
+The Internet Nest is still intentionally lightweight and temporary.
+
+The cat visits the internet.
+
+The cat does not move there.
+
+### Why is this 0.17.0 instead of 0.16.5?
+
+Because this is not another repair to Internet Nest.
+
+0.16.x was largely:
+
+```text
+make YouTube work
+↓
+make YouTube stop breaking
+↓
+make YouTube stop blocking the TUI
+↓
+make YouTube stop interrogating mpv 77 times per second
+↓
+make DNS stop stealing five seconds of everyone's lifespan
+```
+
+0.17.0 is:
+
+```text
+"okay, now give the Internet Nest a new way to discover music"
+```
+
+That is a user-facing capability, not just another wrench applied to the plumbing.
+
+The cat has learned **taxonomy**.
+
+We are all extremely proud and slightly concerned.
+
+### 0.17.0 in one diagram
+
+```text
+                    HUMAN
+                      │
+          "I want Porter Robinson"
+                      │
+                      ▼
+                press A
+                      │
+                      ▼
+              /_/\
+             ( o.o )   ← Detective Cat
+              > ^ <
+                │
+                │ sniff sniff
+                ▼
+          INTERNET NEST
+                │
+      "Porter Robinson" music
+                │
+      ┌─────────┼─────────┐
+      ▼         ▼         ▼
+   result 1  result 2  result 3
+      │
+      ▼
+ background prefetch cat
+      │
+      ▼
+     Enter
+      │
+      ▼
+     mpv
+      │
+      ▼
+   ♫ music ♫
+
+Meanwhile:
+Cat Catalog = untouched
+local files = untouched
+DNS = hopefully behaving
+Bad Larry = still banned from architecture meetings
+```
+
+And thus MeowPlayer enters the 0.17 era with the completely reasonable ability to search for musicians by name.
+
+> **MeowPlayer 0.17.0 — the Internet Nest can now follow an artist scent, the cat has discovered recurring human entities, and somehow this required a minor-version bump.**
 
 ## What's new in 0.16.4 — The Router Ate a DNS Reply and the Cat Took It Personally
 
@@ -673,7 +1061,7 @@ Start it with:
 meowplayer --youtube
 ```
 
-Then press `Y` from the TUI to open the **Internet Nest**. Type a search, choose a result with the arrow keys, and press `Enter` to stream it.
+Then press `Y` from the TUI to open the **Internet Nest**. Type a song/title search, choose a result with the arrow keys, and press `Enter` to stream it.
 
 ```text
 INTERNET NEST
@@ -741,7 +1129,7 @@ The target is **≤2 seconds from Enter on a prefetched result**, not a promise 
 RES_OPTIONS=single-request-reopen python tools/benchmark_youtube_startup.py 'https://www.youtube.com/watch?v=...' --runs 5 --json
 ```
 
-MeowPlayer does not set this option or modify your DNS configuration. Cold extraction, DNS, and remote media opening remain external bottlenecks. `time-pos` confirms playback at mpv's output, not acoustic arrival at a speaker.
+As of 0.16.4, MeowPlayer applies `single-request-reopen` **process-locally on affected glibc systems** to its YouTube-facing child processes. It does not rewrite system DNS configuration or force a public resolver. Cold extraction, DNS, and remote media opening remain external bottlenecks. `time-pos` confirms playback at mpv's output, not acoustic arrival at a speaker.
 
 MeowPlayer's own performance logs omit direct URLs and header values. **mpv's verbose debug log can still contain signed stream URLs and HTTP headers**; review/redact both log files before sharing them.
 
@@ -749,9 +1137,11 @@ MeowPlayer's own performance logs omit direct URLs and header values. **mpv's ve
 
 ```text
 Y          search YouTube / open Internet Nest
+A          search by artist name
 ↑ / ↓      choose a search result
 Enter      stream selected result
-/          search again while in Internet Nest
+/          normal search again while in Internet Nest
+artist:X   artist search from the normal search prompt
 Q or Esc   return to the local Music Nest
 Space      pause / resume
 ← / →      seek
@@ -2595,7 +2985,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.4 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.17.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -2726,8 +3116,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.16.4-py3-none-any.whl
-└── meowplayer_terminal-0.16.4.tar.gz
+├── meowplayer_terminal-0.17.0-py3-none-any.whl
+└── meowplayer_terminal-0.17.0.tar.gz
 ```
 
 The installed CLI is still:
