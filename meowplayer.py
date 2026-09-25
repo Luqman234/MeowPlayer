@@ -2721,12 +2721,23 @@ class MeowPlayer:
             # current before trusting the successful command. If it did not,
             # recover through an explicit load below.
             if advanced:
+                # playlist-play-index is asynchronous. On a busy CI runner
+                # (and occasionally on a loaded desktop) mpv can spend more
+                # than a few hundred milliseconds at current-pos=-1 while it
+                # hands off to the reserved entry. Falling back too early
+                # races that handoff and can strand mpv with no current path.
                 advanced = self.mpv.wait_for_path(
                     self.songs[index],
-                    timeout=0.35,
+                    timeout=1.25,
                 )
 
         if not advanced:
+            # If a successful primed advance genuinely did not settle, abort
+            # the in-flight handoff before issuing loadfile replace. This
+            # makes the recovery deterministic instead of racing mpv's
+            # asynchronous playlist transition.
+            if use_primed_entry:
+                self.mpv.stop()
             self.mpv.clear_future_playlist()
             self.mpv.load(self.songs[index])
             self.mpv.play()
