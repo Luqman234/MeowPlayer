@@ -781,6 +781,11 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
 
     search_queries = []
     seen_queries = set()
+    max_queries = (
+        10
+        if metadata.get("lookup_mode") == "internet-nest"
+        else None
+    )
     for candidate, expected_title, expected_artist in search_candidates:
         normalized = " ".join(candidate.split())
         key = normalized.casefold()
@@ -789,6 +794,8 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
             search_queries.append(
                 (normalized, expected_title, expected_artist)
             )
+            if max_queries is not None and len(search_queries) >= max_queries:
+                break
 
     if not search_queries:
         return LyricsFetchResult("", "not-found", query)
