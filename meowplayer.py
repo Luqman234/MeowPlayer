@@ -6081,14 +6081,14 @@ class MeowPlayer:
             elif self.view == "online":
                 if self.serious_mode:
                     controls = (
-                        "↑↓ Select  ENTER Stream  D Download  / Search  A Artist  "
-                        "Y Search  , Settings  Q Library  Space Pause  X Quit"
+                        "↑↓ Select  ENTER Stream  C Creator  D Download  / Search  "
+                        "A Artist  Y Search  , Settings  Q Library  Space Pause  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
-                        "↑↓ Choose  ENTER Stream  D Adopt  / Hunt  A Artist Scent  "
-                        "Y Search  , Settings  Q Nest  Space Paws  X Escape"
+                        "↑↓ Choose  ENTER Stream  C Creator Nest  D Adopt  / Hunt  "
+                        "A Artist Scent  Y Search  , Settings  Q Nest  Space Paws  X Escape"
                     )
                     quote = self.cat_footer_message()
             else:
