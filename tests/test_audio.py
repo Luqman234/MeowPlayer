@@ -542,8 +542,19 @@ class AudioEngineTests(unittest.TestCase):
         self.assertEqual(player.mpv.cleared, 0)
         self.assertEqual(player.mpv.loaded, [])
         self.assertEqual(player.mpv.play_calls, 0)
-        self.assertFalse(player._awaiting_mpv_path)
+        self.assertTrue(player._awaiting_mpv_path)
         self.assertEqual(player.gapless_next_index, 2)
+        self.assertEqual(
+            player.mpv.primed,
+            [Path("/music/1.flac")],
+        )
+
+        # The next reservation is only appended after the new current path is
+        # confirmed again, avoiding playlist mutation during current-pos=-1.
+        player.mpv.path = str(player.songs[1])
+        player.sync_gapless_transition()
+
+        self.assertFalse(player._awaiting_mpv_path)
         self.assertEqual(player.mpv.primed[-1], Path("/music/2.flac"))
 
     def test_stranded_successful_primed_advance_recovers_with_replace(self):
@@ -648,6 +659,27 @@ class AudioEngineTests(unittest.TestCase):
         controller.clear_future_playlist()
         controller.trim_playlist_before_current()
 
+        self.assertEqual(commands, [])
+
+    def test_prime_next_refuses_to_append_while_playlist_position_is_minus_one(self):
+        controller = MPVController.__new__(MPVController)
+        commands = []
+
+        def fake_get_property(name):
+            if name == "playlist-current-pos":
+                return -1
+            if name == "playlist-count":
+                return 2
+            return None
+
+        controller.get_property = fake_get_property
+        controller.command = lambda *args: (
+            commands.append(args) or {"error": "success"}
+        )
+
+        primed = controller.prime_next(Path("/music/next.flac"))
+
+        self.assertFalse(primed)
         self.assertEqual(commands, [])
 
     def test_prime_gapless_appends_reserved_next_track(self):
