@@ -13,6 +13,7 @@ from youtube_online import (
     normalize_youtube_search,
     youtube_creator_browse_targets,
     youtube_creator_section_url,
+    youtube_music_album_search_url,
     youtube_download_command,
     youtube_search_target,
 )
@@ -120,6 +121,47 @@ class YouTubeOnlineTests(unittest.TestCase):
             ),
         )
 
+    def test_youtube_music_album_search_targets_album_section(self):
+        self.assertEqual(
+            youtube_music_album_search_url("Creator Cat"),
+            "https://music.youtube.com/search?q=Creator+Cat#albums",
+        )
+
+    def test_topic_playlists_fall_back_to_music_album_search(self):
+        targets = youtube_creator_browse_targets(
+            "https://www.youtube.com/channel/UCtopic",
+            "playlists",
+            "Creator Cat",
+        )
+
+        self.assertEqual(
+            targets,
+            (
+                "https://www.youtube.com/channel/UCtopic/playlists",
+                "https://www.youtube.com/channel/UCtopic/releases",
+                "https://music.youtube.com/search?q=Creator+Cat#albums",
+            ),
+        )
+
+    def test_release_url_without_explicit_id_is_kept_as_playlist(self):
+        playlist = YouTubeCatalog._playlist_from_entry(
+            {
+                "url": (
+                    "https://www.youtube.com/playlist"
+                    "?list=OLAK5uy_release123"
+                ),
+                "album": "Release Album",
+                "artist": "Creator Cat",
+            }
+        )
+
+        self.assertIsInstance(playlist, YouTubePlaylist)
+        self.assertEqual(
+            playlist.playlist_id,
+            "OLAK5uy_release123",
+        )
+        self.assertEqual(playlist.title, "Release Album")
+
     def test_creator_playlists_fall_back_to_releases(self):
         targets = youtube_creator_browse_targets(
             "https://www.youtube.com/@creatorcat",
@@ -225,6 +267,7 @@ class YouTubeOnlineTests(unittest.TestCase):
             player.youtube,
             "https://www.youtube.com/@creatorcat",
             "uploads",
+            creator_name="Creator Cat",
         )
 
     def test_artist_prefix_selects_artist_search_mode(self):
