@@ -440,6 +440,99 @@ class PlaybackSaboteur:
             self._bump(bump)
         return executed
 
+    def _maybe_roll_math(self, now):
+        if self.mode != "dangerous":
+            return False
+        if self.pending_math_question is not None:
+            return False
+        if now < self.next_math_roll_at:
+            return False
+
+        self.next_math_roll_at = now + MATH_ROLL_INTERVAL
+        if self.rng.random() >= MATH_EVENT_CHANCE:
+            return False
+
+        self.pending_math_question = generate_math_question(self.rng)
+        return True
+
+    def pop_math_question(self):
+        question = self.pending_math_question
+        self.pending_math_question = None
+        return question
+
+    def grade_math_answer(self, question, answer):
+        correct = answer_is_correct(question, answer)
+        if correct:
+            self.math_correct += 1
+        return correct
+
+    def apply_math_wrong(self, player, question):
+        penalty = skip_penalty(question.difficulty, 1)
+        malice = max(1, int(round(penalty["malice"] * 0.5)))
+        self._bump(malice)
+        self.sabotage_count += 1
+        self._status(
+            player,
+            f"BAD LARRY: incorrect. +{malice} Malice. Embarrassing.",
+        )
+        return malice
+
+    def apply_math_skip(self, player, difficulty, now=None):
+        if self.mode != "dangerous":
+            return None
+
+        timestamp = self.now_func() if now is None else float(now)
+        self.math_surrenders += 1
+        penalty = skip_penalty(difficulty, self.math_surrenders)
+
+        if penalty["restart"] and getattr(player, "current", None) is not None:
+            try:
+                player.mpv.seek_absolute(0.0)
+            except Exception:
+                pass
+
+        rewind = penalty["rewind"]
+        if rewind is not None and getattr(player, "current", None) is not None:
+            amount = self.rng.uniform(rewind[0], rewind[1])
+            try:
+                player.mpv.seek(-amount)
+            except Exception:
+                pass
+
+        speed = penalty["speed"]
+        if speed is not None and getattr(player, "current", None) is not None:
+            try:
+                player.mpv.set_property("speed", speed)
+                self._schedule(
+                    timestamp + penalty["speed_seconds"],
+                    "speed",
+                    1.0,
+                )
+            except Exception:
+                pass
+
+        if difficulty == "quantum":
+            self._schedule(timestamp + 1.0, "pause")
+            self._schedule(timestamp + 5.0, "resume")
+            if penalty["random_track"]:
+                self._schedule(timestamp + 7.0, "random_track")
+        elif penalty["random_track"]:
+            self._schedule(
+                timestamp + max(3.0, penalty["speed_seconds"]),
+                "random_track",
+            )
+
+        self._bump(penalty["malice"])
+        self.sabotage_count += 1
+        self._status(
+            player,
+            (
+                f"BAD LARRY: surrender accepted. {difficulty.upper()} penalty "
+                f"x{penalty['multiplier']:.2f}; +{penalty['malice']} Malice."
+            ),
+        )
+        return penalty
+
     def _run_pending(self, player, now):
         ready = []
         while self.pending and self.pending[0][0] <= now:
@@ -471,12 +564,16 @@ class PlaybackSaboteur:
         timestamp = self.now_func() if now is None else float(now)
         self._run_pending(player, timestamp)
 
+        math_created = self._maybe_roll_math(timestamp)
+        if self.pending_math_question is not None:
+            return math_created
+
         if timestamp < self.next_event_at:
-            return False
+            return math_created
 
         executed = self._execute_spontaneous(player, timestamp)
         self._schedule_next(timestamp)
-        return executed
+        return executed or math_created
 
     def handle_user_action(self, player, action, now=None):
         if not self.enabled:
