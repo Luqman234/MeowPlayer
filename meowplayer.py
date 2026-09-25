@@ -5188,7 +5188,7 @@ class MeowPlayer:
             album_art_path = self.current_album_art()
             art_layout = (
                 None
-                if self.view == "lyrics"
+                if self.view in {"lyrics", "settings"}
                 else self.album_art_layout(
                     height,
                     width,
@@ -5776,6 +5776,8 @@ class MeowPlayer:
                     continue
                 if key in (ord(","), ord("q"), ord("Q"), 27):
                     self.close_settings_nest()
+                    continue
+                if key not in (ord("x"), ord("X")):
                     continue
 
             if key == ord(","):
