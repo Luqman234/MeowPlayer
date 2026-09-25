@@ -1101,6 +1101,22 @@ meowplayer --youtube
 
 Then press `Y` from the TUI to open the **Internet Nest**. Type a song/title search, choose a result with the arrow keys, and press `Enter` to stream it.
 
+While an Internet Nest track is playing, **Songbook can search LRCLIB using the remote track's title, artist, and duration**. These lyrics are intentionally **session-only**: MeowPlayer may display synchronized or plain LRCLIB lyrics for the currently streaming track, but it does **not** write them to the persistent lyric cache.
+
+```text
+Internet Nest track
+      ↓
+title + artist + duration
+      ↓
+LRCLIB
+      ↓
+Songbook
+      ↓
+memory only — no .lrc/.txt cache file
+```
+
+Local-library tracks keep the existing persistent LRCLIB cache behavior. The distinction is deliberate: a temporary YouTube result should not quietly become durable local-library state.
+
 ```text
 INTERNET NEST
 
