@@ -390,6 +390,125 @@ class LyricsTests(unittest.TestCase):
         self.assertEqual(result.status, "found")
         self.assertIn("CORRECT", result.text)
 
+    def test_lrclib_plain_lyrics_are_returned_when_unsynchronized(self):
+        metadata = {
+            "title": "Song",
+            "artist": "Artist",
+            "album": "",
+            "duration": 258.0,
+            "filename_stem": "Artist - Song",
+        }
+
+        def fake_request(path, params, timeout):
+            return {
+                "trackName": "Song",
+                "artistName": "Artist",
+                "duration": 258.0,
+                "syncedLyrics": None,
+                "plainLyrics": "First line\nSecond line",
+            }, "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "found")
+        self.assertFalse(result.synced)
+        self.assertEqual(result.text, "First line\nSecond line")
+
+    def test_lrclib_prefers_synced_over_plain_search_result(self):
+        metadata = {
+            "title": "Song",
+            "artist": "Artist",
+            "album": "",
+            "duration": 258.0,
+            "filename_stem": "Artist - Song",
+        }
+
+        def fake_request(path, params, timeout):
+            if path == "/api/get":
+                return None, "not-found"
+            return [
+                {
+                    "trackName": "Song",
+                    "artistName": "Artist",
+                    "duration": 258.0,
+                    "plainLyrics": "PLAIN",
+                },
+                {
+                    "trackName": "Song",
+                    "artistName": "Artist",
+                    "duration": 258.0,
+                    "syncedLyrics": "[00:01.00]SYNCED",
+                },
+            ], "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertTrue(result.synced)
+        self.assertIn("SYNCED", result.text)
+
+    def test_downloaded_plain_lrclib_lyrics_show_and_cache_offline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "Artist - Song.flac"
+            track.write_bytes(b"not-real-audio")
+            cache_dir = root / "cache"
+
+            with mock.patch(
+                "lyrics_support._fetch_lrclib_result",
+                return_value=LyricsFetchResult(
+                    "First line\nSecond line",
+                    "found",
+                    "Artist Song",
+                    synced=False,
+                ),
+            ):
+                manager = LyricsManager(
+                    enabled=True,
+                    online_enabled=True,
+                    cache_dir=cache_dir,
+                    request_timeout=0.25,
+                )
+                self.assertIsNone(manager.load(track))
+
+                document = None
+                for _ in range(100):
+                    document = manager.poll(track)
+                    if document is not None:
+                        break
+                    time.sleep(0.01)
+
+            self.assertIsNotNone(document)
+            self.assertFalse(document.synced)
+            self.assertEqual(
+                [line.text for line in document.lines],
+                ["First line", "Second line"],
+            )
+            self.assertIn("unsynchronized", document.source)
+            self.assertEqual(len(list(cache_dir.glob("*.txt"))), 1)
+
+            offline = LyricsManager(
+                enabled=True,
+                online_enabled=False,
+                cache_dir=cache_dir,
+            )
+            cached = offline.load(track)
+
+            self.assertIsNotNone(cached)
+            self.assertFalse(cached.synced)
+            self.assertEqual(
+                [line.text for line in cached.lines],
+                ["First line", "Second line"],
+            )
+            self.assertIn("LRCLIB cache", cached.source)
+
     def test_sidecar_still_beats_downloaded_cache(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
