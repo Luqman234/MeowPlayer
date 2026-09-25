@@ -5429,6 +5429,14 @@ def parse_args(argv=None):
         action="store_true",
         help="disable live filesystem watching for the music library"
     )
+    parser.add_argument(
+        "--youtube",
+        action="store_true",
+        help=(
+            "enable experimental YouTube search and audio streaming "
+            "through yt-dlp + mpv"
+        )
+    )
 
     return parser.parse_args(argv)
 
@@ -5558,6 +5566,7 @@ def main():
             visualizer_enabled=visualizer_enabled,
             filesystem_watch_enabled=filesystem_watch_enabled,
             cat_chaos_mode=cat_chaos_mode,
+            youtube_enabled=args.youtube,
         )
     except FileNotFoundError:
         print(
@@ -5566,8 +5575,12 @@ def main():
         )
         sys.exit(1)
 
-    if not player.songs:
+    if not player.songs and not player.youtube.available:
         message = f"No supported music files found in:\n{music_dir}"
+        if args.youtube:
+            message += (
+                "\n\nYouTube mode was requested, but yt-dlp is unavailable."
+            )
         if not args.serious_mode:
             message += (
                 "\n\nThe cat searched the entire nest. No tunes. :<"
@@ -5575,6 +5588,12 @@ def main():
         print(message)
         player.shutdown()
         sys.exit(0)
+
+    if not player.songs and player.youtube.available:
+        player.set_status(
+            "No local tracks found; YouTube search is available with Y.",
+            "The local nest is empty, but Y opens the Internet Nest.",
+        )
 
     try:
         curses.wrapper(player.run)
