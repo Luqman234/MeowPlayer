@@ -7,6 +7,7 @@ from unittest import mock
 from meowplayer import MeowPlayer, build_mpv_command, parse_args
 from youtube_online import (
     YouTubeCatalog,
+    YouTubePlaylist,
     YouTubeTrack,
     YouTubeUnavailable,
     normalize_youtube_search,
