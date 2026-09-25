@@ -67,6 +67,7 @@ from settings_nest import (
 )
 from youtube_online import (
     YouTubeCatalog,
+    YouTubeDownloadSession,
     YouTubeStreamResolver,
     YouTubeSearchSession,
     network_subprocess_env,
@@ -914,6 +915,8 @@ class MeowPlayer:
             if self.youtube.available else None
         )
         self.youtube_search_session = None
+        self.youtube_download_session = None
+        self.youtube_download_track = None
         self._prefetch_selection = None
         self._online_future = None
         self._online_retry = 0
@@ -1672,6 +1675,8 @@ class MeowPlayer:
         self.playback_saboteur.dismiss(self)
         if self.youtube_search_session:
             self.youtube_search_session.close()
+        if self.youtube_download_session:
+            self.youtube_download_session.close()
         if self.stream_resolver:
             self.stream_resolver.close()
         self.online_metadata.stop()
@@ -3417,6 +3422,68 @@ class MeowPlayer:
         )
         return self.play_online(self.youtube_results[self.youtube_selected])
 
+    def download_selected_youtube_result(self):
+        if not self.youtube_results:
+            return False
+
+        if self.youtube_download_session is not None:
+            track = self.youtube_download_track
+            label = track.artist_title if track is not None else "another track"
+            self.set_status(
+                f"Download already in progress: {label}",
+                f"The adoption cat is already carrying home: {label}",
+            )
+            return False
+
+        self.youtube_selected = max(
+            0,
+            min(self.youtube_selected, len(self.youtube_results) - 1),
+        )
+        track = self.youtube_results[self.youtube_selected]
+        destination = self.music_dir / "Internet Nest"
+        self.youtube_download_track = track
+        self.youtube_download_session = YouTubeDownloadSession(
+            self.youtube.executable,
+            track,
+            destination,
+        )
+        self.set_status(
+            f"Downloading to library: {track.artist_title}",
+            f"Adopting this meow into the Music Nest: {track.artist_title}",
+        )
+        return True
+
+    def process_youtube_download(self):
+        session = self.youtube_download_session
+        if session is None:
+            return False
+
+        try:
+            kind, value = session.results.get_nowait()
+        except queue.Empty:
+            return False
+
+        track = self.youtube_download_track
+        session.close()
+        self.youtube_download_session = None
+        self.youtube_download_track = None
+
+        if kind == "error":
+            self.set_status(
+                f"Download failed: {value}",
+                f"The adoption cat came home empty-pawed: {value}",
+            )
+            return True
+
+        downloaded = Path(value)
+        self.rescan_library({"paths": (str(downloaded),)})
+        label = track.artist_title if track is not None else downloaded.stem
+        self.set_status(
+            f"Downloaded to library: {label} → {downloaded.name}",
+            f"Adopted into the Music Nest: {label} → {downloaded.name}",
+        )
+        return True
+
     def play(
         self,
         index,
@@ -5074,6 +5141,11 @@ class MeowPlayer:
                 self.online_current is not None
                 and track.video_id == self.online_current.video_id
             )
+            download_track = getattr(self, "youtube_download_track", None)
+            downloading = (
+                download_track is not None
+                and track.video_id == download_track.video_id
+            )
 
             if playing:
                 prefix = "▶  " if self.serious_mode else "🐾 "
@@ -5085,6 +5157,8 @@ class MeowPlayer:
             label = (
                 f"{track.artist_title} · {track.duration_label} · YouTube"
             )
+            if downloading:
+                label += self.text(" · downloading", " · adopting")
             attr = curses.A_REVERSE if selected else curses.A_NORMAL
             if playing:
                 attr |= curses.color_pair(2)
@@ -5195,6 +5269,7 @@ class MeowPlayer:
         while True:
             self.process_external_actions()
             self.process_youtube()
+            self.process_youtube_download()
             self.refresh_online_playback_state()
             self.playback_saboteur.tick(self)
             math_question = self.playback_saboteur.pop_math_question()
@@ -5673,14 +5748,14 @@ class MeowPlayer:
             elif self.view == "online":
                 if self.serious_mode:
                     controls = (
-                        "↑↓ Select  ENTER Stream  / Search  A Artist  Y Search  "
-                        ", Settings  Q Library  Space Pause  X Quit"
+                        "↑↓ Select  ENTER Stream  D Download  / Search  A Artist  "
+                        "Y Search  , Settings  Q Library  Space Pause  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
-                        "↑↓ Choose  ENTER Stream  / Hunt  A Artist Scent  Y Search  "
-                        ", Settings  Q Nest  Space Paws  X Escape"
+                        "↑↓ Choose  ENTER Stream  D Adopt  / Hunt  A Artist Scent  "
+                        "Y Search  , Settings  Q Nest  Space Paws  X Escape"
                     )
                     quote = self.cat_footer_message()
             else:
@@ -6108,6 +6183,8 @@ class MeowPlayer:
                     )
                 elif key in (10, 13, curses.KEY_ENTER):
                     self.play_selected_youtube_result()
+                elif key in (ord("d"), ord("D")):
+                    self.download_selected_youtube_result()
                 elif key == ord("/"):
                     if self.open_youtube_search(stdscr):
                         youtube_scroll = 0
