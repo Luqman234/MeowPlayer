@@ -15,7 +15,7 @@ from unittest import mock
 from meowplayer import MPVController, MeowPlayer
 from youtube_online import (YouTubeCatalog, YouTubeSearchSession, YouTubeStreamResolver,
                             YouTubeTrack, ResolvedStream, StreamResolutionError,
-                            parse_stream, resolver_command)
+                            network_subprocess_env, parse_stream, resolver_command)
 
 def player_for(mpv, resolver):
     player = MeowPlayer.__new__(MeowPlayer)
@@ -83,6 +83,45 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(result.headers["Cookie"], "required")
         self.assertEqual(result.format_id, "251")
         self.assertTrue(result.valid())
+
+    def test_network_subprocess_env_preserves_existing_glibc_options(self):
+        with mock.patch.dict(os.environ, {"RES_OPTIONS": "timeout:2 attempts:3"}, clear=False):
+            with mock.patch("youtube_online.platform.libc_ver", return_value=("glibc", "2.40")):
+                env = network_subprocess_env(PYTHONUNBUFFERED=1)
+        self.assertEqual(
+            env["RES_OPTIONS"],
+            "timeout:2 attempts:3 single-request-reopen",
+        )
+        self.assertEqual(env["PYTHONUNBUFFERED"], "1")
+
+    def test_network_subprocess_env_does_not_duplicate_workaround(self):
+        with mock.patch.dict(
+            os.environ,
+            {"RES_OPTIONS": "single-request-reopen timeout:1"},
+            clear=False,
+        ):
+            with mock.patch("youtube_online.platform.libc_ver", return_value=("glibc", "2.40")):
+                env = network_subprocess_env()
+        self.assertEqual(
+            env["RES_OPTIONS"].split().count("single-request-reopen"),
+            1,
+        )
+
+    def test_network_subprocess_env_leaves_non_glibc_resolver_unchanged(self):
+        with mock.patch.dict(os.environ, {"RES_OPTIONS": "timeout:2"}, clear=False):
+            with mock.patch("youtube_online.platform.libc_ver", return_value=("musl", "1.2")):
+                env = network_subprocess_env()
+        self.assertEqual(env["RES_OPTIONS"], "timeout:2")
+
+    def test_mpv_gets_resolver_workaround_only_when_requested(self):
+        fake_env = {"RES_OPTIONS": "single-request-reopen"}
+        with mock.patch("meowplayer.network_subprocess_env", return_value=fake_env) as make_env:
+            with mock.patch("meowplayer.subprocess.Popen") as popen:
+                popen.return_value.pid = 123
+                with mock.patch("meowplayer.os.path.exists", return_value=True):
+                    MPVController(network_resolver_workaround=True)
+        make_env.assert_called_once_with(resolver_workaround=True)
+        self.assertIs(popen.call_args.kwargs["env"], fake_env)
 
     def test_expiry_and_invalid_output(self):
         result = parse_stream(track(), json.dumps({"url": f"https://m.example/a?expire={time.time()+40}"}))
@@ -263,6 +302,33 @@ class StreamTests(unittest.TestCase):
         path.write_text(f"#!{sys.executable}\n" + script)
         path.chmod(0o755)
         return str(path)
+
+    def test_resolver_subprocess_receives_glibc_workaround(self):
+        executable = self.fake_executable(
+            'import json,os\n'
+            'assert "single-request-reopen" in os.environ.get("RES_OPTIONS","").split()\n'
+            'print(json.dumps({"url":"https://media.example/audio","http_headers":{},"format_id":"251"}))\n'
+        )
+        with mock.patch("youtube_online.platform.libc_ver", return_value=("glibc", "2.40")):
+            resolver = YouTubeStreamResolver(executable)
+            self.addCleanup(resolver.close)
+            self.assertEqual(resolver.resolve(track()).format_id, "251")
+
+    def test_search_subprocess_receives_glibc_workaround(self):
+        executable = self.fake_executable(
+            'import json,os\n'
+            'value=os.environ.get("RES_OPTIONS","")\n'
+            'print(json.dumps({"id":"first","title":value}),flush=True)\n'
+        )
+        with mock.patch("youtube_online.platform.libc_ver", return_value=("glibc", "2.40")):
+            session = YouTubeSearchSession(
+                YouTubeCatalog(enabled=True, executable=executable),
+                "cat",
+            )
+            self.addCleanup(session.close)
+            kind, value = session.results.get(timeout=1)
+        self.assertEqual(kind, "track")
+        self.assertIn("single-request-reopen", value.title.split())
 
     def test_real_subprocess_timeout(self):
         resolver = YouTubeStreamResolver(self.fake_executable("import time\ntime.sleep(30)\n"), timeout=.15)

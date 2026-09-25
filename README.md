@@ -2,12 +2,12 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.16.3** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.16.4** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.3 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.16.4 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -76,6 +76,88 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.16.4 — The Cat Stops Waiting Five Seconds for DNS
+
+A real Linux trace finally caught the remaining Internet Nest cold-start delay in the act.
+
+On an affected glibc/Linux network, yt-dlp was not spending seven seconds doing useful extraction work. One DNS exchange to the local router received one response quickly, then waited almost exactly five seconds for a companion response that never arrived:
+
+```text
+DNS request to local resolver
+        ↓
+one reply arrives            ~12 ms
+        ↓
+second reply never arrives
+        ↓
+poll timeout                 ~4.992 s
+        ↓
+retry
+        ↓
+replies arrive               ~10–20 ms
+```
+
+The observed syscall was a UDP DNS wait on port 53, followed by a successful retry. That matches the glibc resolver failure mode addressed by `single-request-reopen`.
+
+In repeated yt-dlp tests on the affected machine:
+
+```text
+normal/default resolver median      ~7.1 s
+single-request-reopen runs           2.229–3.680 s
+single-request-reopen median        ~2.692 s
+```
+
+So 0.16.4 applies the workaround **only to MeowPlayer's relevant child processes** instead of changing the user's system DNS configuration.
+
+On glibc systems, MeowPlayer now preserves the existing subprocess environment and appends:
+
+```text
+RES_OPTIONS=... single-request-reopen
+```
+
+without overwriting any existing resolver options and without adding the option twice.
+
+The scoped environment is used by:
+
+- the yt-dlp search worker;
+- the yt-dlp direct-stream resolver;
+- mpv when MeowPlayer was started with `--youtube`, so the final Googlevideo/media hostname benefits from the same resolver behavior.
+
+Local-only sessions do not opt mpv into the workaround, and non-glibc platforms leave `RES_OPTIONS` untouched.
+
+This is deliberately **not** a global DNS hack. MeowPlayer does not edit `/etc/resolv.conf`, change NetworkManager, force Cloudflare/Google DNS, or modify the parent shell environment.
+
+Combined with the 0.16.3 prefetch architecture, the expected affected-network path changes from:
+
+```text
+highlight result
+   ↓
+yt-dlp resolve
+   ↓
+~5 s failed DNS wait + extraction
+   ↓
+cached stream
+```
+
+to roughly:
+
+```text
+highlight result
+   ↓
+yt-dlp resolve in background
+   ↓
+~2–3 s observed resolver time
+   ↓
+cached direct stream
+   ↓
+Enter → warm mpv path
+```
+
+Tests cover preservation of existing `RES_OPTIONS`, duplicate suppression, non-glibc behavior, propagation into both yt-dlp workers, and propagation into YouTube-enabled mpv sessions.
+
+In short:
+
+> **0.16.3 taught the cat to hunt before Enter. 0.16.4 stopped the router from making the cat stare at a dead DNS socket for five seconds.**
 
 ## What's new in 0.16.3 — The Cat Hunts Before You Press Enter
 
@@ -2310,7 +2392,7 @@ The mascot reacts to player state:
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.3 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.16.4 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -2437,8 +2519,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.16.3-py3-none-any.whl
-└── meowplayer_terminal-0.16.3.tar.gz
+├── meowplayer_terminal-0.16.4-py3-none-any.whl
+└── meowplayer_terminal-0.16.4.tar.gz
 ```
 
 The installed CLI is still:

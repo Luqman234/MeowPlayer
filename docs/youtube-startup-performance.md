@@ -1,8 +1,9 @@
 # Internet Nest startup investigation
 
 Measured on 2026-09-25 with Python 3.14, mpv 0.41.0, yt-dlp
-2026.08.19, Linux/glibc, and the default PipeWire audio output. Base:
-`95bda09` (main already includes the v0.16.2 fixes). No version bump.
+2026.08.19, Linux/glibc, and the default PipeWire audio output. The original
+performance investigation was based on `95bda09` (main already included the
+v0.16.2 fixes); the confirmed resolver workaround is shipped in v0.16.4.
 
 ## Baseline and resolver candidates
 
@@ -65,6 +66,46 @@ path's capability with the DNS issue removed, **not** an unconditional ≤2 s
 claim. Cold resolution still misses the target in four of five samples; YouTube
 extraction/network latency remains external. With only five samples, p95 is
 the maximum observed sample, not a population-level reliability guarantee.
+
+### v0.16.4 confirmation: the five-second stall was a DNS retry timeout
+
+A later syscall trace reproduced the delay directly. With yt-dlp forced to IPv4,
+`strace -f -tt -T -yy` showed a UDP socket connected to the local DNS proxy on
+port 53 receive one reply in roughly 12 ms, then block waiting for another reply:
+
+```text
+poll(... UDP:[client -> local-resolver:53] ..., 4987)
+    = 0 (Timeout) <4.992079>
+```
+
+The same socket retried immediately afterward and received the required replies
+in roughly 10–20 ms. TCP setup after DNS was measured in tens of milliseconds.
+This confirms that the ~5 s component was resolver retry latency rather than
+YouTube decoding, Python CPU work, or media-server distance.
+
+Independent resolver-profile testing found no substantial extractor-only win:
+the default yt-dlp profile had a 7.103 s median across five runs, while the best
+reliable tested client profile was 6.963 s. Forcing IPv4 produced a 6.862 s
+median and forcing IPv6 a 6.814 s median, so address-family selection alone did
+not remove the stall.
+
+With `RES_OPTIONS=single-request-reopen`, five yt-dlp resolves completed in:
+
+```text
+3.348 s
+2.692 s
+2.455 s
+3.680 s
+2.229 s
+```
+
+Median: **2.692 s**. This removes most of the observed ~7 s cold-resolve delay
+without changing the system resolver or selecting a third-party DNS service.
+
+v0.16.4 therefore applies `single-request-reopen` process-locally on glibc to
+the yt-dlp search/resolver workers and to mpv only when `--youtube` is enabled.
+Existing `RES_OPTIONS` values are preserved, duplicate insertion is avoided,
+and non-glibc platforms are left unchanged.
 
 A separate streaming-search run with that DNS environment and “On My Way”
 returned the first result in **1,586 ms**, all 12 in **1,675 ms**. This comparison
