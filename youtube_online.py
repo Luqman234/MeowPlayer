@@ -55,6 +55,10 @@ class YouTubeDownloadError(RuntimeError):
     pass
 
 
+class YouTubeBrowseError(RuntimeError):
+    pass
+
+
 YOUTUBE_SEARCH_MODES = {"all", "artist"}
 
 
@@ -107,6 +111,8 @@ class YouTubeTrack:
     duration: float
     url: str
     thumbnail_url: str = ""
+    channel_id: str = ""
+    channel_url: str = ""
 
     @property
     def artist_title(self):
@@ -126,6 +132,22 @@ class YouTubeTrack:
     @property
     def queue_label(self):
         return f"{self.artist_title} · YouTube · {self.duration_label}"
+
+
+@dataclass(frozen=True)
+class YouTubePlaylist:
+    playlist_id: str
+    title: str
+    channel: str
+    url: str
+    item_count: int = 0
+
+    @property
+    def count_label(self):
+        if self.item_count <= 0:
+            return "playlist"
+        noun = "track" if self.item_count == 1 else "tracks"
+        return f"{self.item_count} {noun}"
 
 
 class YouTubeCatalog:
@@ -231,6 +253,7 @@ class YouTubeCatalog:
             duration = cls._duration_from_entry(entry)
             url = cls._watch_url(entry, video_id)
             thumbnail = cls._thumbnail_from_entry(entry)
+            channel_id, channel_url = cls._channel_from_entry(entry)
 
             tracks.append(
                 YouTubeTrack(
@@ -240,6 +263,8 @@ class YouTubeCatalog:
                     duration=duration,
                     url=url,
                     thumbnail_url=thumbnail,
+                    channel_id=channel_id,
+                    channel_url=channel_url,
                 )
             )
             seen.add(video_id)
@@ -307,6 +332,66 @@ class YouTubeCatalog:
                     return value
 
         return ""
+
+    @staticmethod
+    def _channel_from_entry(entry):
+        channel_id = ""
+        for key in ("channel_id", "uploader_id"):
+            value = str(entry.get(key) or "").strip()
+            if value:
+                channel_id = value
+                break
+
+        channel_url = ""
+        for key in ("channel_url", "uploader_url"):
+            value = str(entry.get(key) or "").strip()
+            if value.startswith(("https://", "http://")):
+                channel_url = value
+                break
+
+        if not channel_url and channel_id:
+            channel_url = f"https://www.youtube.com/channel/{channel_id}"
+
+        return channel_id, channel_url
+
+    @staticmethod
+    def _playlist_from_entry(entry):
+        if not isinstance(entry, dict):
+            return None
+        playlist_id = str(entry.get("id") or "").strip()
+        title = str(entry.get("title") or "").strip()
+        if not playlist_id or not title:
+            return None
+
+        url = ""
+        for key in ("webpage_url", "original_url", "url"):
+            value = str(entry.get(key) or "").strip()
+            if value.startswith(("https://", "http://")):
+                url = value
+                break
+        if not url:
+            url = f"https://www.youtube.com/playlist?list={playlist_id}"
+
+        channel = YouTubeCatalog._artist_from_entry(entry)
+        try:
+            item_count = max(
+                0,
+                int(
+                    entry.get("playlist_count")
+                    or entry.get("n_entries")
+                    or 0
+                ),
+            )
+        except (TypeError, ValueError):
+            item_count = 0
+
+        return YouTubePlaylist(
+            playlist_id=playlist_id,
+            title=title,
+            channel=channel,
+            url=url,
+            item_count=item_count,
+        )
 
 
 # Stream URLs and headers are deliberately held only in memory.
@@ -574,7 +659,7 @@ class YouTubeSearchSession:
                 limit = max(1, min(50, int(limit)))
             command = [catalog.executable, "--ignore-config", "--flat-playlist",
                        "--skip-download", "--no-warnings", "--lazy-playlist",
-                       "--print", "%(.{id,title,artist,artists,creator,uploader,channel,duration,webpage_url})j",
+                       "--print", "%(.{id,title,artist,artists,creator,uploader,channel,channel_id,channel_url,uploader_id,uploader_url,duration,webpage_url})j",
                        youtube_search_target(query, limit, search_mode)]
             process = subprocess.Popen(
                 command,
@@ -809,4 +894,185 @@ class YouTubeDownloadSession:
         process = self._process
         if process is not None and process.poll() is None:
             process.kill()
+        self.thread.join(timeout=2.0)
+
+
+def youtube_creator_section_url(channel_url, section):
+    """Return a creator channel subsection URL suitable for yt-dlp."""
+    if section not in {"videos", "playlists"}:
+        raise ValueError(f"Unsupported creator section: {section}")
+
+    raw = str(channel_url or "").strip().rstrip("/")
+    if not raw.startswith(("https://", "http://")):
+        return ""
+
+    for suffix in (
+        "/videos",
+        "/playlists",
+        "/featured",
+        "/streams",
+        "/shorts",
+    ):
+        if raw.endswith(suffix):
+            raw = raw[:-len(suffix)]
+            break
+    return f"{raw}/{section}"
+
+
+class YouTubeBrowseSession:
+    """Stream creator uploads, creator playlists, or playlist tracks."""
+
+    MODES = {"uploads", "playlists", "playlist"}
+
+    def __init__(
+        self,
+        catalog,
+        source_url,
+        mode,
+        *,
+        timeout=None,
+    ):
+        if mode not in self.MODES:
+            raise ValueError(f"Unsupported YouTube browse mode: {mode}")
+        self.results = queue.SimpleQueue()
+        self.cancel = threading.Event()
+        self.catalog = catalog
+        self.source_url = str(source_url or "").strip()
+        self.mode = mode
+        self.timeout = (
+            catalog.timeout
+            if timeout is None
+            else max(1.0, float(timeout))
+        )
+        self.thread = threading.Thread(
+            target=self._run,
+            name=f"yt-browse-{mode}",
+            daemon=True,
+        )
+        self.thread.start()
+
+    def _target(self):
+        if self.mode == "uploads":
+            return youtube_creator_section_url(
+                self.source_url,
+                "videos",
+            )
+        if self.mode == "playlists":
+            return youtube_creator_section_url(
+                self.source_url,
+                "playlists",
+            )
+        return self.source_url
+
+    def _run(self):
+        process = None
+        started = time.monotonic()
+        try:
+            if not self.catalog.available:
+                raise YouTubeBrowseError(
+                    self.catalog.unavailable_reason
+                )
+            target = self._target()
+            if not target:
+                raise YouTubeBrowseError(
+                    "This result does not expose a browsable YouTube channel."
+                )
+
+            fields = (
+                "%(.{id,title,artist,artists,creator,uploader,channel,"
+                "channel_id,channel_url,uploader_id,uploader_url,duration,"
+                "playlist_count,n_entries,webpage_url,original_url,url})j"
+            )
+            command = [
+                self.catalog.executable,
+                "--ignore-config",
+                "--flat-playlist",
+                "--skip-download",
+                "--no-warnings",
+                "--lazy-playlist",
+                "--print",
+                fields,
+                target,
+            ]
+            LOGGER.info(
+                "YouTube browse requested mode=%s source=%s",
+                self.mode,
+                target,
+            )
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=network_subprocess_env(PYTHONUNBUFFERED="1"),
+            )
+            last_progress = started
+            seen = set()
+            buffer = b""
+
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while not self.cancel.is_set():
+                    if not selector.select(timeout=0.1):
+                        if process.poll() is not None:
+                            break
+                        if time.monotonic() - last_progress >= self.timeout:
+                            raise YouTubeBrowseError(
+                                "YouTube channel browsing stalled."
+                            )
+                        continue
+
+                    chunk = os.read(process.stdout.fileno(), 65536)
+                    if not chunk:
+                        break
+                    last_progress = time.monotonic()
+                    buffer += chunk
+
+                    while b"\n" in buffer:
+                        line, buffer = buffer.split(b"\n", 1)
+                        data = json.loads(line)
+
+                        if self.mode == "playlists":
+                            item = self.catalog._playlist_from_entry(data)
+                            if item is None or item.playlist_id in seen:
+                                continue
+                            seen.add(item.playlist_id)
+                            self.results.put(("playlist", item))
+                            continue
+
+                        tracks = self.catalog._tracks_from_payload(
+                            {"entries": [data]}
+                        )
+                        for track in tracks:
+                            if track.video_id in seen:
+                                continue
+                            seen.add(track.video_id)
+                            self.results.put(("track", track))
+
+            if (
+                not self.cancel.is_set()
+                and process.wait(timeout=1) != 0
+            ):
+                raise YouTubeBrowseError(
+                    "yt-dlp could not browse this YouTube channel."
+                )
+            if not self.cancel.is_set():
+                self.results.put(("done", None))
+        except YouTubeBrowseError as exc:
+            self.results.put(("error", str(exc)))
+        except Exception:
+            LOGGER.exception(
+                "Unexpected YouTube browse failure mode=%s",
+                self.mode,
+            )
+            self.results.put(
+                ("error", "YouTube channel browsing failed unexpectedly.")
+            )
+        finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
+
+    def close(self):
+        self.cancel.set()
         self.thread.join(timeout=2.0)
