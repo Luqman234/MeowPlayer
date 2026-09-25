@@ -127,6 +127,12 @@ class YouTubeOnlineTests(unittest.TestCase):
             "https://music.youtube.com/search?q=Creator+Cat#albums",
         )
 
+    def test_topic_suffix_is_removed_from_music_album_search(self):
+        self.assertEqual(
+            youtube_music_album_search_url("Creator Cat - Topic"),
+            "https://music.youtube.com/search?q=Creator+Cat#albums",
+        )
+
     def test_topic_playlists_fall_back_to_music_album_search(self):
         targets = youtube_creator_browse_targets(
             "https://www.youtube.com/channel/UCtopic",
