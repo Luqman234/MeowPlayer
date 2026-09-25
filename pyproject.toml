@@ -61,6 +61,7 @@ dev = [
 py-modules = [
     "meowplayer",
     "album_art",
+    "bad_larry",
     "lyrics_support",
     "library_watcher",
     "meow_catalog",
