@@ -202,7 +202,7 @@ class YouTubeCatalog:
             session.close()
 
     @classmethod
-    def _tracks_from_payload(cls, payload, limit=12):
+    def _tracks_from_payload(cls, payload, limit=None):
         if not isinstance(payload, dict):
             return []
 
@@ -239,7 +239,7 @@ class YouTubeCatalog:
             )
             seen.add(video_id)
 
-            if len(tracks) >= limit:
+            if limit is not None and len(tracks) >= max(1, int(limit)):
                 break
 
         return tracks
