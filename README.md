@@ -1227,6 +1227,37 @@ meowplayer --youtube
 
 Then press `Y` from the TUI to open the **Internet Nest**. Type a song/title search, choose a result with the arrow keys, and press `Enter` to stream it.
 
+If a result earns permanent residence in your collection, press **`D`** to download/adopt it into the local Music Nest.
+
+```text
+Internet Nest result
+        ↓
+      D Adopt
+        ↓
+yt-dlp bestaudio
+        ↓
+ffmpeg → Opus + embedded metadata
+        ↓
+<your music directory>/Internet Nest/
+        ↓
+library rescan
+        ↓
+ordinary local MeowPlayer track
+```
+
+Downloaded tracks use a stable filename containing the YouTube video ID:
+
+```text
+Internet Nest/
+└── Song Title [VIDEO_ID].opus
+```
+
+That keeps same-titled uploads from overwriting one another. MeowPlayer allows only one active adoption at a time, runs the download off the curses thread, and automatically rescans the library after a successful download. Existing online playback keeps working while the adoption cat is carrying the file home.
+
+**Download requirements:** `yt-dlp` and `ffmpeg` must both be available on `PATH`. Internet Nest streaming itself still only depends on the normal online-playback requirements.
+
+Use this for media you are permitted to download; MeowPlayer does not attempt to determine rights or licensing for a remote upload.
+
 Internet Nest searches are no longer capped at 12 results. Both ordinary title searches and **Artist Scent** searches use yt-dlp's all-results search target and stream results into the TUI as they arrive. The list remains scrollable while the search is still running.
 
 ```text
