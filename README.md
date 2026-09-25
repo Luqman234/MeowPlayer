@@ -77,113 +77,171 @@ MeowPlayer tries to stay true to a few rules:
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
 
-## What's new in 0.16.4 — The Cat Stops Waiting Five Seconds for DNS
+## What's new in 0.16.4 — The Router Ate a DNS Reply and the Cat Took It Personally
 
-A real Linux trace finally caught the remaining Internet Nest cold-start delay in the act.
-
-On an affected glibc/Linux network, yt-dlp was not spending seven seconds doing useful extraction work. One DNS exchange to the local router received one response quickly, then waited almost exactly five seconds for a companion response that never arrived:
+0.16.4 exists because the Internet Nest was still occasionally doing this:
 
 ```text
-DNS request to local resolver
+user: play song
+cat:  absolutely
+cat:  one moment
+cat:  ...
+cat:  ...
+cat:  ...
+cat:  why is the router not answering me
+cat:  ...
+music: finally
+```
+
+We eventually stopped blaming yt-dlp, stopped glaring at mpv, and put the whole thing under `strace`.
+
+The crime scene was extremely specific:
+
+```text
+DNS request → local resolver
         ↓
-one reply arrives            ~12 ms
+one reply arrives                 ~12 ms
         ↓
-second reply never arrives
+the other reply apparently enters the void
         ↓
-poll timeout                 ~4.992 s
+cat stares at socket
+        ↓
+poll timeout                      ~4.992 s
         ↓
 retry
         ↓
-replies arrive               ~10–20 ms
+replies arrive                    ~10–20 ms
 ```
 
-The observed syscall was a UDP DNS wait on port 53, followed by a successful retry. That matches the glibc resolver failure mode addressed by `single-request-reopen`.
+That nearly-five-second nap was a UDP DNS wait on port 53. After the retry, the actual network work moved quickly.
 
-In repeated yt-dlp tests on the affected machine:
+So no, yt-dlp was not spending seven seconds performing forbidden mathematics.
+
+It was mostly waiting for DNS.
+
+### The fix: bother glibc differently, not the whole computer
+
+On affected glibc/Linux systems, `single-request-reopen` avoids the resolver behavior that triggered the lost-companion-reply problem.
+
+Before the fix, repeated yt-dlp runs on the affected machine were around:
 
 ```text
-normal/default resolver median      ~7.1 s
-single-request-reopen runs           2.229–3.680 s
-single-request-reopen median        ~2.692 s
+default resolver median     ~7.1 s
 ```
 
-So 0.16.4 applies the workaround **only to MeowPlayer's relevant child processes** instead of changing the user's system DNS configuration.
-
-On glibc systems, MeowPlayer now preserves the existing subprocess environment and appends:
+With the workaround:
 
 ```text
-RES_OPTIONS=... single-request-reopen
+3.348 s
+2.692 s
+2.455 s
+3.680 s
+2.229 s
+
+median: ~2.692 s
 ```
 
-without overwriting any existing resolver options and without adding the option twice.
+That is not a tiny optimization.
 
-The scoped environment is used by:
+That is the cat reclaiming roughly **four to five seconds of its life**.
+
+MeowPlayer now applies the workaround only where the Internet Nest needs it. Existing resolver options are preserved, the option is not duplicated, and non-glibc platforms are left alone.
+
+The affected children are:
 
 - the yt-dlp search worker;
 - the yt-dlp direct-stream resolver;
-- mpv when MeowPlayer was started with `--youtube`, so the final Googlevideo/media hostname benefits from the same resolver behavior.
+- mpv when MeowPlayer was started with `--youtube`.
 
-Local-only sessions do not opt mpv into the workaround, and non-glibc platforms leave `RES_OPTIONS` untouched.
+Local-only playback does not get dragged into this DNS drama.
 
-This is deliberately **not** a global DNS hack. MeowPlayer does not edit `/etc/resolv.conf`, change NetworkManager, force Cloudflare/Google DNS, or modify the parent shell environment.
+And MeowPlayer still does **not** edit `/etc/resolv.conf`, replace NetworkManager settings, force a public DNS service, or sneak into your router at 3 AM with a screwdriver.
 
-Combined with the 0.16.3 prefetch architecture, the expected affected-network path changes from:
+The parent shell stays untouched.
 
-```text
-highlight result
-   ↓
-yt-dlp resolve
-   ↓
-~5 s failed DNS wait + extraction
-   ↓
-cached stream
-```
+### Before and after, in cat terms
 
-to roughly:
+Before:
 
 ```text
 highlight result
    ↓
-yt-dlp resolve in background
+background cat starts hunting
    ↓
-~2–3 s observed resolver time
+DNS drops one answer
    ↓
-cached direct stream
+cat waits ~5 seconds in complete spiritual defeat
    ↓
-Enter → warm mpv path
+yt-dlp continues
+   ↓
+stream finally cached
 ```
 
-Tests cover preservation of existing `RES_OPTIONS`, duplicate suppression, non-glibc behavior, propagation into both yt-dlp workers, and propagation into YouTube-enabled mpv sessions.
+Now:
 
-In short:
+```text
+highlight result
+   ↓
+background cat starts hunting
+   ↓
+resolver behaves itself
+   ↓
+~2–3 s observed resolve time
+   ↓
+stream cached
+   ↓
+Enter
+   ↓
+mpv already has dinner
+```
 
-> **0.16.3 taught the cat to hunt before Enter. 0.16.4 stopped the router from making the cat stare at a dead DNS socket for five seconds.**
+0.16.3 made the architecture fast.
 
-## What's new in 0.16.3 — The Cat Hunts Before You Press Enter
+0.16.4 removed the networking gremlin that was sitting on top of it.
 
-Internet Nest is now built around **background search, selected-result prefetch, direct-stream caching, and observed mpv state** instead of making the user wait for every expensive operation after pressing `Enter`.
+Tests cover preserving existing `RES_OPTIONS`, avoiding duplicate insertion, leaving non-glibc systems alone, propagating the environment to both yt-dlp workers, and giving YouTube-enabled mpv the same scoped workaround.
 
-The old path was functionally correct but badly timed:
+> **0.16.3 taught the cat to hunt before Enter. 0.16.4 discovered the router had been hiding one of the mice.**
+
+## What's new in 0.16.3 — The Cat Starts Hunting Before You Ask
+
+Internet Nest used to be technically correct in the most annoying possible way.
+
+You pressed `Enter`.
+
+Then MeowPlayer began doing all the expensive internet work.
+
+Then you waited.
+
+Then the cat insisted this was a feature.
+
+The old path looked approximately like this:
 
 ```text
 search
   ↓
-block the TUI until yt-dlp finishes
+TUI waits for yt-dlp
   ↓
-show results
+results finally appear
   ↓
 Enter
   ↓
-resolve the YouTube watch URL
+yt-dlp starts another expensive job
   ↓
-wait again
+wait some more
   ↓
-open the media stream
+mpv opens stream
   ↓
 music
 ```
 
-0.16.3 moves that work earlier:
+0.16.3 changed the philosophy from:
+
+> **do the work after the human asks**
+
+to:
+
+> **send the cat hunting while the human is still deciding**
 
 ```text
 Internet Nest search worker
@@ -192,80 +250,147 @@ results appear as they arrive
         ↓
 first / highlighted result
         ↓
-150 ms selection debounce
+150 ms "are you actually staying on this row?" debounce
         ↓
 one background resolver
         ↓
 short-lived ResolvedStream cache
 
-              later...
+             meanwhile, the human exists
 
-             Enter
-               ↓
+                        ↓
+
+                      Enter
+                        ↓
 cached direct audio URL + per-file headers
-               ↓
-mpv with ytdl disabled for that file
-               ↓
+                        ↓
+mpv opens the already-resolved stream
+                        ↓
 music
 ```
 
-### Search no longer owns the TUI
+### Search escaped from the main thread
 
-YouTube search now runs in a background worker and publishes usable JSON-line results incrementally instead of blocking curses until the whole search subprocess completes.
+YouTube search now runs in a background worker and publishes JSON-line results as they arrive.
 
-The first result can begin prefetching immediately. Moving the selection schedules the highlighted result after a **150 ms debounce**, so rapidly tapping the arrow keys does not spawn a resolver for every transient row.
+The TUI no longer has to sit frozen like a cat that heard a plastic bag move in another room.
 
-Only **one resolver worker** runs at a time, with at most **one queued request**. Same-video resolves are deduplicated.
+The first usable result can immediately begin prefetching. When you move the selection, MeowPlayer waits **150 ms** before resolving the highlighted row so frantic arrow-key movement does not summon an entire army of yt-dlp processes.
 
-### Enter can reuse work that already happened
+There is only:
 
-Resolved streams live in a **16-entry, memory-only LRU** for at most **180 seconds**, shortened when the signed media URL expires sooner.
+```text
+1 active resolver worker
+1 replaceable queued request
+0 reasons to spawn 14 extractors because you held ↓
+```
 
-A resolved entry keeps only what playback needs, including the selected direct audio URL and the required per-file HTTP headers. MeowPlayer does not download the media, does not add the remote track to Cat Catalog, and does not persist the cache across launches.
+Requests for the same video are deduplicated.
 
-On a cache hit:
+### Enter is allowed to benefit from previous labor
+
+Resolved streams live in a **16-entry memory-only LRU** for at most **180 seconds**, shortened when the signed media URL expires sooner.
+
+The cache contains what playback actually needs:
+
+```text
+video identity
+direct audio URL
+required HTTP headers
+format id
+```
+
+It does **not**:
+
+```text
+download the song
+insert it into Cat Catalog
+pretend YouTube is your local library
+survive the next launch
+become a mysterious cache folder named DO_NOT_DELETE_FINAL_v7
+```
+
+When the highlighted result is already resolved:
 
 ```text
 Enter
   ↓
 no second yt-dlp extraction
   ↓
-direct stream handed to mpv
+direct stream → mpv
   ↓
-required HTTP headers apply to this file only
+headers apply to this file only
+  ↓
+music
 ```
 
-If the direct stream is rejected, MeowPlayer invalidates the entry, performs one fresh resolve, and can still fall back to mpv's ordinary YouTube watch-URL ytdl hook. Repeated `Enter` while the same track is resolving/loading remains suppressed.
+If that direct stream gets rejected, MeowPlayer throws away the stale entry, tries one fresh resolve, then still has mpv's normal watch-URL ytdl path as a fallback.
 
-Without `--youtube`, none of the search or resolver workers start.
+And repeatedly punching `Enter` while the same track is already resolving/loading still does not make the internet more motivated.
 
-### mpv state is observed instead of constantly interrogated
+Without `--youtube`, none of these online workers start.
 
-The persistent JSON IPC connection introduced in 0.16.2 now has one reader responsible for newline framing, asynchronous events, request-ID waiters, reconnect/resubscription, and shutdown.
+### mpv is no longer questioned like a suspicious witness 77 times per second
 
-Frequently-read playback properties are observed and cached rather than queried synchronously on every TUI loop. In a matched property-read workload, command traffic fell from:
+0.16.2 gave MeowPlayer one persistent, framed mpv JSON IPC connection.
+
+0.16.3 taught it to actually use that connection like an adult.
+
+Frequently-read playback properties are now observed and cached instead of synchronously asking mpv the same questions every TUI loop.
+
+Measured property traffic:
 
 ```text
 before: 77.09 commands / second
 after:   0.00 commands / second after observer setup
 ```
 
-Gapless safety is deliberately different. Path, playlist position, and playlist count still use fresh synchronous replies at the existing mutation gates where stale state could corrupt the one-track-ahead playlist.
+The cat has stopped repeatedly asking:
 
-The stable local-gapless invariant remains:
+```text
+are we paused?
+are we paused?
+are we paused?
+what about now?
+what about now?
+what about now?
+```
+
+Gapless playback is intentionally more paranoid. Path, playlist position, and playlist count still use fresh synchronous reads at the mutation points where stale information could break the one-track-ahead playlist.
+
+The sacred local-gapless arrangement remains:
 
 ```text
 playlist-current-pos = 0
 playlist-count       = 2
 ```
 
-and MeowPlayer still refuses to mutate the future playlist while mpv reports `playlist-current-pos = -1`.
+And if mpv says:
 
-### What the latency measurements actually showed
+```text
+playlist-current-pos = -1
+```
 
-The optimization work measured real mpv playback rather than treating a successful `loadfile` command as "started". Startup timing requires the expected direct stream plus mpv's `file-loaded`, `playback-restart`, non-idle state, and advancing playback time.
+MeowPlayer does not touch the future playlist.
 
-Development measurements used mpv 0.41.0, yt-dlp 2026.08.19, Linux/glibc, and YouTube video `jNQXAC9IVRw`.
+The cat may be impulsive.
+
+The gapless state machine is not.
+
+### Benchmarks, because apparently the cat has a laboratory now
+
+The measurements do not call playback "started" just because mpv acknowledged a command.
+
+Startup requires the expected stream plus real playback evidence: `file-loaded`, `playback-restart`, non-idle state, and advancing playback time.
+
+Development setup:
+
+```text
+mpv       0.41.0
+yt-dlp    2026.08.19
+platform  Linux / glibc
+video     jNQXAC9IVRw
+```
 
 | Measurement | Result |
 | --- | ---: |
@@ -281,17 +406,39 @@ Development measurements used mpv 0.41.0, yt-dlp 2026.08.19, Linux/glibc, and Yo
 | Final diagnostic warm run | **288 ms** |
 | Final diagnostic direct-open time | **287 ms** |
 
-The selected-JSON resolver was chosen because it keeps the HTTP headers needed for robust direct playback. The speedup does **not** come from yt-dlp suddenly extracting YouTube in a few hundred milliseconds; the major win is performing extraction before `Enter` and reusing that result.
+The selected-JSON resolver won because it preserves the HTTP headers needed for reliable direct playback.
 
-The original search completed in **6,779 ms**. In the DNS diagnostic environment, streaming search produced its first result in **1,586 ms** and all results in **1,675 ms**. A later default-DNS run took **10,017 ms** to first result and **10,108 ms** total. That means there is no demonstrated universal default-network search-speedup claim: the important guaranteed improvement is that the TUI stays responsive and can consume results incrementally.
+The important trick is **not** that yt-dlp suddenly learned to resolve YouTube in 287 ms.
 
-### About the 2-second target
+It did not.
 
-The engineering target was **≤2 seconds from Enter to actual mpv playback on a prefetched result**.
+The trick is:
 
-That target was **not met in the measured default environment**. A media-host DNS lookup independently reproduced a roughly **5,027 ms** delay before TCP connection, closely matching the multi-second warm-start penalty there.
+```text
+expensive extraction
+        ↓
+happens before Enter
 
-With the process-only resolver diagnostic:
+Enter
+        ↓
+reuse finished work
+        ↓
+fast direct open
+```
+
+That is prefetching doing exactly what prefetching is supposed to do, except with more whiskers.
+
+### Did we actually hit the two-second target?
+
+The goal was:
+
+> **≤2 seconds from Enter to real mpv playback on a prefetched result**
+
+In the original default environment: **nope**.
+
+A media-host DNS lookup independently reproduced about **5,027 ms** before TCP even got a chance to do anything useful.
+
+With the process-only resolver diagnostic used during 0.16.3 development:
 
 ```bash
 RES_OPTIONS=single-request-reopen \
@@ -300,31 +447,49 @@ RES_OPTIONS=single-request-reopen \
   --runs 5 --json
 ```
 
-all five warm samples were below one second, with a **290 ms median and 331 ms p95**.
-
-MeowPlayer does **not** set `RES_OPTIONS`, alter system DNS, or pretend that diagnostic result represents every machine. Cold extraction still exceeded two seconds in most diagnostic runs. Network resolution, YouTube extraction, and remote media opening remain external bottlenecks.
-
-In other words:
+all five warm samples were under one second:
 
 ```text
-MeowPlayer-controlled warm path
-        ↓
-can be ~0.3 s
-
-affected default resolver path
-        ↓
-can still lose ~5 s before TCP
+median: 290 ms
+p95:    331 ms
 ```
 
-The cat learned to hunt early. It cannot personally repair your DNS server.
+At the time of the 0.16.3 investigation, MeowPlayer deliberately did **not** set that resolver option itself because the DNS cause had not yet been proven strongly enough.
 
-### Better measurements, less log leakage
+Then 0.16.4 arrived with `strace`, caught the exact **4.992-second DNS timeout**, and turned that diagnostic into a scoped product fix.
 
-Debug mode now records performance-oriented `YT_LATENCY`, `YT_PREFETCH`, `YT_PLAY`, and `IPC_STATS` events using a monotonic clock.
+So the historical sequence is:
 
-MeowPlayer's own performance log omits direct stream URLs and HTTP-header values. The verbose mpv debug log can still contain signed media URLs and headers, so it should still be reviewed before sharing.
+```text
+0.16.3:
+"interesting, this DNS workaround makes the warm path ~0.3 s"
 
-For reproducible investigation:
+0.16.4:
+"we caught the 4.992 s timeout red-pawed; deploy the scoped fix"
+```
+
+Cold extraction can still take a few seconds because YouTube is still the internet and the internet remains committed to being the internet.
+
+### Debug logs: receipts, but please inspect them before posting
+
+With `--debug` or `--log-file`, MeowPlayer records performance events such as:
+
+```text
+YT_LATENCY
+YT_PREFETCH
+YT_PLAY
+IPC_STATS
+```
+
+using monotonic timing.
+
+MeowPlayer's own performance logging intentionally avoids direct stream URLs and HTTP-header values.
+
+mpv's verbose debug log can still contain signed URLs and headers, because mpv has never met a secret it did not want to print at maximum verbosity.
+
+So redact before posting.
+
+Useful benchmark commands:
 
 ```bash
 python tools/benchmark_youtube_startup.py \
@@ -340,25 +505,25 @@ python tools/benchmark_youtube_startup.py \
   --candidates --runs 3
 ```
 
-Full raw measurements, reproduction commands, methodology, DNS diagnostics, and caveats live in [`docs/youtube-startup-performance.md`](docs/youtube-startup-performance.md).
+Full measurements, reproduction commands, DNS evidence, caveats, and the serious-adult version of this story live in [`docs/youtube-startup-performance.md`](docs/youtube-startup-performance.md).
 
-### Validation
+### Did the cat break everything else?
 
-The performance work was designed not to turn normal CI into "hope YouTube is up today".
+That would be embarrassing, so we checked.
 
-Validation includes:
+The performance work includes deterministic coverage for cache expiry, deduplication, rapid selection changes, debounce, Enter during and after prefetch, cancellation, late results, fallback/re-resolution, partial IPC frames, interleaved replies, observed values, reconnect/resubscription, reader shutdown, and HTTP-header isolation.
 
-- 162 local tests, including opt-in real-mpv / loopback-HTTP coverage.
-- Deterministic tests for cache expiry, resolve deduplication, rapid selection changes, debounce, Enter during/after prefetch, cancellation, late results, fallback/re-resolution, partial IPC frames, interleaved replies, observed values, reconnect/resubscription, reader shutdown, and HTTP-header isolation.
-- Existing real Linux coverage for mpv IPC, stable gapless `position=0/count=2`, top-level playback/re-prime, debug logs, D-Bus/MPRIS, Watchdog/inotify, and Pillow.
-- Wheel/sdist build, Twine metadata validation, clean-wheel dependency checks, installed CLI version/help checks, and coverage.
-- Normal CI never contacts YouTube; direct-stream integration uses a local HTTP fixture.
+The existing Linux integrations still exercise mpv IPC, stable gapless `position=0/count=2`, playback/re-prime, debug logs, D-Bus/MPRIS, Watchdog/inotify, and Pillow.
 
-A follow-up real-mpv CI run also caught a gapless re-prime timing regression. Gapless path confirmation therefore explicitly retains a fresh synchronous reply, while ordinary playback observations remain cached. The test's null-audio configuration was also moved under its overridden `XDG_CONFIG_HOME` so integration behavior does not accidentally depend on host audio availability.
+Packaging still gets wheel/sdist builds, metadata validation, clean-install checks, CLI version/help checks, and coverage.
 
-0.16.3 is therefore mostly a performance-and-architecture release:
+Normal CI does **not** call live YouTube. The direct-stream integration uses a local HTTP fixture because depending on YouTube in every CI run would be less "continuous integration" and more "continuous bargaining with an external website."
 
-> **the expensive internet cat starts hunting before you press Enter, and the playback cat stops asking mpv the same question 77 times per second.**
+A real-mpv CI run even caught a gapless re-prime timing race during development, so the fresh synchronous gapless confirmation stayed exactly where it belonged.
+
+In short:
+
+> **the internet cat starts hunting early, the playback cat stopped interrogating mpv 77 times a second, and the gapless cat still wears a tiny safety helmet.**
 
 ## What's new in 0.16.2 — The Cat Learned How Newlines Work
 
