@@ -1026,6 +1026,7 @@ class YouTubeBrowseSession:
 
                 process = None
                 buffer = b""
+                before_count = len(seen)
                 last_progress = time.monotonic()
                 try:
                     command = [
@@ -1111,8 +1112,17 @@ class YouTubeBrowseSession:
 
                     returncode = process.wait(timeout=1)
                     if returncode == 0:
-                        succeeded = True
-                        break
+                        produced_items = len(seen) > before_count
+                        if produced_items or attempt == len(targets):
+                            succeeded = True
+                            break
+                        LOGGER.info(
+                            "YouTube browse target was empty mode=%s source=%s; "
+                            "trying fallback",
+                            self.mode,
+                            target,
+                        )
+                        continue
 
                     LOGGER.info(
                         "YouTube browse target failed mode=%s source=%s "
@@ -1120,6 +1130,14 @@ class YouTubeBrowseSession:
                         self.mode,
                         target,
                         returncode,
+                    )
+                except YouTubeBrowseError as exc:
+                    LOGGER.info(
+                        "YouTube browse target unavailable mode=%s source=%s "
+                        "reason=%s; trying fallback if available",
+                        self.mode,
+                        target,
+                        exc,
                     )
                 finally:
                     if process is not None:
