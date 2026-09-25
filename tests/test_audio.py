@@ -1,7 +1,10 @@
 import inspect
+import json
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from meowplayer import (
     MPVController,
@@ -55,6 +58,28 @@ class FakeMPV:
 
     def stop(self):
         self.stop_calls += 1
+
+
+class FakeIPCSocket:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+        self.sent = []
+        self.timeouts = []
+        self.closed = False
+
+    def settimeout(self, value):
+        self.timeouts.append(value)
+
+    def sendall(self, payload):
+        self.sent.append(payload)
+
+    def recv(self, size):
+        if not self.chunks:
+            return b""
+        return self.chunks.pop(0)
+
+    def close(self):
+        self.closed = True
 
 
 class AudioEngineTests(unittest.TestCase):
@@ -345,6 +370,80 @@ class AudioEngineTests(unittest.TestCase):
         self.assertNotIn("visualizer_enabled", parameters)
         self.assertNotIn("filesystem_watch_enabled", parameters)
 
+    def test_mpv_ipc_frames_event_and_reply_from_same_recv(self):
+        controller = MPVController.__new__(MPVController)
+        controller.socket_path = "/tmp/fake-meow.sock"
+        controller._ipc_buffer = b""
+        controller._ipc_lock = threading.Lock()
+        controller._ipc_request_id = 0
+        controller._ipc_timeout = 0.75
+        controller._ipc_socket = FakeIPCSocket([
+            (
+                b'{"event":"start-file"}\n'
+                b'{"data":"song.flac","error":"success","request_id":1}\n'
+            )
+        ])
+
+        with mock.patch("meowplayer.os.path.exists", return_value=True):
+            response = controller.command("get_property", "path")
+
+        self.assertEqual(response["data"], "song.flac")
+        self.assertEqual(response["request_id"], 1)
+        request = json.loads(
+            controller._ipc_socket.sent[0].decode("utf-8")
+        )
+        self.assertEqual(request["request_id"], 1)
+        self.assertEqual(request["command"], ["get_property", "path"])
+
+    def test_mpv_ipc_reuses_connection_and_matches_sequential_requests(self):
+        controller = MPVController.__new__(MPVController)
+        controller.socket_path = "/tmp/fake-meow.sock"
+        controller._ipc_buffer = b""
+        controller._ipc_lock = threading.Lock()
+        controller._ipc_request_id = 0
+        controller._ipc_timeout = 0.75
+        fake_socket = FakeIPCSocket([
+            b'{"data":70,"error":"success","request_id":1}\n',
+            b'{"event":"property-change","name":"pause","data":false}\n'
+            b'{"data":false,"error":"success","request_id":2}\n',
+        ])
+        controller._ipc_socket = fake_socket
+
+        with mock.patch("meowplayer.os.path.exists", return_value=True):
+            volume = controller.command("get_property", "volume")
+            paused = controller.command("get_property", "pause")
+
+        self.assertEqual(volume["data"], 70)
+        self.assertFalse(paused["data"])
+        self.assertIs(controller._ipc_socket, fake_socket)
+        self.assertEqual(len(fake_socket.sent), 2)
+        self.assertEqual(
+            [
+                json.loads(payload.decode("utf-8"))["request_id"]
+                for payload in fake_socket.sent
+            ],
+            [1, 2],
+        )
+
+    def test_mpv_ipc_skips_malformed_line_without_poisoning_reply(self):
+        controller = MPVController.__new__(MPVController)
+        controller.socket_path = "/tmp/fake-meow.sock"
+        controller._ipc_buffer = b""
+        controller._ipc_lock = threading.Lock()
+        controller._ipc_request_id = 0
+        controller._ipc_timeout = 0.75
+        controller._ipc_socket = FakeIPCSocket([
+            (
+                b'not-json\n'
+                b'{"error":"success","request_id":1}\n'
+            )
+        ])
+
+        with mock.patch("meowplayer.os.path.exists", return_value=True):
+            response = controller.command("stop")
+
+        self.assertEqual(response["error"], "success")
+
     def test_advance_playlist_targets_exact_next_index(self):
         controller = MPVController.__new__(MPVController)
         commands = []
@@ -443,8 +542,19 @@ class AudioEngineTests(unittest.TestCase):
         self.assertEqual(player.mpv.cleared, 0)
         self.assertEqual(player.mpv.loaded, [])
         self.assertEqual(player.mpv.play_calls, 0)
-        self.assertFalse(player._awaiting_mpv_path)
+        self.assertTrue(player._awaiting_mpv_path)
         self.assertEqual(player.gapless_next_index, 2)
+        self.assertEqual(
+            player.mpv.primed,
+            [Path("/music/1.flac")],
+        )
+
+        # The next reservation is only appended after the new current path is
+        # confirmed again, avoiding playlist mutation during current-pos=-1.
+        player.mpv.path = str(player.songs[1])
+        player.sync_gapless_transition()
+
+        self.assertFalse(player._awaiting_mpv_path)
         self.assertEqual(player.mpv.primed[-1], Path("/music/2.flac"))
 
     def test_stranded_successful_primed_advance_recovers_with_replace(self):
@@ -549,6 +659,27 @@ class AudioEngineTests(unittest.TestCase):
         controller.clear_future_playlist()
         controller.trim_playlist_before_current()
 
+        self.assertEqual(commands, [])
+
+    def test_prime_next_refuses_to_append_while_playlist_position_is_minus_one(self):
+        controller = MPVController.__new__(MPVController)
+        commands = []
+
+        def fake_get_property(name):
+            if name == "playlist-current-pos":
+                return -1
+            if name == "playlist-count":
+                return 2
+            return None
+
+        controller.get_property = fake_get_property
+        controller.command = lambda *args: (
+            commands.append(args) or {"error": "success"}
+        )
+
+        primed = controller.prime_next(Path("/music/next.flac"))
+
+        self.assertFalse(primed)
         self.assertEqual(commands, [])
 
     def test_prime_gapless_appends_reserved_next_track(self):

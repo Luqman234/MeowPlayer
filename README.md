@@ -2,12 +2,12 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.16.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.16.2** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.1 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.16.2 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -76,6 +76,57 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.16.2 — The Cat Learned How Newlines Work
+
+The first real `--youtube --debug` session exposed two problems that were easy to miss without logs.
+
+First, mpv JSON IPC is a **newline-delimited message stream**. A single socket read can contain an event and a command reply together. Older MeowPlayer code treated the whole read as exactly one JSON document, which could produce:
+
+```text
+JSONDecodeError: Extra data: line 2 column 1
+```
+
+even when mpv had successfully executed the command.
+
+MeowPlayer 0.16.2 replaces that assumption with a persistent, framed IPC connection:
+
+```text
+MeowPlayer
+    │
+    │ one Unix socket
+    ▼
+mpv JSON IPC
+    │
+    ├── event: start-file
+    ├── request_id: 41 → get_property reply
+    ├── event: playback-restart
+    └── request_id: 42 → seek reply
+```
+
+Each command now carries a monotonically increasing `request_id`. MeowPlayer buffers bytes until complete newline-delimited JSON messages are available, ignores/records asynchronous events while waiting, and returns only the reply matching the current request. Malformed individual lines are skipped without poisoning later replies.
+
+The same connection is reused instead of creating dozens of short-lived Unix socket clients every second. If the connection genuinely dies, it is discarded cleanly and the next command reconnects.
+
+Second, the Internet Nest now **debounces repeated Enter presses** while a YouTube result is resolving. Previously, repeatedly pressing Enter could issue repeated `loadfile replace` commands and kill yt-dlp extraction jobs that were still working.
+
+Now:
+
+```text
+Enter
+  ↓
+Resolving YouTube stream...
+  ↓
+Enter again
+  ↓
+ignored
+
+More Enter will not make the router go faster.
+```
+
+Online playback has explicit `resolving`, `streaming`, and `failed` states. A failed/idle attempt becomes retryable after a short guard window instead of being permanently wedged, while an active stream cannot be accidentally restarted by hammering Enter.
+
+Regression tests cover multi-message IPC reads, asynchronous events before replies, request correlation, connection reuse, malformed-line recovery, duplicate YouTube playback requests, failed-stream retry, and resolving→streaming transitions.
 
 ## What's new in 0.16.1 — The Cat Finally Keeps Receipts
 
@@ -2028,7 +2079,7 @@ The mascot reacts to player state:
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.1 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.16.2 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -2155,8 +2206,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.16.1-py3-none-any.whl
-└── meowplayer_terminal-0.16.1.tar.gz
+├── meowplayer_terminal-0.16.2-py3-none-any.whl
+└── meowplayer_terminal-0.16.2.tar.gz
 ```
 
 The installed CLI is still:

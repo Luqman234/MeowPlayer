@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass, replace
@@ -65,7 +66,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.16.1"
+__version__ = "0.16.2"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -76,6 +77,7 @@ SUPPORTED_EXTENSIONS = {
     ".mp3", ".flac", ".ogg", ".opus",
     ".wav", ".m4a", ".aac", ".wma"
 }
+ONLINE_RETRY_GUARD_SECONDS = 8.0
 
 LIBRARY_VIEWS = (
     "songs",
@@ -497,6 +499,12 @@ class MPVController:
                 break
             time.sleep(0.02)
 
+        self._ipc_socket = None
+        self._ipc_buffer = b""
+        self._ipc_lock = threading.Lock()
+        self._ipc_request_id = 0
+        self._ipc_timeout = 0.75
+
         if socket_ready:
             MPV_LOGGER.debug("mpv IPC socket ready: %s", self.socket_path)
         else:
@@ -505,34 +513,122 @@ class MPVController:
                 self.socket_path,
             )
 
-    def command(self, *args):
-        if not os.path.exists(self.socket_path):
-            return None
+    def _close_ipc(self):
+        sock = self._ipc_socket
+        self._ipc_socket = None
+        self._ipc_buffer = b""
 
-        request = {"command": list(args)}
+        if sock is None:
+            return
 
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.2)
-                sock.connect(self.socket_path)
-                sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
+            sock.close()
+        except OSError:
+            pass
 
-                data = b""
-                while not data.endswith(b"\n"):
-                    chunk = sock.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
+    def _ensure_ipc(self):
+        if self._ipc_socket is not None:
+            return self._ipc_socket
 
-            if data:
-                return json.loads(data.decode("utf-8"))
+        if not os.path.exists(self.socket_path):
+            raise FileNotFoundError(self.socket_path)
 
-        except (OSError, json.JSONDecodeError, socket.timeout) as exc:
-            MPV_LOGGER.debug(
-                "mpv IPC command failed command=%s error=%r",
-                args[0] if args else "<empty>",
-                exc,
-            )
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self._ipc_timeout)
+        try:
+            sock.connect(self.socket_path)
+        except Exception:
+            sock.close()
+            raise
+
+        self._ipc_socket = sock
+        self._ipc_buffer = b""
+        MPV_LOGGER.debug("Persistent mpv IPC connection established")
+        return sock
+
+    def _recv_ipc_message(self, deadline):
+        while True:
+            newline = self._ipc_buffer.find(b"\n")
+            if newline >= 0:
+                raw = self._ipc_buffer[:newline]
+                self._ipc_buffer = self._ipc_buffer[newline + 1:]
+
+                if not raw.strip():
+                    continue
+
+                try:
+                    return json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    MPV_LOGGER.warning(
+                        "Ignoring malformed mpv IPC line error=%r raw=%r",
+                        exc,
+                        raw[:240],
+                    )
+                    continue
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout("mpv IPC reply timed out")
+
+            sock = self._ensure_ipc()
+            sock.settimeout(remaining)
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("mpv IPC socket closed")
+            self._ipc_buffer += chunk
+
+    def command(self, *args):
+        command_name = args[0] if args else "<empty>"
+
+        with self._ipc_lock:
+            if not os.path.exists(self.socket_path):
+                return None
+
+            self._ipc_request_id += 1
+            request_id = self._ipc_request_id
+            request = {
+                "command": list(args),
+                "request_id": request_id,
+            }
+
+            try:
+                sock = self._ensure_ipc()
+                sock.sendall(
+                    (json.dumps(request) + "\n").encode("utf-8")
+                )
+
+                deadline = time.monotonic() + self._ipc_timeout
+                while True:
+                    message = self._recv_ipc_message(deadline)
+
+                    if message.get("request_id") == request_id:
+                        return message
+
+                    event = message.get("event")
+                    if event:
+                        MPV_LOGGER.debug(
+                            "mpv IPC event while waiting request_id=%s: %s",
+                            request_id,
+                            event,
+                        )
+                        continue
+
+                    MPV_LOGGER.debug(
+                        "Ignoring unmatched mpv IPC message while waiting "
+                        "request_id=%s message=%r",
+                        request_id,
+                        message,
+                    )
+
+            except (OSError, ConnectionError, socket.timeout) as exc:
+                MPV_LOGGER.debug(
+                    "mpv IPC command failed command=%s request_id=%s "
+                    "error=%r",
+                    command_name,
+                    request_id,
+                    exc,
+                )
+                self._close_ipc()
 
         return None
 
@@ -554,7 +650,7 @@ class MPVController:
 
     def append(self, filename):
         MPV_LOGGER.debug("loadfile append: %s", filename)
-        self.command("loadfile", str(filename), "append")
+        return self.command("loadfile", str(filename), "append")
 
     def advance_playlist(self):
         try:
@@ -574,15 +670,25 @@ class MPVController:
             current = int(self.get_property("playlist-current-pos"))
             count = int(self.get_property("playlist-count"))
         except (TypeError, ValueError):
-            return
+            return False
 
-        # During loadfile transitions mpv can temporarily report -1.
-        # Treat that as "not ready", never as "remove everything".
+        # During loadfile/playlist transitions mpv can temporarily report -1.
+        # That is not a safe moment to mutate the future playlist.
         if current < 0:
-            return
+            MPV_LOGGER.debug(
+                "Deferring future-playlist cleanup while current-pos=%s "
+                "playlist-count=%s",
+                current,
+                count,
+            )
+            return False
 
         for index in range(count - 1, current, -1):
-            self.command("playlist-remove", index)
+            response = self.command("playlist-remove", index)
+            if not response or response.get("error") != "success":
+                return False
+
+        return True
 
     def trim_playlist_before_current(self):
         try:
@@ -599,8 +705,14 @@ class MPVController:
             current -= 1
 
     def prime_next(self, filename):
-        self.clear_future_playlist()
-        self.append(filename)
+        # Never append while mpv reports playlist-current-pos == -1.
+        # Appending in that transition window can leave mpv stranded between
+        # entries and can accumulate duplicate reservations.
+        if not self.clear_future_playlist():
+            return False
+
+        response = self.append(filename)
+        return bool(response and response.get("error") == "success")
 
     def current_path(self):
         value = self.get_property("path")
@@ -654,6 +766,8 @@ class MPVController:
             self.command("quit")
         except Exception:
             pass
+        finally:
+            self._close_ipc()
 
         try:
             self.process.terminate()
@@ -723,6 +837,8 @@ class MeowPlayer:
         self.youtube_selected = 0
         self.youtube_query = ""
         self.online_current = None
+        self.online_load_state = "idle"
+        self.online_load_started_at = 0.0
         self.saved_state = saved_state or {}
         self.restore_session_enabled = restore_session
         self.mpris_enabled = mpris_enabled and not _is_termux()
@@ -1095,7 +1211,16 @@ class MeowPlayer:
             return
 
         self.mpv.trim_playlist_before_current()
-        self.mpv.prime_next(self.songs[next_index])
+        primed = self.mpv.prime_next(self.songs[next_index])
+        if primed is False:
+            # Keep the intended reservation, but require another stable-path
+            # confirmation before trying to mutate mpv's playlist again.
+            self._awaiting_mpv_path = True
+            MPV_LOGGER.debug(
+                "Deferred gapless reservation index=%s path=%s",
+                next_index,
+                self.songs[next_index],
+            )
 
     def _consume_gapless_reservation(self, index):
         if self.catnip_stash and self.catnip_stash[0] == index:
@@ -2821,9 +2946,52 @@ class MeowPlayer:
             )
         return True
 
-    def play_online(self, track):
+    def play_online(self, track, now=None):
         if track is None:
             return False
+
+        timestamp = time.monotonic() if now is None else float(now)
+        same_track = (
+            self.online_current is not None
+            and self.online_current.video_id == track.video_id
+        )
+
+        if same_track:
+            elapsed = max(0.0, timestamp - self.online_load_started_at)
+            idle = bool(self.mpv.get_property("idle-active"))
+
+            if not idle or elapsed < ONLINE_RETRY_GUARD_SECONDS:
+                state = (
+                    "resolving"
+                    if self.online_load_state == "resolving"
+                    else "already active"
+                )
+                LOGGER.info(
+                    "Ignoring duplicate online playback request "
+                    "video_id=%s state=%s elapsed=%.2fs idle=%s",
+                    track.video_id,
+                    self.online_load_state,
+                    elapsed,
+                    idle,
+                )
+                self.set_status(
+                    (
+                        f"YouTube stream {state}: {track.artist_title}. "
+                        "Repeated Enter ignored."
+                    ),
+                    (
+                        f"The internet cat is {state}: {track.artist_title}. "
+                        "More Enter will not make the router go faster."
+                    ),
+                )
+                return False
+
+            LOGGER.info(
+                "Retrying online playback after idle/failed attempt "
+                "video_id=%s elapsed=%.2fs",
+                track.video_id,
+                elapsed,
+            )
 
         LOGGER.info(
             "Starting online playback video_id=%s title=%r artist=%r url=%s",
@@ -2834,6 +3002,8 @@ class MeowPlayer:
         )
 
         self.online_current = track
+        self.online_load_state = "resolving"
+        self.online_load_started_at = timestamp
         self.current = None
         self.current_lyrics = None
         self.lyrics_track_index = None
@@ -2843,11 +3013,71 @@ class MeowPlayer:
         self.mpv.load(track.url)
         self.mpv.play()
         self.set_status(
-            f"Streaming from YouTube: {track.artist_title}",
-            f"The internet cat is streaming: {track.artist_title}",
+            f"Resolving YouTube stream: {track.artist_title}",
+            f"The internet cat is resolving: {track.artist_title}",
         )
         self.sync_mpris(force=True)
         return True
+
+    def refresh_online_playback_state(self, now=None):
+        if self.online_current is None:
+            self.online_load_state = "idle"
+            return False
+
+        if self.online_load_state != "resolving":
+            return False
+
+        timestamp = time.monotonic() if now is None else float(now)
+        elapsed = max(0.0, timestamp - self.online_load_started_at)
+
+        idle = bool(self.mpv.get_property("idle-active"))
+        time_pos = self.mpv.get_property("time-pos")
+        duration = self.mpv.get_property("duration")
+
+        playback_ready = time_pos is not None
+        if not playback_ready:
+            try:
+                playback_ready = float(duration or 0.0) > 0.0
+            except (TypeError, ValueError):
+                playback_ready = False
+
+        if playback_ready and not idle:
+            self.online_load_state = "streaming"
+            LOGGER.info(
+                "YouTube stream ready video_id=%s elapsed=%.2fs",
+                self.online_current.video_id,
+                elapsed,
+            )
+            self.set_status(
+                f"Streaming from YouTube: {self.online_current.artist_title}",
+                (
+                    "The internet cat is streaming: "
+                    f"{self.online_current.artist_title}"
+                ),
+            )
+            return True
+
+        if idle and elapsed >= ONLINE_RETRY_GUARD_SECONDS:
+            self.online_load_state = "failed"
+            LOGGER.warning(
+                "YouTube stream did not become ready video_id=%s "
+                "elapsed=%.2fs; retry is now allowed",
+                self.online_current.video_id,
+                elapsed,
+            )
+            self.set_status(
+                (
+                    "YouTube stream did not start. "
+                    "Press Enter to retry this result."
+                ),
+                (
+                    "The internet cat returned empty-pawed. "
+                    "Press Enter to send it out again."
+                ),
+            )
+            return True
+
+        return False
 
     def play_selected_youtube_result(self):
         if not self.youtube_results:
@@ -2879,6 +3109,8 @@ class MeowPlayer:
             automatic,
         )
         self.online_current = None
+        self.online_load_state = "idle"
+        self.online_load_started_at = 0.0
 
         reset_shuffle_bag = False
         if not preserve_sequence:
@@ -2951,12 +3183,13 @@ class MeowPlayer:
             self.mpv.play()
 
         self.gapless_next_index = None
-        # A successful primed advance was already confirmed above by
-        # wait_for_path(). Do not require a second instantaneous path read
-        # from sync_gapless_transition(); mpv can briefly return no path
-        # between asynchronous property updates even after the handoff was
-        # observed. Manual/fallback loadfile paths still require confirmation.
-        self._awaiting_mpv_path = not advanced
+        # Even a successfully observed playlist-play-index handoff can still
+        # pass through a short current-pos == -1 transition immediately after
+        # this method returns. Defer *all* future playlist mutation until
+        # sync_gapless_transition() confirms the new current path again.
+        # This prevents an eager append from turning a 2-entry playlist into
+        # 3 entries while mpv is between tracks.
+        self._awaiting_mpv_path = True
 
         if record_listen and self.catalog is not None:
             self.catalog.record_play(self.songs[index])
@@ -4540,6 +4773,7 @@ class MeowPlayer:
 
         while True:
             self.process_external_actions()
+            self.refresh_online_playback_state()
             self.playback_saboteur.tick(self)
             math_question = self.playback_saboteur.pop_math_question()
             if math_question is not None:
@@ -4598,8 +4832,24 @@ class MeowPlayer:
 
             if self.online_current is not None:
                 paused = self.mpv.get_property("pause")
-                icon = "⏸" if paused else "▶"
-                label = self.text("Now Streaming", "Now Internet-Purring")
+                if self.online_load_state == "resolving":
+                    icon = "…"
+                    label = self.text(
+                        "Resolving Stream",
+                        "Internet Cat Hunting",
+                    )
+                elif self.online_load_state == "failed":
+                    icon = "!"
+                    label = self.text(
+                        "Stream Failed",
+                        "Internet Cat Returned Empty-Pawed",
+                    )
+                else:
+                    icon = "⏸" if paused else "▶"
+                    label = self.text(
+                        "Now Streaming",
+                        "Now Internet-Purring",
+                    )
                 now_playing = (
                     f"{icon}  {label}: {self.online_current.artist_title} "
                     "· YouTube"

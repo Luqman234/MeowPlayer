@@ -119,6 +119,8 @@ class YouTubeOnlineTests(unittest.TestCase):
         player = MeowPlayer.__new__(MeowPlayer)
         player.current = 3
         player.online_current = None
+        player.online_load_state = "idle"
+        player.online_load_started_at = 0.0
         player.current_lyrics = object()
         player.lyrics_track_index = 3
         player.gapless_next_index = 4
@@ -145,6 +147,107 @@ class YouTubeOnlineTests(unittest.TestCase):
         self.assertFalse(player._awaiting_mpv_path)
         self.assertEqual(player.mpv.loaded, [track.url])
         self.assertEqual(player.mpv.play_calls, 1)
+        self.assertIn("Resolving YouTube stream", statuses[-1][0])
+
+    def test_repeated_enter_does_not_restart_same_online_stream(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        player.current = None
+        player.online_current = None
+        player.online_load_state = "idle"
+        player.online_load_started_at = 0.0
+        player.current_lyrics = None
+        player.lyrics_track_index = None
+        player.gapless_next_index = None
+        player._awaiting_mpv_path = False
+        player.mpv = FakeMPV()
+        player.sync_mpris = lambda force=False: None
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        track = YouTubeTrack(
+            video_id="same123",
+            title="Same Track",
+            artist="Internet Cat",
+            duration=180,
+            url="https://www.youtube.com/watch?v=same123",
+        )
+
+        self.assertTrue(player.play_online(track, now=100.0))
+        self.assertFalse(player.play_online(track, now=100.2))
+        self.assertFalse(player.play_online(track, now=101.0))
+
+        self.assertEqual(player.mpv.loaded, [track.url])
+        self.assertEqual(player.mpv.play_calls, 1)
+        self.assertIn("Repeated Enter ignored", statuses[-1][0])
+
+    def test_failed_online_stream_can_retry_after_guard_window(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        player.current = None
+        player.online_current = None
+        player.online_load_state = "idle"
+        player.online_load_started_at = 0.0
+        player.current_lyrics = None
+        player.lyrics_track_index = None
+        player.gapless_next_index = None
+        player._awaiting_mpv_path = False
+        player.mpv = FakeMPV()
+        player.sync_mpris = lambda force=False: None
+        player.set_status = lambda *args, **kwargs: None
+
+        track = YouTubeTrack(
+            video_id="retry123",
+            title="Retry Track",
+            artist="Internet Cat",
+            duration=180,
+            url="https://www.youtube.com/watch?v=retry123",
+        )
+
+        self.assertTrue(player.play_online(track, now=10.0))
+
+        player.mpv.properties["idle-active"] = True
+        player.mpv.properties["time-pos"] = None
+        player.mpv.properties["duration"] = None
+
+        self.assertTrue(player.refresh_online_playback_state(now=18.1))
+        self.assertEqual(player.online_load_state, "failed")
+
+        self.assertTrue(player.play_online(track, now=18.2))
+        self.assertEqual(player.mpv.loaded, [track.url, track.url])
+        self.assertEqual(player.mpv.play_calls, 2)
+        self.assertEqual(player.online_load_state, "resolving")
+
+    def test_online_stream_transitions_from_resolving_to_streaming(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        player.current = None
+        player.online_current = None
+        player.online_load_state = "idle"
+        player.online_load_started_at = 0.0
+        player.current_lyrics = None
+        player.lyrics_track_index = None
+        player.gapless_next_index = None
+        player._awaiting_mpv_path = False
+        player.mpv = FakeMPV()
+        player.sync_mpris = lambda force=False: None
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        track = YouTubeTrack(
+            video_id="ready123",
+            title="Ready Track",
+            artist="Internet Cat",
+            duration=180,
+            url="https://www.youtube.com/watch?v=ready123",
+        )
+
+        player.mpv.properties["time-pos"] = None
+        player.mpv.properties["duration"] = None
+        self.assertTrue(player.play_online(track, now=20.0))
+
+        player.mpv.properties["time-pos"] = 0.0
+        player.mpv.properties["duration"] = 180.0
+        self.assertTrue(player.refresh_online_playback_state(now=21.0))
+
+        self.assertEqual(player.online_load_state, "streaming")
         self.assertIn("Streaming from YouTube", statuses[-1][0])
 
     def test_mpris_snapshot_reports_online_track(self):
