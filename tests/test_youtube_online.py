@@ -147,7 +147,7 @@ class YouTubeOnlineTests(unittest.TestCase):
         self.assertFalse(player._awaiting_mpv_path)
         self.assertEqual(player.mpv.loaded, [track.url])
         self.assertEqual(player.mpv.play_calls, 1)
-        self.assertIn("Streaming from YouTube", statuses[-1][0])
+        self.assertIn("Resolving YouTube stream", statuses[-1][0])
 
     def test_repeated_enter_does_not_restart_same_online_stream(self):
         player = MeowPlayer.__new__(MeowPlayer)
