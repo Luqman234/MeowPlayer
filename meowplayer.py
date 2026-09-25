@@ -59,6 +59,12 @@ from online_metadata import (
     needs_online_metadata,
 )
 from visualizer import AudioVisualizer
+from settings_nest import (
+    SETTINGS_SPECS,
+    adjust_setting_value,
+    format_setting_value,
+    normalize_setting_value,
+)
 from youtube_online import (
     YouTubeCatalog,
     YouTubeStreamResolver,
@@ -872,6 +878,7 @@ class MeowPlayer:
         youtube_enabled=False,
         debug_log_path=None,
         mpv_log_path=None,
+        app_config=None,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.debug_log_path = (
@@ -919,6 +926,9 @@ class MeowPlayer:
         self.online_load_state = "idle"
         self.online_load_started_at = 0.0
         self.saved_state = saved_state or {}
+        self.app_config = dict(app_config or {})
+        self.settings_selected = 0
+        self.settings_return_view = "library"
         self.restore_session_enabled = restore_session
         self.mpris_enabled = mpris_enabled and not _is_termux()
         self.album_art = AlbumArtManager(
@@ -1687,6 +1697,138 @@ class MeowPlayer:
     def set_status(self, serious, cat):
         self.status_message = self.text(serious, cat)
         LOGGER.debug("status=%s", self.status_message)
+
+    def open_settings_nest(self):
+        if self.view != "settings":
+            self.settings_return_view = self.view
+        self.view = "settings"
+        self.settings_selected = max(
+            0,
+            min(self.settings_selected, len(SETTINGS_SPECS) - 1),
+        )
+        self.set_status(
+            "Opened settings.",
+            "Opened the Settings Nest. Please do not let the cat edit JSON directly.",
+        )
+
+    def close_settings_nest(self):
+        target = self.settings_return_view
+        if target == "settings":
+            target = "library"
+        self.view = target
+        self.set_status(
+            "Settings saved.",
+            "Settings Nest closed. The household rules have been filed under P for Paws.",
+        )
+
+    def setting_value(self, spec):
+        return normalize_setting_value(
+            spec,
+            self.app_config.get(spec.key, spec.default),
+        )
+
+    def _persist_setting(self, spec, value):
+        self.app_config[spec.key] = value
+        saved = save_config(self.app_config)
+        LOGGER.info(
+            "Settings Nest changed key=%s value=%r saved=%s",
+            spec.key,
+            value,
+            saved,
+        )
+        return saved
+
+    def _apply_live_setting(self, spec, value):
+        if not spec.live:
+            return False
+
+        key = spec.key
+        if key == "gapless_mode":
+            self.gapless_mode = value
+            self.mpv.set_property("gapless-audio", value)
+            self.prime_gapless_next()
+        elif key == "replaygain_mode":
+            self.replaygain_mode = value
+            self.mpv.set_property("replaygain", value)
+        elif key == "replaygain_preamp":
+            self.replaygain_preamp = float(value)
+            self.mpv.set_property("replaygain-preamp", float(value))
+        elif key == "lyrics_enabled":
+            self.lyrics.enabled = bool(value)
+            if not value:
+                self.current_lyrics = None
+        elif key == "lyrics_online_enabled":
+            self.lyrics.online_enabled = bool(value)
+        elif key == "online_metadata_enabled":
+            self.online_metadata.enabled = bool(value)
+        elif key == "visualizer_enabled":
+            self.visualizer.stop()
+            self.visualizer = AudioVisualizer(enabled=bool(value))
+        elif key == "album_art_enabled":
+            self.album_art.clear(free_data=True)
+            self.album_art = AlbumArtManager(
+                enabled=bool(value) and not _is_termux()
+            )
+        elif key == "filesystem_watch_enabled":
+            self.library_watcher.stop()
+            self.library_watcher = LibraryWatcher(
+                self.music_dir,
+                SUPPORTED_EXTENSIONS,
+                enabled=bool(value),
+            )
+            self.library_watcher.start()
+        else:
+            return False
+
+        return True
+
+    def change_selected_setting(self, direction=1, reset=False):
+        if not SETTINGS_SPECS:
+            return False
+
+        self.settings_selected = max(
+            0,
+            min(self.settings_selected, len(SETTINGS_SPECS) - 1),
+        )
+        spec = SETTINGS_SPECS[self.settings_selected]
+        old_value = self.setting_value(spec)
+        new_value = (
+            normalize_setting_value(spec, spec.default)
+            if reset
+            else adjust_setting_value(spec, old_value, direction)
+        )
+
+        if new_value == old_value:
+            return False
+
+        saved = self._persist_setting(spec, new_value)
+        applied_live = self._apply_live_setting(spec, new_value)
+
+        if not saved:
+            self.set_status(
+                f"Changed {spec.label}, but config could not be saved.",
+                f"The cat changed {spec.cat_label}, then misplaced the config file.",
+            )
+        elif applied_live:
+            self.set_status(
+                f"{spec.label}: {format_setting_value(spec, new_value)} (live).",
+                (
+                    f"{spec.cat_label}: {format_setting_value(spec, new_value)}. "
+                    "The cat applied it immediately."
+                ),
+            )
+        else:
+            self.set_status(
+                (
+                    f"{spec.label}: {format_setting_value(spec, new_value)} "
+                    "(saved for next launch)."
+                ),
+                (
+                    f"{spec.cat_label}: {format_setting_value(spec, new_value)}. "
+                    "The cat wrote it down for the next summoning."
+                ),
+            )
+        return True
 
     def has_active_track(self):
         return self.current is not None or self.online_current is not None
