@@ -586,6 +586,52 @@ class LyricsTests(unittest.TestCase):
             self.assertEqual(list(cache_dir.glob("*.lrc")), [])
             self.assertEqual(list(cache_dir.glob("*.txt")), [])
 
+    def test_musixmatch_synced_upgrades_lrclib_plain_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "Artist - Song.flac"
+            track.write_bytes(b"not-real-audio")
+
+            with mock.patch(
+                "lyrics_support._fetch_lrclib_result",
+                return_value=LyricsFetchResult(
+                    "Plain LRCLIB fallback",
+                    "found",
+                    "Artist Song",
+                    synced=False,
+                ),
+            ), mock.patch(
+                "lyrics_support._fetch_musixmatch_result",
+                return_value=LyricsFetchResult(
+                    "[00:01.00]Timed Musixmatch wins\n",
+                    "found",
+                    "Artist Song",
+                    synced=True,
+                    provider="Musixmatch",
+                    cacheable=False,
+                ),
+            ):
+                manager = LyricsManager(
+                    enabled=True,
+                    online_enabled=True,
+                    lrclib_enabled=True,
+                    musixmatch_enabled=True,
+                    musixmatch_api_key="test-key",
+                    cache_dir=root / "cache",
+                    request_timeout=0.25,
+                )
+                self.assertIsNone(manager.load(track))
+                document = None
+                for _ in range(100):
+                    document = manager.poll(track)
+                    if document is not None:
+                        break
+                    time.sleep(0.01)
+
+            self.assertIsNotNone(document)
+            self.assertTrue(document.synced)
+            self.assertIn("Musixmatch", document.source)
+            self.assertEqual(document.current_line(2.0), "Timed Musixmatch wins")
     def test_musixmatch_is_not_used_without_api_key(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
