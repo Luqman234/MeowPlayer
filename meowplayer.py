@@ -52,9 +52,14 @@ from online_metadata import (
     needs_online_metadata,
 )
 from visualizer import AudioVisualizer
+from youtube_online import (
+    YouTubeCatalog,
+    YouTubeSearchError,
+    YouTubeUnavailable,
+)
 
 
-__version__ = "0.15.1"
+__version__ = "0.16.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -418,6 +423,8 @@ def build_mpv_command(
         f"--replaygain={replaygain_mode}",
         f"--replaygain-preamp={replaygain_preamp}",
         "--replaygain-clip=no",
+        "--ytdl=yes",
+        "--ytdl-format=bestaudio/best",
         f"--input-ipc-server={socket_path}",
     ]
 
@@ -626,6 +633,7 @@ class MeowPlayer:
         visualizer_enabled=True,
         filesystem_watch_enabled=True,
         cat_chaos_mode=None,
+        youtube_enabled=False,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.serious_mode = serious_mode
@@ -636,6 +644,11 @@ class MeowPlayer:
             else None
         )
         self.playback_saboteur = PlaybackSaboteur(self.cat_chaos_mode)
+        self.youtube = YouTubeCatalog(enabled=youtube_enabled)
+        self.youtube_results = []
+        self.youtube_selected = 0
+        self.youtube_query = ""
+        self.online_current = None
         self.saved_state = saved_state or {}
         self.restore_session_enabled = restore_session
         self.mpris_enabled = mpris_enabled and not _is_termux()
@@ -806,6 +819,18 @@ class MeowPlayer:
                 f" The metadata cat is sniffing the internet for "
                 f"{self.metadata_lookup_queued} incomplete meow(s)."
             )
+        if self.youtube.enabled:
+            if self.youtube.available:
+                initial_serious += " Experimental YouTube playback ready."
+                initial_cat += " The internet cat found yt-dlp."
+            else:
+                initial_serious += (
+                    " YouTube playback requested, but yt-dlp was not found."
+                )
+                initial_cat += (
+                    " The internet cat cannot find yt-dlp and is staring "
+                    "accusingly at PATH."
+                )
 
         self.status_message = self.text(initial_serious, initial_cat)
         self.quote = random.choice(CAT_QUOTES)
