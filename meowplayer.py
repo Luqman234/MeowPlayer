@@ -63,6 +63,7 @@ from youtube_online import (
     YouTubeCatalog,
     YouTubeStreamResolver,
     YouTubeSearchSession,
+    network_subprocess_env,
 )
 
 
@@ -457,6 +458,7 @@ class MPVController:
         replaygain_mode="track",
         replaygain_preamp=0.0,
         debug_log_path=None,
+        network_resolver_workaround=False,
     ):
         self.socket_path = os.path.join(
             tempfile.gettempdir(),
@@ -489,6 +491,9 @@ class MPVController:
             command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=network_subprocess_env(
+                resolver_workaround=network_resolver_workaround,
+            ),
         )
         MPV_LOGGER.info("mpv started pid=%s", self.process.pid)
 
@@ -1122,6 +1127,7 @@ class MeowPlayer:
             replaygain_mode=self.replaygain_mode,
             replaygain_preamp=self.replaygain_preamp,
             debug_log_path=self.mpv_log_path,
+            network_resolver_workaround=self.youtube.enabled,
         )
         self.mpv.set_property("volume", self.volume)
         self.mpv.set_repeat(self.repeat)
