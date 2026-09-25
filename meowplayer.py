@@ -2959,6 +2959,69 @@ class MeowPlayer:
             )
         return True
 
+    def _prime_selected_youtube_result(self):
+        if not self.youtube_results:
+            return
+
+        self.youtube_selected = max(
+            0,
+            min(self.youtube_selected, len(self.youtube_results) - 1),
+        )
+        self.youtube.prefetch_track(
+            self.youtube_results[self.youtube_selected]
+        )
+
+    def _start_resolved_youtube_stream(self, track, resolved, timestamp):
+        self.online_load_state = "resolving"
+        self.online_load_started_at = timestamp
+        self.online_state_next_poll_at = timestamp
+        self.online_used_direct_stream = True
+
+        LOGGER.info(
+            "Starting pre-resolved YouTube stream video_id=%s "
+            "cache_age=%.2fs protocol=%s",
+            track.video_id,
+            max(0.0, timestamp - resolved.resolved_at),
+            resolved.protocol or "unknown",
+        )
+
+        self.mpv.load(resolved.stream_url)
+        self.mpv.play()
+        self.set_status(
+            f"Opening pre-resolved YouTube stream: {track.artist_title}",
+            (
+                "The internet cat already found the pipe. Opening: "
+                f"{track.artist_title}"
+            ),
+        )
+        self.sync_mpris(force=True)
+        return True
+
+    def _start_youtube_watch_fallback(self, track, timestamp, reason):
+        self.online_load_state = "resolving"
+        self.online_load_started_at = timestamp
+        self.online_state_next_poll_at = timestamp
+        self.online_used_direct_stream = False
+        self.online_fallback_used = True
+
+        LOGGER.warning(
+            "Falling back to mpv ytdl hook video_id=%s reason=%s",
+            track.video_id,
+            reason,
+        )
+
+        self.mpv.load(track.url)
+        self.mpv.play()
+        self.set_status(
+            f"Resolving YouTube stream: {track.artist_title}",
+            (
+                "The internet cat is using the slower backup route: "
+                f"{track.artist_title}"
+            ),
+        )
+        self.sync_mpris(force=True)
+        return True
+
     def play_online(self, track, now=None):
         if track is None:
             return False
@@ -2970,66 +3033,99 @@ class MeowPlayer:
         )
 
         if same_track:
-            elapsed = max(0.0, timestamp - self.online_load_started_at)
-            idle = bool(self.mpv.get_property("idle-active"))
+            elapsed = max(
+                0.0,
+                timestamp - self.online_request_started_at,
+            )
 
-            if not idle or elapsed < ONLINE_RETRY_GUARD_SECONDS:
-                state = (
-                    "resolving"
-                    if self.online_load_state == "resolving"
-                    else "already active"
-                )
+            if self.online_load_state in {"prefetching", "resolving"}:
                 LOGGER.info(
                     "Ignoring duplicate online playback request "
-                    "video_id=%s state=%s elapsed=%.2fs idle=%s",
+                    "video_id=%s state=%s elapsed=%.2fs",
                     track.video_id,
                     self.online_load_state,
                     elapsed,
-                    idle,
                 )
                 self.set_status(
                     (
-                        f"YouTube stream {state}: {track.artist_title}. "
-                        "Repeated Enter ignored."
+                        f"YouTube stream {self.online_load_state}: "
+                        f"{track.artist_title}. Repeated Enter ignored."
                     ),
                     (
-                        f"The internet cat is {state}: {track.artist_title}. "
-                        "More Enter will not make the router go faster."
+                        f"The internet cat is {self.online_load_state}: "
+                        f"{track.artist_title}. More Enter will not make "
+                        "the router go faster."
                     ),
                 )
                 return False
 
-            LOGGER.info(
-                "Retrying online playback after idle/failed attempt "
-                "video_id=%s elapsed=%.2fs",
-                track.video_id,
-                elapsed,
-            )
+            if self.online_load_state == "streaming":
+                idle = bool(self.mpv.get_property("idle-active"))
+                if not idle:
+                    self.set_status(
+                        f"Already streaming: {track.artist_title}.",
+                        (
+                            "The internet cat is already purring: "
+                            f"{track.artist_title}."
+                        ),
+                    )
+                    return False
+
+            if (
+                self.online_load_state == "failed"
+                and elapsed < ONLINE_RETRY_GUARD_SECONDS
+            ):
+                return False
 
         LOGGER.info(
-            "Starting online playback video_id=%s title=%r artist=%r url=%s",
+            "Online playback requested video_id=%s title=%r artist=%r",
             track.video_id,
             track.title,
             track.artist,
-            track.url,
         )
 
         self.online_current = track
-        self.online_load_state = "resolving"
-        self.online_load_started_at = timestamp
+        self.online_load_state = "prefetching"
+        self.online_request_started_at = timestamp
+        self.online_load_started_at = 0.0
+        self.online_state_next_poll_at = 0.0
+        self.online_used_direct_stream = False
+        self.online_fallback_used = False
         self.current = None
         self.current_lyrics = None
         self.lyrics_track_index = None
         self.gapless_next_index = None
         self._awaiting_mpv_path = False
 
-        self.mpv.load(track.url)
-        self.mpv.play()
-        self.set_status(
-            f"Resolving YouTube stream: {track.artist_title}",
-            f"The internet cat is resolving: {track.artist_title}",
+        resolved = self.youtube.wait_for_stream(
+            track,
+            timeout=ONLINE_FAST_START_WAIT_SECONDS,
         )
-        self.sync_mpris(force=True)
+
+        if resolved is not None:
+            start_time = time.monotonic() if now is None else timestamp
+            return self._start_resolved_youtube_stream(
+                track,
+                resolved,
+                start_time,
+            )
+
+        error = self.youtube.resolve_error(track)
+        if error is not None:
+            return self._start_youtube_watch_fallback(
+                track,
+                timestamp,
+                reason=error,
+            )
+
+        self.mpv.stop()
+        self.set_status(
+            f"Preparing fast YouTube stream: {track.artist_title}",
+            (
+                "The internet cat is pre-opening the pipe: "
+                f"{track.artist_title}"
+            ),
+        )
         return True
 
     def refresh_online_playback_state(self, now=None):
@@ -3037,11 +3133,41 @@ class MeowPlayer:
             self.online_load_state = "idle"
             return False
 
+        timestamp = time.monotonic() if now is None else float(now)
+        track = self.online_current
+
+        if self.online_load_state == "prefetching":
+            resolved = self.youtube.get_cached_stream(track)
+            if resolved is not None:
+                return self._start_resolved_youtube_stream(
+                    track,
+                    resolved,
+                    timestamp,
+                )
+
+            error = self.youtube.resolve_error(track)
+            if error is not None:
+                return self._start_youtube_watch_fallback(
+                    track,
+                    timestamp,
+                    reason=error,
+                )
+            return False
+
         if self.online_load_state != "resolving":
             return False
 
-        timestamp = time.monotonic() if now is None else float(now)
+        if timestamp < self.online_state_next_poll_at:
+            return False
+        self.online_state_next_poll_at = (
+            timestamp + ONLINE_STATE_POLL_INTERVAL_SECONDS
+        )
+
         elapsed = max(0.0, timestamp - self.online_load_started_at)
+        total_elapsed = max(
+            0.0,
+            timestamp - self.online_request_started_at,
+        )
 
         idle = bool(self.mpv.get_property("idle-active"))
         time_pos = self.mpv.get_property("time-pos")
@@ -3056,27 +3182,50 @@ class MeowPlayer:
 
         if playback_ready and not idle:
             self.online_load_state = "streaming"
-            LOGGER.info(
-                "YouTube stream ready video_id=%s elapsed=%.2fs",
-                self.online_current.video_id,
+            target_met = total_elapsed <= ONLINE_STARTUP_TARGET_SECONDS
+            log = LOGGER.info if target_met else LOGGER.warning
+            log(
+                "YouTube stream ready video_id=%s load_elapsed=%.2fs "
+                "request_to_audio=%.2fs target=%.2fs target_met=%s direct=%s",
+                track.video_id,
                 elapsed,
+                total_elapsed,
+                ONLINE_STARTUP_TARGET_SECONDS,
+                target_met,
+                self.online_used_direct_stream,
             )
             self.set_status(
-                f"Streaming from YouTube: {self.online_current.artist_title}",
                 (
-                    "The internet cat is streaming: "
-                    f"{self.online_current.artist_title}"
+                    f"Streaming from YouTube: {track.artist_title} "
+                    f"({total_elapsed:.1f}s startup)"
+                ),
+                (
+                    f"The internet cat is streaming: {track.artist_title} "
+                    f"({total_elapsed:.1f}s)"
                 ),
             )
             return True
+
+        if (
+            idle
+            and self.online_used_direct_stream
+            and not self.online_fallback_used
+            and elapsed >= ONLINE_DIRECT_OPEN_FALLBACK_SECONDS
+        ):
+            return self._start_youtube_watch_fallback(
+                track,
+                timestamp,
+                reason="pre-resolved CDN URL did not open promptly",
+            )
 
         if idle and elapsed >= ONLINE_RETRY_GUARD_SECONDS:
             self.online_load_state = "failed"
             LOGGER.warning(
                 "YouTube stream did not become ready video_id=%s "
-                "elapsed=%.2fs; retry is now allowed",
-                self.online_current.video_id,
+                "elapsed=%.2fs total_elapsed=%.2fs; retry is now allowed",
+                track.video_id,
                 elapsed,
+                total_elapsed,
             )
             self.set_status(
                 (
