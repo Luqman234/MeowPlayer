@@ -650,7 +650,7 @@ class MPVController:
 
     def append(self, filename):
         MPV_LOGGER.debug("loadfile append: %s", filename)
-        self.command("loadfile", str(filename), "append")
+        return self.command("loadfile", str(filename), "append")
 
     def advance_playlist(self):
         try:
@@ -670,15 +670,25 @@ class MPVController:
             current = int(self.get_property("playlist-current-pos"))
             count = int(self.get_property("playlist-count"))
         except (TypeError, ValueError):
-            return
+            return False
 
-        # During loadfile transitions mpv can temporarily report -1.
-        # Treat that as "not ready", never as "remove everything".
+        # During loadfile/playlist transitions mpv can temporarily report -1.
+        # That is not a safe moment to mutate the future playlist.
         if current < 0:
-            return
+            MPV_LOGGER.debug(
+                "Deferring future-playlist cleanup while current-pos=%s "
+                "playlist-count=%s",
+                current,
+                count,
+            )
+            return False
 
         for index in range(count - 1, current, -1):
-            self.command("playlist-remove", index)
+            response = self.command("playlist-remove", index)
+            if not response or response.get("error") != "success":
+                return False
+
+        return True
 
     def trim_playlist_before_current(self):
         try:
@@ -695,8 +705,14 @@ class MPVController:
             current -= 1
 
     def prime_next(self, filename):
-        self.clear_future_playlist()
-        self.append(filename)
+        # Never append while mpv reports playlist-current-pos == -1.
+        # Appending in that transition window can leave mpv stranded between
+        # entries and can accumulate duplicate reservations.
+        if not self.clear_future_playlist():
+            return False
+
+        response = self.append(filename)
+        return bool(response and response.get("error") == "success")
 
     def current_path(self):
         value = self.get_property("path")
@@ -1195,7 +1211,16 @@ class MeowPlayer:
             return
 
         self.mpv.trim_playlist_before_current()
-        self.mpv.prime_next(self.songs[next_index])
+        primed = self.mpv.prime_next(self.songs[next_index])
+        if primed is False:
+            # Keep the intended reservation, but require another stable-path
+            # confirmation before trying to mutate mpv's playlist again.
+            self._awaiting_mpv_path = True
+            MPV_LOGGER.debug(
+                "Deferred gapless reservation index=%s path=%s",
+                next_index,
+                self.songs[next_index],
+            )
 
     def _consume_gapless_reservation(self, index):
         if self.catnip_stash and self.catnip_stash[0] == index:
@@ -3158,12 +3183,13 @@ class MeowPlayer:
             self.mpv.play()
 
         self.gapless_next_index = None
-        # A successful primed advance was already confirmed above by
-        # wait_for_path(). Do not require a second instantaneous path read
-        # from sync_gapless_transition(); mpv can briefly return no path
-        # between asynchronous property updates even after the handoff was
-        # observed. Manual/fallback loadfile paths still require confirmation.
-        self._awaiting_mpv_path = not advanced
+        # Even a successfully observed playlist-play-index handoff can still
+        # pass through a short current-pos == -1 transition immediately after
+        # this method returns. Defer *all* future playlist mutation until
+        # sync_gapless_transition() confirms the new current path again.
+        # This prevents an eager append from turning a 2-entry playlist into
+        # 3 entries while mpv is between tracks.
+        self._awaiting_mpv_path = True
 
         if record_listen and self.catalog is not None:
             self.catalog.record_play(self.songs[index])
