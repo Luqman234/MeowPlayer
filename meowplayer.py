@@ -2951,7 +2951,12 @@ class MeowPlayer:
             self.mpv.play()
 
         self.gapless_next_index = None
-        self._awaiting_mpv_path = True
+        # A successful primed advance was already confirmed above by
+        # wait_for_path(). Do not require a second instantaneous path read
+        # from sync_gapless_transition(); mpv can briefly return no path
+        # between asynchronous property updates even after the handoff was
+        # observed. Manual/fallback loadfile paths still require confirmation.
+        self._awaiting_mpv_path = not advanced
 
         if record_listen and self.catalog is not None:
             self.catalog.record_play(self.songs[index])
