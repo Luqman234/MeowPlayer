@@ -425,6 +425,68 @@ jobs:
               print(path)
           PY
 
+      - name: Exercise real debug logging and mpv log file
+        env:
+          XDG_STATE_HOME: ${{ runner.temp }}/debug-state
+        run: |
+          python - <<'PY'
+          import logging
+          import time
+          from pathlib import Path
+
+          from meow_logging import (
+              configure_debug_logging,
+              mpv_debug_log_path,
+              shutdown_debug_logging,
+          )
+          from meowplayer import MPVController
+
+          first = Path("/tmp/meowplayer-music/01-test.wav").resolve()
+          debug_log = configure_debug_logging(enabled=True)
+          mpv_log = mpv_debug_log_path(debug_log)
+          mpv_log.unlink(missing_ok=True)
+
+          logging.getLogger("meowplayer.integration").info(
+              "debug integration marker"
+          )
+
+          mpv = MPVController(
+              gapless_mode="weak",
+              replaygain_mode="track",
+              replaygain_preamp=0.0,
+              debug_log_path=mpv_log,
+          )
+
+          try:
+              mpv.load(first)
+              mpv.play()
+
+              deadline = time.monotonic() + 5.0
+              current = None
+              while time.monotonic() < deadline:
+                  current = mpv.current_path()
+                  if current and Path(current).resolve() == first:
+                      break
+                  time.sleep(0.05)
+
+              assert current is not None, current
+              assert Path(current).resolve() == first, current
+          finally:
+              mpv.quit()
+              time.sleep(0.1)
+              shutdown_debug_logging()
+
+          assert debug_log.is_file(), debug_log
+          assert "debug integration marker" in debug_log.read_text(
+              encoding="utf-8"
+          )
+          assert mpv_log.is_file(), mpv_log
+          assert mpv_log.stat().st_size > 0, mpv_log
+
+          print("debug log OK:", debug_log)
+          print("mpv debug log OK:", mpv_log)
+          PY
+
       - name: Exercise real mpv JSON IPC and gapless playlist priming
         run: |
           python - <<'PY'
