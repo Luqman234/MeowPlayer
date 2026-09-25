@@ -2,6 +2,7 @@ import unittest
 from unittest import mock
 
 from meowplayer import MeowPlayer
+from meow_persistence import DEFAULT_CONFIG
 from settings_nest import (
     SETTINGS_SPECS,
     adjust_setting_value,
@@ -11,6 +12,14 @@ from settings_nest import (
 
 
 class SettingsNestTests(unittest.TestCase):
+    def test_every_setting_maps_to_persistent_config(self):
+        missing = [
+            spec.key
+            for spec in SETTINGS_SPECS
+            if spec.key not in DEFAULT_CONFIG
+        ]
+        self.assertEqual(missing, [])
+
     def test_boolean_setting_toggles(self):
         spec = setting_spec("lyrics_enabled")
         self.assertFalse(adjust_setting_value(spec, True, 1))
