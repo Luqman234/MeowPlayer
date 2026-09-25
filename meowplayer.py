@@ -687,8 +687,20 @@ class MeowPlayer:
         filesystem_watch_enabled=True,
         cat_chaos_mode=None,
         youtube_enabled=False,
+        debug_log_path=None,
+        mpv_log_path=None,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
+        self.debug_log_path = (
+            Path(debug_log_path).expanduser()
+            if debug_log_path
+            else None
+        )
+        self.mpv_log_path = (
+            Path(mpv_log_path).expanduser()
+            if mpv_log_path
+            else None
+        )
         self.serious_mode = serious_mode
         self.maximum_meow = maximum_meow
         self.cat_chaos_mode = (
@@ -698,6 +710,15 @@ class MeowPlayer:
         )
         self.playback_saboteur = PlaybackSaboteur(self.cat_chaos_mode)
         self.youtube = YouTubeCatalog(enabled=youtube_enabled)
+        LOGGER.info(
+            "Initializing player music_dir=%s youtube=%s serious=%s "
+            "maximum_meow=%s cat_chaos=%s",
+            self.music_dir,
+            youtube_enabled,
+            serious_mode,
+            maximum_meow,
+            self.cat_chaos_mode,
+        )
         self.youtube_results = []
         self.youtube_selected = 0
         self.youtube_query = ""
@@ -884,8 +905,12 @@ class MeowPlayer:
                     " The internet cat cannot find yt-dlp and is staring "
                     "accusingly at PATH."
                 )
+        if self.debug_log_path is not None:
+            initial_serious += f" Debug log: {self.debug_log_path}."
+            initial_cat += f" Debug paws: {self.debug_log_path}."
 
         self.status_message = self.text(initial_serious, initial_cat)
+        LOGGER.debug("Initial status: %s", self.status_message)
         self.quote = random.choice(CAT_QUOTES)
         now = time.monotonic()
         self.last_quote_change = now
@@ -908,6 +933,7 @@ class MeowPlayer:
             gapless_mode=self.gapless_mode,
             replaygain_mode=self.replaygain_mode,
             replaygain_preamp=self.replaygain_preamp,
+            debug_log_path=self.mpv_log_path,
         )
         self.mpv.set_property("volume", self.volume)
         self.mpv.set_repeat(self.repeat)
@@ -1423,6 +1449,7 @@ class MeowPlayer:
             self.sync_mpris(force=True)
 
     def shutdown(self):
+        LOGGER.info("Player shutdown starting")
         self.persist_state(force=True)
         self.playback_saboteur.dismiss(self)
         self.online_metadata.stop()
@@ -1440,12 +1467,14 @@ class MeowPlayer:
             self.catalog = None
 
         self.mpv.quit()
+        LOGGER.info("Player shutdown complete")
 
     def text(self, serious, cat):
         return serious if self.serious_mode else cat
 
     def set_status(self, serious, cat):
         self.status_message = self.text(serious, cat)
+        LOGGER.debug("status=%s", self.status_message)
 
     def has_active_track(self):
         return self.current is not None or self.online_current is not None
@@ -2796,6 +2825,14 @@ class MeowPlayer:
         if track is None:
             return False
 
+        LOGGER.info(
+            "Starting online playback video_id=%s title=%r artist=%r url=%s",
+            track.video_id,
+            track.title,
+            track.artist,
+            track.url,
+        )
+
         self.online_current = track
         self.current = None
         self.current_lyrics = None
@@ -2835,6 +2872,12 @@ class MeowPlayer:
             return
 
         index %= len(self.songs)
+        LOGGER.info(
+            "Starting local playback index=%s path=%s automatic=%s",
+            index,
+            self.songs[index],
+            automatic,
+        )
         self.online_current = None
 
         reset_shuffle_bag = False
@@ -4054,7 +4097,10 @@ class MeowPlayer:
             self.text("YouTube search", "Internet Nest search"),
         )
         if not query:
+            LOGGER.debug("YouTube search cancelled or empty")
             return False
+
+        LOGGER.info("YouTube search requested query=%r", query)
 
         try:
             stdscr.erase()
@@ -4076,6 +4122,7 @@ class MeowPlayer:
         try:
             results = self.youtube.search(query)
         except (YouTubeUnavailable, YouTubeSearchError) as exc:
+            LOGGER.warning("YouTube search failed query=%r error=%s", query, exc)
             self.set_status(
                 f"YouTube search failed: {exc}",
                 f"The internet cat fell off the router: {exc}",
@@ -4084,6 +4131,11 @@ class MeowPlayer:
 
         self.youtube_query = query
         self.youtube_results = list(results)
+        LOGGER.info(
+            "YouTube search completed query=%r results=%s",
+            query,
+            len(self.youtube_results),
+        )
         self.youtube_selected = 0
         self.view = "online"
 
