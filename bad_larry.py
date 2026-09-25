@@ -2,6 +2,14 @@ import random
 import time
 from dataclasses import dataclass
 
+from bad_larry_math import (
+    MATH_EVENT_CHANCE,
+    MATH_ROLL_INTERVAL,
+    answer_is_correct,
+    generate_math_question,
+    skip_penalty,
+)
+
 
 DANGEROUS_SUMMON_PHRASE = "Yes! Summon Bad Larry into The Room!"
 DANGEROUS_DISMISS_PHRASE = "YES, I APOLOGIZE FOR DISTURBING BAD LARRY"
@@ -148,9 +156,18 @@ class PlaybackSaboteur:
         self.skips_denied = 0
         self.pending = []
         self.forced_pause = False
+        self.pending_math_question = None
+        self.math_surrenders = 0
+        self.math_correct = 0
         self.next_event_at = float("inf")
+        now = self.now_func()
+        self.next_math_roll_at = (
+            now + MATH_ROLL_INTERVAL
+            if self.mode == "dangerous"
+            else float("inf")
+        )
         if self.mode:
-            self._schedule_next(self.now_func())
+            self._schedule_next(now)
 
     @property
     def enabled(self):
@@ -211,7 +228,9 @@ class PlaybackSaboteur:
             pass
         self.mode = None
         self.malice = 0
+        self.pending_math_question = None
         self.next_event_at = float("inf")
+        self.next_math_roll_at = float("inf")
 
     def _temporary_pause(self, player, now):
         if getattr(player, "current", None) is None:
