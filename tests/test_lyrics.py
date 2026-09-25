@@ -8,12 +8,33 @@ from lyrics_support import (
     LyricsFetchResult,
     LyricsManager,
     _fetch_lrclib_result,
+    _metadata_text,
     parse_lrc,
     parse_plain_lyrics,
 )
 
 
+class _VorbisLikeTags(dict):
+    def get(self, key, default=None):
+        if key == "\xa9alb":
+            raise ValueError("invalid Vorbis comment key")
+        return super().get(key, default)
+
+
 class LyricsTests(unittest.TestCase):
+    def test_metadata_text_skips_format_incompatible_tag_alias(self):
+        tags = _VorbisLikeTags({"ALBUM": "Recovered Album"})
+
+        value = _metadata_text(
+            tags,
+            "album",
+            "TALB",
+            "\xa9alb",
+            "ALBUM",
+        )
+
+        self.assertEqual(value, "Recovered Album")
+
     def test_lrc_parser_handles_multiple_timestamps(self):
         document = parse_lrc(
             "[00:01.00][00:03.50]Hello cat\n"
