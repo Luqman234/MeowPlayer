@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import platform
 import queue
 import selectors
 import shutil
@@ -14,6 +15,31 @@ from urllib.parse import parse_qs, urlsplit
 
 
 LOGGER = logging.getLogger("meowplayer.youtube")
+
+
+GLIBC_RESOLVER_WORKAROUND = "single-request-reopen"
+
+
+def network_subprocess_env(*, resolver_workaround=True, **extra):
+    """Return an inherited subprocess environment with a scoped glibc DNS workaround.
+
+    Some home-router DNS proxies mishandle glibc's paired A/AAAA resolver traffic:
+    one reply arrives quickly while the other is dropped, leaving getaddrinfo() to
+    wait roughly five seconds before retrying.  single-request-reopen tells glibc
+    to issue the lookups separately with a reopened socket.
+
+    Keep this process-local.  Preserve any user-provided RES_OPTIONS rather than
+    replacing global DNS configuration or forcing a public resolver.
+    """
+    env = os.environ.copy()
+    libc_name, _ = platform.libc_ver()
+    if resolver_workaround and libc_name.lower() == "glibc":
+        options = env.get("RES_OPTIONS", "").split()
+        if GLIBC_RESOLVER_WORKAROUND not in options:
+            options.append(GLIBC_RESOLVER_WORKAROUND)
+        env["RES_OPTIONS"] = " ".join(options)
+    env.update({key: str(value) for key, value in extra.items()})
+    return env
 
 
 class YouTubeUnavailable(RuntimeError):
@@ -370,9 +396,13 @@ class YouTubeStreamResolver:
         started = time.monotonic()
         LOGGER.debug("YT_LATENCY resolver_process_started=%.6f video_id=%s", started, track.video_id)
         try:
-            process = subprocess.Popen(resolver_command(self.executable, track),
-                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                       text=True)
+            process = subprocess.Popen(
+                resolver_command(self.executable, track),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                env=network_subprocess_env(),
+            )
         except OSError as exc:
             raise StreamResolutionError("Could not launch yt-dlp") from exc
         try:
@@ -476,9 +506,12 @@ class YouTubeSearchSession:
                        "--skip-download", "--no-warnings", "--lazy-playlist",
                        "--print", "%(.{id,title,uploader,channel,duration,webpage_url})j",
                        f"ytsearch{limit}:{query}"]
-            process = subprocess.Popen(command, stdout=subprocess.PIPE,
-                                       stderr=subprocess.DEVNULL,
-                                       env={**os.environ, "PYTHONUNBUFFERED": "1"})
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=network_subprocess_env(PYTHONUNBUFFERED="1"),
+            )
             seen = set()
             buffer = b""
             with selectors.DefaultSelector() as selector:
