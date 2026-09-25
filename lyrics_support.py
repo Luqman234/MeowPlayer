@@ -7,6 +7,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -324,6 +325,7 @@ def _track_lookup_metadata(track_path):
 def _cache_key(metadata):
     identity = "\0".join(
         [
+            "lrclib-confidence-v1",
             metadata.get("artist", "").casefold(),
             metadata.get("title", "").casefold(),
             metadata.get("album", "").casefold(),
@@ -374,18 +376,109 @@ def _lrclib_request(path, params, timeout):
         return None, "invalid-response"
 
 
-def _synced_lyrics_from_payload(payload):
+def _normalized_identity(value):
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(char for char in normalized if char.isalnum())
+
+
+def _identity_matches(expected, actual):
+    expected_key = _normalized_identity(expected)
+    actual_key = _normalized_identity(actual)
+    if not expected_key or not actual_key:
+        return False
+    return expected_key == actual_key
+
+
+def _filename_artist_title(stem):
+    parts = [
+        part.strip()
+        for part in re.split(r"\s+-\s+", str(stem or ""))
+        if part.strip()
+    ]
+    if len(parts) >= 2:
+        return parts[0], " - ".join(parts[1:])
+    return "", str(stem or "").strip()
+
+
+def _lrclib_candidate_acceptable(
+    candidate,
+    metadata,
+    expected_title="",
+    expected_artist="",
+):
+    if not isinstance(candidate, dict):
+        return False
+
+    text = candidate.get("syncedLyrics")
+    if not isinstance(text, str) or not text.strip():
+        return False
+
+    remote_title = str(candidate.get("trackName") or "").strip()
+    remote_artist = str(candidate.get("artistName") or "").strip()
+
+    if expected_title and remote_title and not _identity_matches(
+        expected_title,
+        remote_title,
+    ):
+        return False
+
+    if expected_artist and remote_artist and not _identity_matches(
+        expected_artist,
+        remote_artist,
+    ):
+        return False
+
+    try:
+        local_duration = max(
+            0.0,
+            float(metadata.get("duration") or 0.0),
+        )
+    except (TypeError, ValueError):
+        local_duration = 0.0
+
+    try:
+        remote_duration = max(
+            0.0,
+            float(candidate.get("duration") or 0.0),
+        )
+    except (TypeError, ValueError):
+        remote_duration = 0.0
+
+    if local_duration > 0 and remote_duration > 0:
+        tolerance = max(10.0, local_duration * 0.08)
+        if abs(local_duration - remote_duration) > tolerance:
+            return False
+
+    return True
+
+
+def _synced_lyrics_from_payload(
+    payload,
+    metadata=None,
+    expected_title="",
+    expected_artist="",
+):
+    metadata = metadata or {}
+
     if isinstance(payload, dict):
-        text = payload.get("syncedLyrics")
-        return text.strip() if isinstance(text, str) and text.strip() else ""
+        if _lrclib_candidate_acceptable(
+            payload,
+            metadata,
+            expected_title=expected_title,
+            expected_artist=expected_artist,
+        ):
+            return payload["syncedLyrics"].strip()
+        return ""
 
     if isinstance(payload, list):
         for item in payload:
-            if not isinstance(item, dict):
-                continue
-            text = item.get("syncedLyrics")
-            if isinstance(text, str) and text.strip():
-                return text.strip()
+            if _lrclib_candidate_acceptable(
+                item,
+                metadata,
+                expected_title=expected_title,
+                expected_artist=expected_artist,
+            ):
+                return item["syncedLyrics"].strip()
 
     return ""
 
@@ -414,28 +507,40 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
 
         payload, status = _lrclib_request("/api/get", params, timeout)
         saw_network_error = saw_network_error or status == "network-error"
-        synced = _synced_lyrics_from_payload(payload)
+        synced = _synced_lyrics_from_payload(
+            payload,
+            metadata,
+            expected_title=title,
+            expected_artist=artist,
+        )
         if synced:
             return LyricsFetchResult(synced, "found", query)
 
+    filename_stem = metadata.get("filename_stem", "").strip()
+    file_artist, file_title = _filename_artist_title(filename_stem)
+
+    search_candidates = (
+        (query, title, artist),
+        (filename_stem, file_title, file_artist),
+        (title, title, ""),
+    )
+
     search_queries = []
-    for candidate in (
-        query,
-        metadata.get("filename_stem", "").strip(),
-        title,
-    ):
+    seen_queries = set()
+    for candidate, expected_title, expected_artist in search_candidates:
         normalized = " ".join(candidate.split())
-        if normalized and normalized.casefold() not in {
-            existing.casefold()
-            for existing in search_queries
-        }:
-            search_queries.append(normalized)
+        key = normalized.casefold()
+        if normalized and key not in seen_queries:
+            seen_queries.add(key)
+            search_queries.append(
+                (normalized, expected_title, expected_artist)
+            )
 
     if not search_queries:
         return LyricsFetchResult("", "not-found", query)
 
     saw_successful_search = False
-    for search_query in search_queries:
+    for search_query, expected_title, expected_artist in search_queries:
         payload, status = _lrclib_request(
             "/api/search",
             {"q": search_query},
@@ -443,7 +548,12 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
         )
         saw_network_error = saw_network_error or status == "network-error"
         saw_successful_search = saw_successful_search or status == "ok"
-        synced = _synced_lyrics_from_payload(payload)
+        synced = _synced_lyrics_from_payload(
+            payload,
+            metadata,
+            expected_title=expected_title,
+            expected_artist=expected_artist,
+        )
         if synced:
             return LyricsFetchResult(synced, "found", search_query)
 
