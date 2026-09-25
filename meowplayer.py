@@ -3151,7 +3151,7 @@ class MeowPlayer:
                     f"The cat is sniffing LRCLIB for: {query}"
                 )
             return self.text(
-                "Searching LRCLIB for synchronized lyrics...",
+                "Searching LRCLIB for lyrics...",
                 "The cat is sniffing LRCLIB for words..."
             )
 
@@ -3164,12 +3164,12 @@ class MeowPlayer:
         if status == "not-found":
             if query:
                 return self.text(
-                    f"No synchronized lyrics found on LRCLIB for: {query}",
-                    f"LRCLIB found no timed words for this scent: {query}"
+                    f"No lyrics found on LRCLIB for: {query}",
+                    f"LRCLIB found no lyrics for this scent: {query}"
                 )
             return self.text(
-                "No synchronized lyrics found on LRCLIB.",
-                "LRCLIB found no timed words for this meow."
+                "No lyrics found on LRCLIB.",
+                "LRCLIB found no lyrics for this meow."
             )
 
         if status == "offline":

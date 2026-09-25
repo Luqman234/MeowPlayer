@@ -7,6 +7,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,7 @@ class LyricsFetchResult:
     text: str
     status: str
     query: str = ""
+    synced: bool = True
 
 
 @dataclass(frozen=True)
@@ -324,6 +326,7 @@ def _track_lookup_metadata(track_path):
 def _cache_key(metadata):
     identity = "\0".join(
         [
+            "lrclib-confidence-v1",
             metadata.get("artist", "").casefold(),
             metadata.get("title", "").casefold(),
             metadata.get("album", "").casefold(),
@@ -374,20 +377,128 @@ def _lrclib_request(path, params, timeout):
         return None, "invalid-response"
 
 
-def _synced_lyrics_from_payload(payload):
+def _normalized_identity(value):
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(char for char in normalized if char.isalnum())
+
+
+def _identity_matches(expected, actual):
+    expected_key = _normalized_identity(expected)
+    actual_key = _normalized_identity(actual)
+    if not expected_key or not actual_key:
+        return False
+    return expected_key == actual_key
+
+
+def _filename_artist_title(stem):
+    parts = [
+        part.strip()
+        for part in re.split(r"\s+-\s+", str(stem or ""))
+        if part.strip()
+    ]
+    if len(parts) >= 2:
+        return parts[0], " - ".join(parts[1:])
+    return "", str(stem or "").strip()
+
+
+def _lrclib_candidate_acceptable(
+    candidate,
+    metadata,
+    expected_title="",
+    expected_artist="",
+):
+    if not isinstance(candidate, dict):
+        return False
+
+    synced_text = candidate.get("syncedLyrics")
+    plain_text = candidate.get("plainLyrics")
+    has_synced = isinstance(synced_text, str) and bool(synced_text.strip())
+    has_plain = isinstance(plain_text, str) and bool(plain_text.strip())
+    if not has_synced and not has_plain:
+        return False
+
+    remote_title = str(candidate.get("trackName") or "").strip()
+    remote_artist = str(candidate.get("artistName") or "").strip()
+
+    if expected_title and remote_title and not _identity_matches(
+        expected_title,
+        remote_title,
+    ):
+        return False
+
+    if expected_artist and remote_artist and not _identity_matches(
+        expected_artist,
+        remote_artist,
+    ):
+        return False
+
+    try:
+        local_duration = max(
+            0.0,
+            float(metadata.get("duration") or 0.0),
+        )
+    except (TypeError, ValueError):
+        local_duration = 0.0
+
+    try:
+        remote_duration = max(
+            0.0,
+            float(candidate.get("duration") or 0.0),
+        )
+    except (TypeError, ValueError):
+        remote_duration = 0.0
+
+    if local_duration > 0 and remote_duration > 0:
+        tolerance = max(10.0, local_duration * 0.08)
+        if abs(local_duration - remote_duration) > tolerance:
+            return False
+
+    return True
+
+
+def _lyrics_from_payload(
+    payload,
+    metadata=None,
+    expected_title="",
+    expected_artist="",
+):
+    metadata = metadata or {}
+
     if isinstance(payload, dict):
-        text = payload.get("syncedLyrics")
-        return text.strip() if isinstance(text, str) and text.strip() else ""
+        candidates = [payload]
+    elif isinstance(payload, list):
+        candidates = [
+            item for item in payload
+            if isinstance(item, dict)
+        ]
+    else:
+        candidates = []
 
-    if isinstance(payload, list):
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            text = item.get("syncedLyrics")
-            if isinstance(text, str) and text.strip():
-                return text.strip()
+    acceptable = [
+        item
+        for item in candidates
+        if _lrclib_candidate_acceptable(
+            item,
+            metadata,
+            expected_title=expected_title,
+            expected_artist=expected_artist,
+        )
+    ]
 
-    return ""
+    # Prefer a synchronized lyric from any plausible candidate. If LRCLIB
+    # only has plain lyrics, return those instead so Songbook can still
+    # display the words without pretending they are timed.
+    for item in acceptable:
+        text = item.get("syncedLyrics")
+        if isinstance(text, str) and text.strip():
+            return text.strip(), True
+
+    for item in acceptable:
+        text = item.get("plainLyrics")
+        if isinstance(text, str) and text.strip():
+            return text.strip(), False
+
+    return "", False
 
 
 def _fetch_lrclib_result(metadata, timeout=5.0):
@@ -414,28 +525,45 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
 
         payload, status = _lrclib_request("/api/get", params, timeout)
         saw_network_error = saw_network_error or status == "network-error"
-        synced = _synced_lyrics_from_payload(payload)
-        if synced:
-            return LyricsFetchResult(synced, "found", query)
+        text, synced = _lyrics_from_payload(
+            payload,
+            metadata,
+            expected_title=title,
+            expected_artist=artist,
+        )
+        if text:
+            return LyricsFetchResult(
+                text,
+                "found",
+                query,
+                synced=synced,
+            )
+
+    filename_stem = metadata.get("filename_stem", "").strip()
+    file_artist, file_title = _filename_artist_title(filename_stem)
+
+    search_candidates = (
+        (query, title, artist),
+        (filename_stem, file_title, file_artist),
+        (title, title, ""),
+    )
 
     search_queries = []
-    for candidate in (
-        query,
-        metadata.get("filename_stem", "").strip(),
-        title,
-    ):
+    seen_queries = set()
+    for candidate, expected_title, expected_artist in search_candidates:
         normalized = " ".join(candidate.split())
-        if normalized and normalized.casefold() not in {
-            existing.casefold()
-            for existing in search_queries
-        }:
-            search_queries.append(normalized)
+        key = normalized.casefold()
+        if normalized and key not in seen_queries:
+            seen_queries.add(key)
+            search_queries.append(
+                (normalized, expected_title, expected_artist)
+            )
 
     if not search_queries:
         return LyricsFetchResult("", "not-found", query)
 
     saw_successful_search = False
-    for search_query in search_queries:
+    for search_query, expected_title, expected_artist in search_queries:
         payload, status = _lrclib_request(
             "/api/search",
             {"q": search_query},
@@ -443,9 +571,19 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
         )
         saw_network_error = saw_network_error or status == "network-error"
         saw_successful_search = saw_successful_search or status == "ok"
-        synced = _synced_lyrics_from_payload(payload)
-        if synced:
-            return LyricsFetchResult(synced, "found", search_query)
+        text, synced = _lyrics_from_payload(
+            payload,
+            metadata,
+            expected_title=expected_title,
+            expected_artist=expected_artist,
+        )
+        if text:
+            return LyricsFetchResult(
+                text,
+                "found",
+                search_query,
+                synced=synced,
+            )
 
     if saw_network_error and not saw_successful_search:
         return LyricsFetchResult("", "network-error", query)
@@ -500,6 +638,9 @@ class LyricsManager:
     def _persistent_cache_path(self, metadata):
         return self.cache_dir / f"{_cache_key(metadata)}.lrc"
 
+    def _persistent_plain_cache_path(self, metadata):
+        return self.cache_dir / f"{_cache_key(metadata)}.txt"
+
     def _load_cached_lrc(self, metadata):
         path = self._persistent_cache_path(metadata)
         if not path.is_file():
@@ -513,10 +654,31 @@ class LyricsManager:
             return document
         return None
 
+    def _load_cached_plain(self, metadata):
+        path = self._persistent_plain_cache_path(metadata)
+        if not path.is_file():
+            return None
+
+        return parse_plain_lyrics(
+            _decode_text(path),
+            source="LRCLIB cache · unsynchronized",
+        )
+
     def _save_cached_lrc(self, metadata, text):
         try:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             path = self._persistent_cache_path(metadata)
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text(text.rstrip() + "\n", encoding="utf-8")
+            temporary.replace(path)
+            return path
+        except OSError:
+            return None
+
+    def _save_cached_plain(self, metadata, text):
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            path = self._persistent_plain_cache_path(metadata)
             temporary = path.with_name(path.name + ".tmp")
             temporary.write_text(text.rstrip() + "\n", encoding="utf-8")
             temporary.replace(path)
@@ -546,6 +708,7 @@ class LyricsManager:
                 "status": "searching",
                 "query": query,
                 "attempts": 0,
+                "synced": True,
                 "metadata": metadata,
             }
             self._pending[identity] = state
@@ -575,6 +738,7 @@ class LyricsManager:
                     state["text"] = result.text
                     state["status"] = result.status
                     state["query"] = result.query or query
+                    state["synced"] = bool(result.synced)
                     state["done"] = True
                     self._online_status[identity] = {
                         "status": result.status,
@@ -639,18 +803,44 @@ class LyricsManager:
                 return None
             self._pending.pop(identity, None)
 
-        synced_text = state.get("text", "")
-        if not synced_text:
+        lyric_text = state.get("text", "")
+        if not lyric_text:
             return None
 
-        document = parse_lrc(
-            synced_text,
-            source="LRCLIB · downloaded",
-        )
-        if document is None or not document.synced:
-            return None
+        if state.get("synced", True):
+            document = parse_lrc(
+                lyric_text,
+                source="LRCLIB · downloaded",
+            )
+            if document is None or not document.synced:
+                return None
+            self._save_cached_lrc(state["metadata"], lyric_text)
+        else:
+            document = parse_plain_lyrics(
+                lyric_text,
+                source="LRCLIB · downloaded · unsynchronized",
+            )
+            if document is None:
+                return None
+            self._save_cached_plain(state["metadata"], lyric_text)
 
-        self._save_cached_lrc(state["metadata"], synced_text)
+            # Never replace user-provided or embedded plain lyrics with a
+            # plain online copy. A synchronized LRCLIB result may still
+            # upgrade those local lyrics on a later lookup.
+            existing = self._cache.get(identity)
+            if (
+                existing is not None
+                and not existing.synced
+                and not existing.source.startswith("LRCLIB")
+            ):
+                with self._pending_lock:
+                    self._online_status[identity] = {
+                        "status": "found",
+                        "query": state.get("query", ""),
+                        "attempts": state.get("attempts", 1),
+                    }
+                return None
+
         self._cache[identity] = document
         with self._pending_lock:
             self._online_status[identity] = {
@@ -700,7 +890,9 @@ class LyricsManager:
                 return embedded_synced
             embedded_plain = _embedded_plain(tags)
 
-        # 4. Ask LRCLIB in the background. poll() promotes the result later.
+        # 4. Ask LRCLIB in the background. A synchronized result may
+        # upgrade plain local lyrics later; an unsynchronized result is only
+        # used when there is no better local lyric document.
         self._start_online_fetch(identity, metadata)
 
         # 5. Plain sidecar / embedded lyrics remain useful while fetching.
@@ -716,4 +908,13 @@ class LyricsManager:
 
         if embedded_plain is not None:
             self._cache[identity] = embedded_plain
-        return embedded_plain
+            return embedded_plain
+
+        # 6. A previously downloaded plain LRCLIB lyric is instant/offline
+        # while a fresh online lookup, when enabled, can still upgrade it.
+        document = self._load_cached_plain(metadata)
+        if document is not None:
+            self._cache[identity] = document
+            return document
+
+        return None
