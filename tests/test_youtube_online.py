@@ -7,9 +7,11 @@ from unittest import mock
 from meowplayer import MeowPlayer, build_mpv_command, parse_args
 from youtube_online import (
     YouTubeCatalog,
+    YouTubePlaylist,
     YouTubeTrack,
     YouTubeUnavailable,
     normalize_youtube_search,
+    youtube_creator_section_url,
     youtube_download_command,
     youtube_search_target,
 )
@@ -80,6 +82,112 @@ class YouTubeOnlineTests(unittest.TestCase):
             self.assertEqual(catalog.search("shelter", limit=5), [track])
             session.assert_called_once_with(catalog, "shelter", limit=5, search_mode="all")
             session.return_value.close.assert_called_once()
+
+    def test_search_payload_preserves_channel_identity(self):
+        payload = {
+            "entries": [
+                {
+                    "id": "creator001",
+                    "title": "Creator Song",
+                    "channel": "Creator Cat",
+                    "channel_id": "UCcreator",
+                    "channel_url": "https://www.youtube.com/@creatorcat",
+                    "duration": 123,
+                }
+            ]
+        }
+
+        tracks = YouTubeCatalog._tracks_from_payload(payload)
+
+        self.assertEqual(tracks[0].channel_id, "UCcreator")
+        self.assertEqual(
+            tracks[0].channel_url,
+            "https://www.youtube.com/@creatorcat",
+        )
+
+    def test_creator_section_urls_are_built_from_channel_root(self):
+        self.assertEqual(
+            youtube_creator_section_url(
+                "https://www.youtube.com/@creatorcat/videos",
+                "playlists",
+            ),
+            "https://www.youtube.com/@creatorcat/playlists",
+        )
+        self.assertEqual(
+            youtube_creator_section_url(
+                "https://www.youtube.com/channel/UCcreator",
+                "videos",
+            ),
+            "https://www.youtube.com/channel/UCcreator/videos",
+        )
+
+    def test_playlist_payload_becomes_creator_playlist(self):
+        playlist = YouTubeCatalog._playlist_from_entry(
+            {
+                "id": "PLcat",
+                "title": "Cat Songs",
+                "channel": "Creator Cat",
+                "playlist_count": 12,
+            }
+        )
+
+        self.assertIsInstance(playlist, YouTubePlaylist)
+        self.assertEqual(playlist.playlist_id, "PLcat")
+        self.assertEqual(playlist.count_label, "12 tracks")
+        self.assertEqual(
+            playlist.url,
+            "https://www.youtube.com/playlist?list=PLcat",
+        )
+
+    def test_open_selected_creator_uses_channel_url_not_artist_research(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        track = YouTubeTrack(
+            "creator002",
+            "Direct Channel Track",
+            "Creator Cat",
+            120,
+            "https://www.youtube.com/watch?v=creator002",
+            channel_id="UCcreator",
+            channel_url="https://www.youtube.com/@creatorcat",
+        )
+        player.youtube_results = [track]
+        player.youtube_selected = 0
+        player.creator_session = None
+        player.view = "online"
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        self.assertTrue(player.open_selected_youtube_creator())
+
+        self.assertEqual(player.view, "creator")
+        self.assertEqual(player.creator_name, "Creator Cat")
+        self.assertEqual(
+            player.creator_channel_url,
+            "https://www.youtube.com/@creatorcat",
+        )
+        self.assertEqual(player.creator_level, "menu")
+        self.assertIn("Opened creator channel", statuses[-1][0])
+
+    def test_creator_menu_opens_uploads_and_playlists(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        player.creator_name = "Creator Cat"
+        player.creator_channel_url = "https://www.youtube.com/@creatorcat"
+        player.creator_session = None
+        player.creator_items = []
+        player.creator_selected = 0
+        player.creator_level = "menu"
+        player.creator_playlist = None
+        player.youtube = SimpleNamespace(timeout=20)
+        player.set_status = lambda *args: None
+
+        with mock.patch("meowplayer.YouTubeBrowseSession") as session:
+            self.assertTrue(player.activate_creator_selection())
+
+        session.assert_called_once_with(
+            player.youtube,
+            "https://www.youtube.com/@creatorcat",
+            "uploads",
+        )
 
     def test_artist_prefix_selects_artist_search_mode(self):
         query, mode = normalize_youtube_search("artist:Porter Robinson")
