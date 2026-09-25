@@ -34,6 +34,8 @@ class LyricsFetchResult:
     status: str
     query: str = ""
     synced: bool = True
+    provider: str = "LRCLIB"
+    cacheable: bool = True
 
 
 @dataclass(frozen=True)
@@ -593,6 +595,218 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
 
 def _fetch_lrclib(metadata, timeout=5.0):
     return _fetch_lrclib_result(metadata, timeout=timeout).text
+
+
+MUSIXMATCH_API_ROOT = "https://api.musixmatch.com/ws/1.1"
+
+
+def _musixmatch_request(method, params, api_key, timeout):
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        return None, "auth-error"
+
+    query_params = {
+        key: value
+        for key, value in params.items()
+        if value not in (None, "")
+    }
+    query_params["apikey"] = api_key
+    query = urllib.parse.urlencode(query_params)
+    url = f"{MUSIXMATCH_API_ROOT}/{method}"
+    if query:
+        url += "?" + query
+
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": (
+                "MeowPlayer "
+                "(https://github.com/Luqman234/MeowPlayer)"
+            ),
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return None, "auth-error"
+        if exc.code == 404:
+            return None, "not-found"
+        if exc.code == 429 or 500 <= exc.code < 600:
+            return None, "network-error"
+        return None, "http-error"
+    except (OSError, urllib.error.URLError, TimeoutError):
+        return None, "network-error"
+
+    try:
+        decoded = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, TypeError):
+        return None, "invalid-response"
+
+    message = decoded.get("message") if isinstance(decoded, dict) else None
+    if not isinstance(message, dict):
+        return None, "invalid-response"
+    header = message.get("header")
+    body = message.get("body")
+    try:
+        status_code = int((header or {}).get("status_code", 0))
+    except (TypeError, ValueError):
+        status_code = 0
+
+    if status_code == 200:
+        return body if isinstance(body, dict) else {}, "ok"
+    if status_code in (401, 403):
+        return None, "auth-error"
+    if status_code == 404:
+        return None, "not-found"
+    if status_code == 429 or status_code >= 500:
+        return None, "network-error"
+    return None, "http-error"
+
+
+def _musixmatch_candidates(metadata):
+    title = str(metadata.get("title") or "").strip()
+    artist = str(metadata.get("artist") or "").strip()
+    filename_stem = str(metadata.get("filename_stem") or "").strip()
+    file_artist, file_title = _filename_artist_title(filename_stem)
+
+    candidates = []
+    seen = set()
+    for candidate_title, candidate_artist in (
+        (title, artist),
+        (file_title, file_artist),
+    ):
+        candidate_title = " ".join(candidate_title.split())
+        candidate_artist = " ".join(candidate_artist.split())
+        if not candidate_title or not candidate_artist:
+            continue
+        if candidate_artist.casefold() in {
+            "unknown artist",
+            "unknown youtube artist",
+        }:
+            continue
+        key = (candidate_title.casefold(), candidate_artist.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append((candidate_title, candidate_artist))
+    return candidates
+
+
+def _musixmatch_body_text(body, kind):
+    if not isinstance(body, dict):
+        return ""
+    payload = body.get(kind)
+    if not isinstance(payload, dict):
+        return ""
+    field = "subtitle_body" if kind == "subtitle" else "lyrics_body"
+    text = payload.get(field)
+    if isinstance(text, str):
+        return text.strip()
+    return ""
+
+
+def _fetch_musixmatch_result(metadata, api_key, timeout=5.0):
+    api_key = str(api_key or "").strip()
+    query = " ".join(
+        part
+        for part in (
+            str(metadata.get("artist") or "").strip(),
+            str(metadata.get("title") or "").strip(),
+        )
+        if part
+    ).strip()
+    if not api_key:
+        return LyricsFetchResult(
+            "", "auth-error", query, provider="Musixmatch", cacheable=False
+        )
+
+    candidates = _musixmatch_candidates(metadata)
+    if not candidates:
+        return LyricsFetchResult(
+            "", "not-found", query, provider="Musixmatch", cacheable=False
+        )
+
+    try:
+        duration = max(0.0, float(metadata.get("duration") or 0.0))
+    except (TypeError, ValueError):
+        duration = 0.0
+
+    saw_network_error = False
+    saw_success = False
+
+    for title, artist in candidates:
+        candidate_query = f"{artist} {title}".strip()
+        subtitle_params = {
+            "q_track": title,
+            "q_artist": artist,
+            "subtitle_format": "lrc",
+        }
+        if duration > 0:
+            subtitle_params["f_subtitle_length"] = int(round(duration))
+            subtitle_params["f_subtitle_length_max_deviation"] = max(
+                10,
+                int(round(duration * 0.08)),
+            )
+
+        body, status = _musixmatch_request(
+            "matcher.subtitle.get",
+            subtitle_params,
+            api_key,
+            timeout,
+        )
+        if status == "auth-error":
+            return LyricsFetchResult(
+                "", "auth-error", candidate_query,
+                provider="Musixmatch", cacheable=False,
+            )
+        saw_network_error = saw_network_error or status == "network-error"
+        saw_success = saw_success or status == "ok"
+        synced_text = _musixmatch_body_text(body, "subtitle")
+        if synced_text:
+            return LyricsFetchResult(
+                synced_text,
+                "found",
+                candidate_query,
+                synced=True,
+                provider="Musixmatch",
+                cacheable=False,
+            )
+
+        body, status = _musixmatch_request(
+            "matcher.lyrics.get",
+            {"q_track": title, "q_artist": artist},
+            api_key,
+            timeout,
+        )
+        if status == "auth-error":
+            return LyricsFetchResult(
+                "", "auth-error", candidate_query,
+                provider="Musixmatch", cacheable=False,
+            )
+        saw_network_error = saw_network_error or status == "network-error"
+        saw_success = saw_success or status == "ok"
+        plain_text = _musixmatch_body_text(body, "lyrics")
+        if plain_text:
+            return LyricsFetchResult(
+                plain_text,
+                "found",
+                candidate_query,
+                synced=False,
+                provider="Musixmatch",
+                cacheable=False,
+            )
+
+    if saw_network_error and not saw_success:
+        return LyricsFetchResult(
+            "", "network-error", query, provider="Musixmatch", cacheable=False
+        )
+    return LyricsFetchResult(
+        "", "not-found", query, provider="Musixmatch", cacheable=False
+    )
 
 
 class LyricsManager:
