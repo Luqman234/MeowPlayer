@@ -138,6 +138,78 @@ Unsynchronized LRCLIB lyrics are cached separately and can be reused offline. Lo
 
 The cat is still allowed on the internet. It now has to check the nametag first. 🐈‍⬛
 
+### Also in 0.15.1 — the cat has obtained playback authority
+
+Three explicitly opt-in malicious playback modes now exist:
+
+```bash
+meowplayer --bad-bad-cat
+meowplayer --very-bad-cat
+meowplayer --dangerous-cat
+```
+
+These are not cosmetic joke modes. They deliberately interfere with playback.
+
+- **Bad Bad Cat** is mildly annoying: rare rewinds, tiny pauses, tiny tempo crimes, and temporary volume theft.
+- **Very Bad Cat** retaliates more often, rewinds farther, changes speed more noticeably, restarts tracks, and may choose another track.
+- **Dangerous Cat** summons **Bad Larry**, whose job description is essentially "fight the listener." He can deny skips, counter seeks, restart tracks, jump two songs, repeat short sections, trigger multi-action Larry Chains, temporarily alter speed/volume, and otherwise contest playback authority.
+
+Dangerous Cat requires three confirmations. The final one must be typed exactly:
+
+```text
+Yes! Summon Bad Larry into The Room!
+```
+
+Inside Dangerous Cat mode, `Ctrl+E` starts the emergency dismissal ritual. Bad Larry only leaves after the exact apology:
+
+```text
+YES, I APOLOGIZE FOR DISTURBING BAD LARRY
+```
+
+Normal OS termination still works. Bad Larry does not trap the process, delete music, alter ratings, rewrite playlists, corrupt the Cat Catalog, or receive permission to vandalize the rest of the system. His jurisdiction is playback.
+
+#### Bad Larry Mathematics Incidents
+
+Dangerous Cat now performs one mathematics roll every **60 seconds**. Each roll has a **1-in-5 chance** of interrupting the listener with a question while the music keeps playing.
+
+When a math incident fires, the difficulty distribution is:
+
+| Difficulty | Chance among math incidents |
+| --- | ---: |
+| Easy | 50% |
+| Medium | 30% |
+| Hard | 19% |
+| Stochastic Calculus | 0.5% |
+| IMO P6-style boss | 0.5% |
+
+Answers are deliberately machine-checkable so the terminal can grade them without pretending to understand arbitrary handwritten proofs. Type `SKIP` to surrender.
+
+Surrender is legal. Bad Larry simply makes it increasingly regrettable:
+
+| Difficulty | First-surrender punishment |
+| --- | --- |
+| Easy | 5–10 s rewind, +3 Malice |
+| Medium | 10–20 s rewind, temporary 0.95x speed, +6 Malice |
+| Hard | 20–35 s rewind, temporary 0.90x speed, +10 Malice |
+| Stochastic Calculus | restart track, temporary 0.85x speed, +18 Malice |
+| IMO P6-style | restart track, temporary 0.82x speed, delayed track hijack, +25 Malice |
+| Three-Qubit Final Exam | heavy Larry chain, temporary 0.80x speed, +35 Malice |
+
+Repeated surrender multiplies later penalties by **1.00x, 1.15x, 1.30x, then 1.50x**, capped at 1.50x.
+
+And if the listener somehow answers the IMO P6-style boss correctly:
+
+```text
+IMO P6-STYLE: CORRECT
+
+Bad Larry:
+No.
+```
+
+MeowPlayer immediately opens a **five-minute Three-Qubit Dynamics final exam** containing the full 9-part Hamiltonian / reduced-state / partial-transpose / negativity / Cayley-hyperdeterminant / three-tangle / SLOCC / W-to-GHZ problem. The modal is scrollable while playback continues.
+
+The final exam is intentionally theatrical rather than pretending that a curses text box can rigorously grade a multi-page symbolic derivation. `D` declares a completed derivation, `S` surrenders, and `Ctrl+E` still reaches the Bad Larry dismissal ritual. Timeout or surrender applies the heaviest math punishment.
+
 ## What's new in 0.15.0 — The Metadata Cat Goes Online
 
 The cat has finally been granted restricted internet access.
@@ -449,7 +521,7 @@ This section is intentionally long because calling MeowPlayer a "tiny terminal w
 - Maximum Meow mode
 - Serious Mode for people who need to open the application during a meeting
 
-Underneath the jokes, these systems are intentionally separated: the presentation-only chaos layer does not get permission to reorder playback, mutate ratings by itself, alter music files, or rewrite Smart Mix rules.
+Underneath the jokes, the normal presentation layer remains separated from playback state. Random Cat Incidents do not get permission to reorder playback, mutate ratings, alter music files, or rewrite Smart Mix rules. The only exception is the explicitly requested malicious playback family: `--bad-bad-cat`, `--very-bad-cat`, and `--dangerous-cat`.
 
 ## Quick start — summon the cat
 
@@ -491,6 +563,9 @@ Useful launch variants:
 ```bash
 meowplayer --maximum-meow
 meowplayer --serious-mode
+meowplayer --bad-bad-cat
+meowplayer --very-bad-cat
+meowplayer --dangerous-cat
 meowplayer --no-mpris
 meowplayer --no-restore
 meowplayer --rebuild-catalog
@@ -1692,16 +1767,19 @@ It may **not**, merely because a random Cat Incident fired:
 - write different metadata
 - initiate network work
 
-Those actions only happen through the actual feature logic or explicit user input.
+Those actions only happen through actual feature logic or explicit user input.
 
-In other words:
+The malicious cat modes are the deliberate exception for **playback only**. When you launch one of those flags, you are explicitly opting into a cat that may seek, pause, resume, restart, skip, change temporary playback speed, temporarily lower mpv volume, or choose another track.
+
+Even Bad Larry does not get permission to damage data.
 
 ```text
-cat jokes = allowed to be unstable
-music state = absolutely not
+normal cat jokes      = presentation chaos
+malicious cat modes   = opt-in playback chaos
+music files / ratings = still off limits
 ```
 
-This separation is deliberate. The joke is part of the product personality; it is not allowed to become an excuse for unreliable playback.
+The distinction is deliberate: MeowPlayer can become obnoxious on request without becoming destructive.
 
 ## Cat modes
 
@@ -1736,7 +1814,45 @@ meowplayer --maximum-meow
 
 For situations where Normal Mode fails the laboratory's minimum cat requirement.
 
-Serious Mode and Maximum Meow are mutually exclusive because even this project has boundaries.
+### Bad Bad Cat — mildly criminal DJ
+
+```bash
+meowplayer --bad-bad-cat
+```
+
+The cat occasionally touches the controls. Expect rare 2–5 second rewinds, sub-second pauses, tiny tempo shifts, temporary volume theft, and occasional retaliation when you press transport controls.
+
+### Very Bad Cat — hostile DJ
+
+```bash
+meowplayer --very-bad-cat
+```
+
+The cat now believes playback is a shared custody arrangement. Interference is more frequent and stronger: longer rewinds, more obvious tempo changes, restarts, counter-seeks, skip resistance, and occasional track hijacking.
+
+### Dangerous Cat — summon Bad Larry
+
+```bash
+meowplayer --dangerous-cat
+```
+
+This mode is intentionally annoying. It requires **three confirmations** before the player starts. The final phrase is exact and case-sensitive:
+
+```text
+Yes! Summon Bad Larry into The Room!
+```
+
+Bad Larry can trigger frequent spontaneous sabotage and directly retaliate against Next, Previous, Pause, Seek, Volume, and Quit attempts. As his Malice rises, the UI reports declining **Human Authority** and stronger events such as repeated-section abuse and **Larry Chains**.
+
+A normal `X` quit attempt can be denied while Bad Larry is active. Use `Ctrl+E` for the in-app emergency dismissal ritual and type exactly:
+
+```text
+YES, I APOLOGIZE FOR DISTURBING BAD LARRY
+```
+
+`Ctrl+C`, terminal closure, `SIGTERM`, and ordinary OS process control remain real escape hatches. Dangerous Cat does not install persistence, modify shell configuration, delete files, or raise playback above the user's configured Meow Level.
+
+Serious Mode, Maximum Meow, Bad Bad Cat, Very Bad Cat, and Dangerous Cat are mutually exclusive because even this project has boundaries.
 
 ## Cat moods
 

@@ -18,6 +18,7 @@ class FakeMPV:
         self.primed = []
         self.loaded = []
         self.play_calls = 0
+        self.stop_calls = 0
         self.advanced = 0
         self.advance_response = {"error": "success"}
         self.wait_for_path_result = True
@@ -51,6 +52,9 @@ class FakeMPV:
 
     def play(self):
         self.play_calls += 1
+
+    def stop(self):
+        self.stop_calls += 1
 
 
 class AudioEngineTests(unittest.TestCase):
@@ -457,12 +461,17 @@ class AudioEngineTests(unittest.TestCase):
             player.mpv.waited_for[0][0],
             Path("/music/1.flac"),
         )
+        self.assertEqual(player.mpv.stop_calls, 1)
         self.assertEqual(player.mpv.cleared, 1)
         self.assertEqual(
             player.mpv.loaded,
             [Path("/music/1.flac")],
         )
         self.assertEqual(player.mpv.play_calls, 1)
+        self.assertEqual(
+            player.mpv.waited_for[0],
+            (Path("/music/1.flac"), 1.25),
+        )
 
     def test_failed_primed_advance_falls_back_to_replace(self):
         player = self.make_player(current=0)
@@ -475,6 +484,7 @@ class AudioEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(player.mpv.advanced, 1)
+        self.assertEqual(player.mpv.stop_calls, 1)
         self.assertEqual(player.mpv.cleared, 1)
         self.assertEqual(
             player.mpv.loaded,
@@ -492,6 +502,7 @@ class AudioEngineTests(unittest.TestCase):
 
         self.assertEqual(player.current, 2)
         self.assertEqual(player.mpv.advanced, 0)
+        self.assertEqual(player.mpv.stop_calls, 0)
         self.assertEqual(player.mpv.cleared, 1)
         self.assertEqual(
             player.mpv.loaded,
