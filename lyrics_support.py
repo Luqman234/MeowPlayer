@@ -430,6 +430,28 @@ def _internet_artist_parts(value):
     }
 
 
+def _internet_aliases(value):
+    return [
+        part.strip()
+        for part in re.split(r"\s*/\s*", str(value or ""))
+        if part.strip()
+    ]
+
+
+def _internet_embedded_artist_title(value):
+    parts = [
+        part.strip()
+        for part in re.split(r"\s+-\s+", str(value or ""), maxsplit=1)
+        if part.strip()
+    ]
+    if len(parts) != 2:
+        return (), ()
+    return (
+        tuple(_internet_aliases(parts[0])),
+        tuple(_internet_aliases(parts[1])),
+    )
+
+
 def _internet_title_matches(expected, actual):
     return _identity_matches(
         _internet_title(expected),
@@ -623,9 +645,28 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
         clean_query = " ".join(
             part for part in (clean_artist, clean_title) if part
         ).strip()
+
+        embedded_artists, embedded_titles = (
+            _internet_embedded_artist_title(clean_title)
+        )
+        alias_candidates = []
+        for title_alias in embedded_titles:
+            for artist_alias in embedded_artists:
+                alias_candidates.append(
+                    (
+                        f"{artist_alias} {title_alias}",
+                        title_alias,
+                        artist_alias,
+                    )
+                )
+            alias_candidates.append(
+                (title_alias, title_alias, "")
+            )
+
         search_candidates = (
             (query, title, artist),
             (clean_query, clean_title, clean_artist),
+            *alias_candidates,
             (clean_title, clean_title, ""),
             (filename_stem, file_title, file_artist),
             (title, title, ""),
