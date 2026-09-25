@@ -1365,6 +1365,50 @@ search YouTube / Artist Scent
 
 “ALL” means **all results exposed by yt-dlp's YouTube search extractor for that query**. MeowPlayer no longer imposes its old 12-result limit, but YouTube/yt-dlp may still define what the upstream search itself makes available.
 
+### Creator Nest — browse the artist/producer behind a result
+
+Internet Nest results now preserve YouTube's **channel identity** when yt-dlp exposes it. Highlight a result and press **`C`** to open that uploader's **Creator Nest** directly instead of performing another fuzzy text search.
+
+```text
+Internet Nest result
+        ↓
+      C Creator
+        ↓
+Creator Nest
+├── Singles / Uploads
+└── Playlists
+      ↓
+  choose playlist
+      ↓
+  playlist tracks
+```
+
+Inside a Creator Nest:
+
+- **Singles / Uploads** browses the creator channel's direct video/music uploads.
+- **Playlists** lists playlists exposed on that channel.
+- Press **Enter** on a playlist to browse its tracks.
+- Press **Enter** on an upload or playlist track to stream it.
+- Press **D** on an upload or playlist track to adopt it into the local library using the existing download pipeline.
+- Press **Esc** to go up one Creator Nest level; from the top level, **Esc** returns to the previous Internet Nest search.
+- Press **Q** at any point to return directly to the local Music Nest.
+
+MeowPlayer uses the result's actual `channel_url` / `channel_id` when available. This is deliberately different from Artist Scent: Artist Scent searches by name, while Creator Nest follows the concrete YouTube channel attached to a result.
+
+```text
+Artist Scent
+  "Porter Robinson"
+        ↓
+YouTube search biased toward that artist
+
+Creator Nest
+  selected result's channel_url
+        ↓
+that exact uploader/channel
+```
+
+YouTube does not expose a perfectly standardized “Singles” shelf through yt-dlp for every kind of channel, so MeowPlayer labels the first section **Singles / Uploads** and treats it as the creator's direct uploads rather than pretending every channel has identical YouTube Music structure. Labels, VEVO channels, Topic channels, ordinary creators, and artist channels can therefore use the same browsing machinery whenever yt-dlp exposes their channel pages.
+
 While an Internet Nest track is playing, **Songbook can search LRCLIB using the remote track's title, artist, and duration**. These lyrics are intentionally **session-only**: MeowPlayer may display synchronized or plain LRCLIB lyrics for the currently streaming track, but it does **not** write them to the persistent lyric cache.
 
 ```text
