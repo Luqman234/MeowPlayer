@@ -1376,18 +1376,18 @@ Internet Nest result
         ↓
 Creator Nest
 ├── Singles / Uploads
-└── Playlists
+└── Playlists / Releases
       ↓
-  choose playlist
+  choose release / playlist
       ↓
-  playlist tracks
+  tracks
 ```
 
 Inside a Creator Nest:
 
 - **Singles / Uploads** browses the creator channel's direct video/music uploads.
-- **Playlists** lists playlists exposed on that channel.
-- Press **Enter** on a playlist to browse its tracks.
+- **Playlists / Releases** first uses the creator channel's playlist/release tabs, then falls back to YouTube Music's Albums search when a Topic channel does not expose those shelves to yt-dlp.
+- Press **Enter** on a playlist or release to browse its tracks.
 - Press **Enter** on an upload or playlist track to stream it.
 - Press **D** on an upload or playlist track to adopt it into the local library using the existing download pipeline.
 - Press **Esc** to go up one Creator Nest level; from the top level, **Esc** returns to the previous Internet Nest search.
@@ -1409,7 +1409,21 @@ that exact uploader/channel
 
 YouTube does not expose a perfectly standardized “Singles” shelf through yt-dlp for every kind of channel, so MeowPlayer labels the first section **Singles / Uploads** and treats it as the creator's direct uploads rather than pretending every channel has identical YouTube Music structure. Labels, VEVO channels, Topic channels, ordinary creators, and artist channels can therefore use the same browsing machinery whenever yt-dlp exposes their channel pages.
 
-Creator Nest also understands that some channels — especially auto-generated **`- Topic`** channels — may not have a normal `/videos` tab at all. MeowPlayer first tries the explicit channel tab, then falls back to the channel root so yt-dlp can use the channel's uploads playlist. Playlist browsing similarly falls back from `/playlists` to `/releases` when the ordinary playlist tab is unavailable or empty.
+Creator Nest also understands that some channels — especially auto-generated **`- Topic`** channels — may not have a normal `/videos` tab at all. MeowPlayer first tries the explicit channel tab, then falls back to the channel root so yt-dlp can use the channel's uploads playlist.
+
+Topic-channel albums are a separate yt-dlp limitation: yt-dlp can browse uploads from a Topic channel but currently cannot reliably enumerate the albums/playlists visible on that channel's YouTube Music surface. Creator Nest therefore uses this fallback chain for **Playlists / Releases**:
+
+```text
+exact channel /playlists
+        ↓
+exact channel /releases
+        ↓
+YouTube Music search for that creator
+        ↓
+#albums section
+```
+
+The last step is deliberately artist-name based rather than channel-ID based because the hidden Topic album shelf is not currently exposed by yt-dlp. MeowPlayer strips a trailing `- Topic` suffix before that search. Release entries are also accepted when yt-dlp provides only a playlist URL, so `OLAK5uy_...` album links are not discarded just because their flat metadata is sparse.
 
 While an Internet Nest track is playing, **Songbook can search LRCLIB using the remote track's title, artist, and duration**. These lyrics are intentionally **session-only**: MeowPlayer may display synchronized or plain LRCLIB lyrics for the currently streaming track, but it does **not** write them to the persistent lyric cache.
 
