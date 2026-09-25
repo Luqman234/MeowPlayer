@@ -1,4 +1,6 @@
+import queue
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -8,6 +10,7 @@ from youtube_online import (
     YouTubeTrack,
     YouTubeUnavailable,
     normalize_youtube_search,
+    youtube_download_command,
     youtube_search_target,
 )
 
@@ -164,6 +167,136 @@ class YouTubeOnlineTests(unittest.TestCase):
 
         with self.assertRaises(YouTubeUnavailable):
             catalog.search("cat music")
+
+    def test_download_command_saves_opus_into_requested_library_folder(self):
+        track = YouTubeTrack(
+            video_id="adopt123",
+            title="Adopt Me",
+            artist="Internet Cat",
+            duration=180,
+            url="https://www.youtube.com/watch?v=adopt123",
+        )
+
+        command = youtube_download_command(
+            "/usr/bin/yt-dlp",
+            track,
+            Path("/music/Internet Nest"),
+            ffmpeg_executable="/usr/bin/ffmpeg",
+        )
+
+        self.assertEqual(command[0], "/usr/bin/yt-dlp")
+        self.assertIn("--no-playlist", command)
+        self.assertIn("--no-overwrites", command)
+        self.assertIn("--extract-audio", command)
+        self.assertIn("--embed-metadata", command)
+        self.assertIn("opus", command)
+        self.assertIn("/usr/bin/ffmpeg", command)
+        self.assertIn(
+            "/music/Internet Nest/%(title)s [%(id)s].%(ext)s",
+            command,
+        )
+        self.assertEqual(command[-1], track.url)
+
+    def test_internet_nest_download_targets_library_subfolder(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        track = YouTubeTrack(
+            video_id="adopt456",
+            title="Take Me Home",
+            artist="Internet Cat",
+            duration=181,
+            url="https://www.youtube.com/watch?v=adopt456",
+        )
+        player.youtube_results = [track]
+        player.youtube_selected = 0
+        player.youtube_download_session = None
+        player.youtube_download_track = None
+        player.youtube = SimpleNamespace(executable="/usr/bin/yt-dlp")
+        player.music_dir = Path("/music")
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        with mock.patch("meowplayer.YouTubeDownloadSession") as session:
+            self.assertTrue(player.download_selected_youtube_result())
+
+        session.assert_called_once_with(
+            "/usr/bin/yt-dlp",
+            track,
+            Path("/music/Internet Nest"),
+        )
+        self.assertIs(player.youtube_download_track, track)
+        self.assertIn("Downloading to library", statuses[-1][0])
+
+    def test_internet_nest_download_rejects_second_concurrent_adoption(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        track = YouTubeTrack(
+            video_id="busy123",
+            title="Already Going",
+            artist="Internet Cat",
+            duration=182,
+            url="https://www.youtube.com/watch?v=busy123",
+        )
+        player.youtube_results = [track]
+        player.youtube_selected = 0
+        player.youtube_download_track = track
+        player.youtube_download_session = object()
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        self.assertFalse(player.download_selected_youtube_result())
+        self.assertIn("already in progress", statuses[-1][0])
+
+    def test_completed_internet_nest_download_rescans_library(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        track = YouTubeTrack(
+            video_id="done123",
+            title="Home Now",
+            artist="Internet Cat",
+            duration=183,
+            url="https://www.youtube.com/watch?v=done123",
+        )
+        results = queue.SimpleQueue()
+        downloaded = Path("/music/Internet Nest/Home Now [done123].opus")
+        results.put(("done", downloaded))
+        session = SimpleNamespace(
+            results=results,
+            close=mock.Mock(),
+        )
+        player.youtube_download_session = session
+        player.youtube_download_track = track
+        player.rescan_library = mock.Mock()
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        self.assertTrue(player.process_youtube_download())
+
+        session.close.assert_called_once()
+        player.rescan_library.assert_called_once_with(
+            {"paths": (str(downloaded),)}
+        )
+        self.assertIsNone(player.youtube_download_session)
+        self.assertIsNone(player.youtube_download_track)
+        self.assertIn("Downloaded to library", statuses[-1][0])
+
+    def test_failed_internet_nest_download_clears_busy_state(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        results = queue.SimpleQueue()
+        results.put(("error", "ffmpeg is required"))
+        session = SimpleNamespace(
+            results=results,
+            close=mock.Mock(),
+        )
+        player.youtube_download_session = session
+        player.youtube_download_track = None
+        player.rescan_library = mock.Mock()
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        self.assertTrue(player.process_youtube_download())
+
+        session.close.assert_called_once()
+        player.rescan_library.assert_not_called()
+        self.assertIsNone(player.youtube_download_session)
+        self.assertIn("Download failed", statuses[-1][0])
 
     def test_mpv_command_explicitly_enables_ytdl_audio(self):
         command = build_mpv_command("/tmp/meow-youtube.sock")

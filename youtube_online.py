@@ -11,6 +11,7 @@ import time
 from collections import OrderedDict
 from concurrent.futures import CancelledError, Future
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 
@@ -47,6 +48,10 @@ class YouTubeUnavailable(RuntimeError):
 
 
 class YouTubeSearchError(RuntimeError):
+    pass
+
+
+class YouTubeDownloadError(RuntimeError):
     pass
 
 
@@ -624,4 +629,184 @@ class YouTubeSearchSession:
 
     def close(self):
         self.cancel.set()
+        self.thread.join(timeout=2.0)
+
+
+def youtube_download_command(
+    executable,
+    track,
+    destination,
+    *,
+    ffmpeg_executable=None,
+):
+    """Build a safe argv-only yt-dlp command for adopting one online track."""
+    destination = Path(destination).expanduser()
+    output_template = destination / "%(title)s [%(id)s].%(ext)s"
+    command = [
+        str(executable),
+        "--ignore-config",
+        "--no-playlist",
+        "--no-warnings",
+        "--no-progress",
+        "--no-overwrites",
+        "-f",
+        "bestaudio/best",
+        "--extract-audio",
+        "--audio-format",
+        "opus",
+        "--audio-quality",
+        "0",
+        "--embed-metadata",
+    ]
+    if ffmpeg_executable:
+        command.extend(
+            ["--ffmpeg-location", str(ffmpeg_executable)]
+        )
+    command.extend(
+        [
+            "--output",
+            str(output_template),
+            "--print",
+            "after_move:filepath",
+            track.url,
+        ]
+    )
+    return command
+
+
+class YouTubeDownloadSession:
+    """Download one selected Internet Nest track without blocking curses."""
+
+    def __init__(
+        self,
+        executable,
+        track,
+        destination,
+        *,
+        ffmpeg_executable=None,
+    ):
+        self.results = queue.SimpleQueue()
+        self.cancel = threading.Event()
+        self.track = track
+        self.destination = Path(destination).expanduser()
+        self.executable = executable
+        self.ffmpeg_executable = (
+            ffmpeg_executable
+            if ffmpeg_executable is not None
+            else shutil.which("ffmpeg")
+        )
+        self._process = None
+        self.thread = threading.Thread(
+            target=self._run,
+            name="yt-download",
+            daemon=True,
+        )
+        self.thread.start()
+
+    def _run(self):
+        process = None
+        try:
+            if not self.executable:
+                raise YouTubeDownloadError(
+                    "yt-dlp was not found on PATH."
+                )
+            if not self.ffmpeg_executable:
+                raise YouTubeDownloadError(
+                    "ffmpeg is required to save Internet Nest audio as Opus."
+                )
+
+            self.destination.mkdir(parents=True, exist_ok=True)
+            command = youtube_download_command(
+                self.executable,
+                self.track,
+                self.destination,
+                ffmpeg_executable=self.ffmpeg_executable,
+            )
+            LOGGER.info(
+                "Starting Internet Nest download video_id=%s destination=%s",
+                self.track.video_id,
+                self.destination,
+            )
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                env=network_subprocess_env(PYTHONUNBUFFERED="1"),
+            )
+            self._process = process
+
+            while process.poll() is None:
+                if self.cancel.wait(0.1):
+                    process.kill()
+                    process.communicate()
+                    return
+
+            stdout, _ = process.communicate()
+            if self.cancel.is_set():
+                return
+            if process.returncode != 0:
+                raise YouTubeDownloadError(
+                    "yt-dlp could not download this track."
+                )
+
+            paths = [
+                line.strip()
+                for line in str(stdout or "").splitlines()
+                if line.strip()
+            ]
+            if not paths:
+                raise YouTubeDownloadError(
+                    "yt-dlp finished without reporting a downloaded file."
+                )
+
+            downloaded = Path(paths[-1]).expanduser()
+            if not downloaded.is_absolute():
+                downloaded = self.destination / downloaded
+            downloaded = downloaded.resolve()
+
+            try:
+                downloaded.relative_to(self.destination.resolve())
+            except ValueError as exc:
+                raise YouTubeDownloadError(
+                    "yt-dlp reported a file outside the music library."
+                ) from exc
+
+            if not downloaded.is_file():
+                raise YouTubeDownloadError(
+                    "Downloaded audio file could not be found."
+                )
+
+            LOGGER.info(
+                "Internet Nest download complete video_id=%s path=%s",
+                self.track.video_id,
+                downloaded,
+            )
+            self.results.put(("done", downloaded))
+        except YouTubeDownloadError as exc:
+            LOGGER.warning(
+                "Internet Nest download failed video_id=%s reason=%s",
+                getattr(self.track, "video_id", ""),
+                exc,
+            )
+            self.results.put(("error", str(exc)))
+        except Exception:
+            LOGGER.exception(
+                "Unexpected Internet Nest download failure video_id=%s",
+                getattr(self.track, "video_id", ""),
+            )
+            self.results.put(
+                ("error", "Internet Nest download failed unexpectedly.")
+            )
+        finally:
+            self._process = None
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    def close(self):
+        self.cancel.set()
+        process = self._process
+        if process is not None and process.poll() is None:
+            process.kill()
         self.thread.join(timeout=2.0)
