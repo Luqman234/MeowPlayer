@@ -25,7 +25,7 @@ Music Nest / Songs — 842 meow(s)
 🐾 Space Song — Beach House · Depression Cherry · Dream Pop · ★★★★☆ · 05:20
 ```
 
-### The short version
+### The short version — before the cat turns this README into a thesis
 
 MeowPlayer started from a simple idea:
 
@@ -57,7 +57,7 @@ let the user pet the cat
 
 The result is still supposed to feel like a terminal music player: fast to launch, keyboard-driven, local-first, readable, hackable, and comfortable living next to `git`, `ssh`, and whatever other crimes are occurring in your shell.
 
-### The Cat Constitution
+### The Cat Constitution — six laws written in paw ink
 
 MeowPlayer tries to stay true to a few rules:
 
@@ -68,7 +68,7 @@ MeowPlayer tries to stay true to a few rules:
 - **Your audio files are not secretly rewritten.** Online metadata and downloaded lyrics live in MeowPlayer's own cache/catalog unless you create sidecar files yourself.
 - **Serious Mode remains a first-class citizen.** The application can remove most cat presentation without removing actual features.
 
-### What lives under the fur
+### What lives under the fur — an alarming amount of software
 
 | Area | What MeowPlayer actually uses |
 | --- | --- |
@@ -531,7 +531,7 @@ In short:
 
 ## What's new in 0.16.2 — The Cat Learned How Newlines Work
 
-The first real `--youtube --debug` session exposed two problems that were easy to miss without logs.
+The first real `--youtube --debug` session exposed two problems that were easy to miss without logs. The cat had, until this moment, apparently assumed one socket read contained exactly one polite JSON object. The socket disagreed.
 
 First, mpv JSON IPC is a **newline-delimited message stream**. A single socket read can contain an event and a command reply together. Older MeowPlayer code treated the whole read as exactly one JSON document, which could produce:
 
@@ -581,6 +581,8 @@ Online playback has explicit `resolving`, `streaming`, and `failed` states. A fa
 Regression tests cover multi-message IPC reads, asynchronous events before replies, request correlation, connection reuse, malformed-line recovery, duplicate YouTube playback requests, failed-stream retry, and resolving→streaming transitions.
 
 ## What's new in 0.16.1 — The Cat Finally Keeps Receipts
+
+The era of “it broke but the curses screen ate the evidence” is over.
 
 MeowPlayer now has a proper **file-based debug mode** designed specifically for a curses TUI, where dumping diagnostics into the terminal would otherwise turn the screen into ANSI soup.
 
@@ -661,6 +663,8 @@ the cat can no longer claim there were no witnesses
 
 ## What's new in 0.16.0 — The Cat Found the Internet Radio
 
+The cat discovered the Internet Nest. Supervision became necessary almost immediately.
+
 MeowPlayer can now opt into **experimental YouTube search and online audio playback** through the same mpv backend used for local music.
 
 Start it with:
@@ -717,7 +721,7 @@ Without `--youtube`, no search or resolver worker starts. Local playback, Replay
 
 This is an unofficial integration built around mpv + yt-dlp, not an official YouTube Music API client.
 
-### Measuring the internet cat
+### Measuring the internet cat — because vibes are not benchmarks
 
 With `--debug` or `--log-file PATH`, look for `YT_LATENCY`, `YT_PREFETCH`, `YT_PLAY`, and `IPC_STATS`. Durations use a monotonic clock and include the time from Enter, including any unresolved stream work. Logs identify cache/fresh/fallback paths and mpv startup events. The IPC reader observes frequently used playback properties; gapless path/playlist-position/count queries remain synchronous to preserve gapless mutation safety.
 
@@ -741,7 +745,7 @@ MeowPlayer does not set this option or modify your DNS configuration. Cold extra
 
 MeowPlayer's own performance logs omit direct URLs and header values. **mpv's verbose debug log can still contain signed stream URLs and HTTP headers**; review/redact both log files before sharing them.
 
-### Internet Nest controls
+### Internet Nest controls — keyboard commands for supervised hunting
 
 ```text
 Y          search YouTube / open Internet Nest
@@ -989,7 +993,7 @@ title-only search
 
 After synchronized lyrics arrive, Songbook immediately switches to the downloaded document and reports the LRCLIB source. If the lookup genuinely finds nothing, the UI shows the exact query that was tried instead of the generic `No lyrics found` message.
 
-## What's new in 0.14.0 — The Cat Has Opinions
+## What's new in 0.14.0 — The Cat Has Opinions and a Five-Star Scale
 
 0.14.0 adds a second layer of personal library data beyond Pawmarks: persistent **0–5 star ratings**, plus a wider Songbook layout that can show lyrics and album art together.
 
@@ -1089,7 +1093,7 @@ At high volume, `Now Purring` may become **Now YOWLING**. At very low volume, th
 
 Serious Mode suppresses all of this nonsense.
 
-## What's new in 0.13.0
+## What's new in 0.13.0 — The Cat Learned to Hear Files Move
 
 MeowPlayer 0.13.0 turns the library from something that is mostly scanned at startup into something that can react while the player is running.
 
@@ -1114,15 +1118,15 @@ Rules support boolean logic, parentheses, text matching, numeric comparisons, so
 
 ### Live library watching
 
-MeowPlayer now watches the music root recursively. Add, delete, rename, move, or retag music and the Cat Catalog refreshes automatically after a short debounce.
+MeowPlayer now watches the music root recursively. The cat has obtained inotify and is acting like this makes it omniscient. Add, delete, rename, move, or retag music and the Cat Catalog refreshes automatically after a short debounce.
 
 Library state is remapped by **file path**, not by old numeric index, so queue entries, Pounce Bag contents, playback history, Smart Mix sequences, and the current track do not silently turn into different songs after a rescan.
 
-## Highlights — what the cat actually does
+## Highlights — what the cat actually does when nobody is watching
 
 This section is intentionally long because calling MeowPlayer a "tiny terminal wrapper around mpv" has become increasingly difficult to defend in court.
 
-### Music Nest / library
+### Music Nest / library — the cat's filing cabinet
 
 - Recursive local-library scanning for MP3, FLAC, OGG, Opus, WAV, M4A, AAC, and WMA
 - Persistent SQLite **Cat Catalog** with incremental metadata caching
@@ -1143,7 +1147,7 @@ This section is intentionally long because calling MeowPlayer a "tiny terminal w
 - Persistent provenance: source, MusicBrainz ID, query, status, and fetch time
 - Different cache TTLs for success, genuine miss, and transient failure
 
-### Playback
+### Playback — the part that must remain serious
 
 - Real queueing through **The Catnip Stash**
 - `.m3u` / `.m3u8` save + load
@@ -1155,7 +1159,7 @@ This section is intentionally long because calling MeowPlayer a "tiny terminal w
 - Verification/recovery around awkward mpv handoff states
 - Native **ReplayGain** through mpv
 
-### Personal library memory
+### Personal library memory — the cat keeps receipts here too
 
 - Persistent **Pawmarks** favorites
 - Independent persistent **0–5 star ratings**
@@ -1169,7 +1173,7 @@ This section is intentionally long because calling MeowPlayer a "tiny terminal w
 - Rating-aware rules such as `rating >= 4`
 - No Python `eval()` hiding under the rug
 
-### Songbook / lyrics
+### Songbook / lyrics — unauthorized karaoke department
 
 - Same-name `.lrc` and `.txt` sidecars
 - Embedded synchronized/plain lyrics
@@ -1179,7 +1183,7 @@ This section is intentionally long because calling MeowPlayer a "tiny terminal w
 - Live timestamp following and manual scroll
 - Adaptive **lyrics + album-art split view** on wide Kitty terminals
 
-### Terminal / desktop integration
+### Terminal / desktop integration — the cat escapes the TUI, slightly
 
 - Kitty album art from embedded or folder artwork
 - Pillow-based PNG artwork cache
@@ -1188,7 +1192,7 @@ This section is intentionally long because calling MeowPlayer a "tiny terminal w
 - `playerctl`, media keys, MPRIS metadata, and `mpris:artUrl`
 - Native Termux defaults and narrower phone-friendly behavior
 
-### Necessary feline infrastructure
+### Necessary feline infrastructure — absolutely essential, do not audit
 
 - Reactive moods: Waiting, Purring, Loafing, Zoomies, Tail-Chasing, Guarding Catnip, Whispering, Screaming
 - Volume can transform `Now Purring` into **Now YOWLING**
