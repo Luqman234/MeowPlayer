@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.16.4** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.17.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.4 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.17.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,159 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.17.0 — The Cat Learned What an Artist Is
+
+The Internet Nest can finally answer a slightly more sophisticated request than:
+
+```text
+"find song"
+```
+
+You can now tell the cat:
+
+```text
+"find this artist"
+```
+
+and, against all expectations, it understands the assignment.
+
+### Artist Scent search
+
+Inside the Internet Nest, press `A`:
+
+```text
+A
+↓
+Internet Nest artist scent: Porter Robinson
+↓
+yt-dlp search: "Porter Robinson" music
+↓
+songs / official uploads / useful label uploads
+```
+
+The normal search box also understands an `artist:` prefix:
+
+```text
+artist:Porter Robinson
+artist:Beach House
+artist:YOASOBI
+```
+
+So the two search personalities are now:
+
+```text
+/ or Y
+   ↓
+general YouTube scent
+   ↓
+song titles / mixed queries / whatever the human typed
+
+A or artist:Name
+   ↓
+artist scent
+   ↓
+results biased toward that artist's music
+```
+
+### Why not just filter by channel?
+
+Because YouTube metadata enjoys chaos almost as much as the cat does.
+
+A legitimate track may be uploaded by:
+
+```text
+the artist
+the artist's "- Topic" channel
+VEVO
+a record label
+a distributor
+some other officially-sanctioned internet cupboard
+```
+
+So 0.17.0 deliberately does **not** require the uploader/channel name to exactly equal the artist.
+
+Instead, artist mode builds an artist-biased search target such as:
+
+```text
+ytsearch12:"Porter Robinson" music
+```
+
+That keeps useful official and label uploads in play instead of proudly throwing away valid songs because the channel wore the wrong nametag.
+
+### Better artist labels too
+
+Search result metadata now asks yt-dlp for:
+
+```text
+artist
+artists
+creator
+uploader
+channel
+```
+
+MeowPlayer prefers actual artist/creator information when it exists and falls back to uploader/channel metadata when YouTube provides nothing better.
+
+In other words:
+
+```text
+artist metadata exists?
+        │
+        ├── yes → use it
+        │
+        └── no
+             ↓
+      uploader / channel
+             ↓
+      "fine, close enough"
+```
+
+### The Internet Nest tells you what kind of hunt is active
+
+Normal search:
+
+```text
+Internet Nest — scent: shelter · 12 meow(s)
+```
+
+Artist search:
+
+```text
+Internet Nest — artist scent: Porter Robinson · 12 meow(s)
+```
+
+The footer also advertises the new command:
+
+```text
+/  normal hunt
+A  artist scent
+Y  YouTube search
+```
+
+All the existing Internet Nest machinery stays intact: background JSON-line search, first-result/highlight prefetch, 150 ms selection debounce, one active resolver, one replaceable queued request, direct-stream caching, scoped DNS workaround, fallback behavior, and ephemeral online results.
+
+Nothing from artist search gets inserted into the Cat Catalog, downloaded as a local song, or promoted to citizenship in your filesystem.
+
+### Why 0.17.0?
+
+This is the first 0.17 release because Internet Nest is no longer merely gaining fixes around online playback. It is gaining a new **discovery mode** with its own user-facing search behavior.
+
+The cat has progressed from:
+
+```text
+"bring me this song"
+```
+
+to:
+
+```text
+"bring me the musical output of this human"
+```
+
+which is, technically, product evolution.
+
+> **MeowPlayer 0.17.0: the Internet Nest now follows artist scents instead of only chasing individual mice.**
 
 ## What's new in 0.16.4 — The Router Ate a DNS Reply and the Cat Took It Personally
 
@@ -684,34 +837,6 @@ query: porter robinson shelter
       Shelter (Official Video) — Porter Robinson · 3:50 · YouTube
       Something Comforting — Porter Robinson · 4:41 · YouTube
 ```
-
-### Artist search — follow the human scent instead
-
-Inside the Internet Nest, press `A` to search by **artist name**.
-
-```text
-A
-↓
-Internet Nest artist scent: Porter Robinson
-↓
-yt-dlp search: "Porter Robinson" music
-↓
-songs / official uploads / useful label uploads
-```
-
-Artist search is deliberately **artist-first, not uploader-only**. YouTube uploads are messy: an official track may come from the artist, a `- Topic` channel, VEVO, or a record label. MeowPlayer therefore biases the YouTube query toward the artist name instead of hard-filtering everything by channel and accidentally throwing away legitimate uploads.
-
-The normal `Y` / `/` search prompt also accepts this shortcut:
-
-```text
-artist:Porter Robinson
-artist:Beach House
-artist:YOASOBI
-```
-
-The current search mode is shown in the Internet Nest header as either a normal query/scent or an **artist / artist scent**.
-
-The artist label shown beside each result now keeps artist/creator metadata from yt-dlp when available, falling back through uploader/channel information the same way as before.
 
 The implementation deliberately keeps the local and online worlds separate:
 
@@ -2625,7 +2750,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.4 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.17.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -2756,8 +2881,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.16.4-py3-none-any.whl
-└── meowplayer_terminal-0.16.4.tar.gz
+├── meowplayer_terminal-0.17.0-py3-none-any.whl
+└── meowplayer_terminal-0.17.0.tar.gz
 ```
 
 The installed CLI is still:
