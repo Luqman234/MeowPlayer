@@ -1,0 +1,50 @@
+{
+  "runs": 1,
+  "playback_evidence": "file-loaded + playback-restart + nonzero time-pos",
+  "audio_output": "mpv default (not an acoustic measurement)",
+  "errors": [],
+  "search_first_result_ms": 10017.416093000065,
+  "search_complete_ms": 10107.502589002252,
+  "cold_enter_to_playback": {
+    "median_ms": 13113.232988998789,
+    "p95_ms": 13113.232988998789,
+    "samples_ms": [
+      13113.232988998789
+    ]
+  },
+  "warm_enter_to_playback": {
+    "median_ms": 5327.288636999583,
+    "p95_ms": 5327.288636999583,
+    "samples_ms": [
+      5327.288636999583
+    ]
+  },
+  "resolve": {
+    "median_ms": 7123.312707000878,
+    "p95_ms": 7123.312707000878,
+    "samples_ms": [
+      7123.312707000878
+    ]
+  },
+  "cache_lookup": {
+    "median_ms": 0.06036700142431073,
+    "p95_ms": 0.06036700142431073,
+    "samples_ms": [
+      0.06036700142431073
+    ]
+  },
+  "mpv_direct_open": {
+    "median_ms": 5325.994997001544,
+    "p95_ms": 5325.994997001544,
+    "samples_ms": [
+      5325.994997001544
+    ]
+  },
+  "ipc": {
+    "commands": 13,
+    "events": 156,
+    "duration": 25.575350003000494,
+    "commands_per_second": 0.5083019391122641,
+    "events_per_second": 6.099623269347169
+  }
+}

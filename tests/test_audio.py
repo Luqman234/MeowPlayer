@@ -60,28 +60,6 @@ class FakeMPV:
         self.stop_calls += 1
 
 
-class FakeIPCSocket:
-    def __init__(self, chunks):
-        self.chunks = list(chunks)
-        self.sent = []
-        self.timeouts = []
-        self.closed = False
-
-    def settimeout(self, value):
-        self.timeouts.append(value)
-
-    def sendall(self, payload):
-        self.sent.append(payload)
-
-    def recv(self, size):
-        if not self.chunks:
-            return b""
-        return self.chunks.pop(0)
-
-    def close(self):
-        self.closed = True
-
-
 class AudioEngineTests(unittest.TestCase):
     def make_player(self, count=4, current=0):
         player = MeowPlayer.__new__(MeowPlayer)
@@ -370,79 +348,71 @@ class AudioEngineTests(unittest.TestCase):
         self.assertNotIn("visualizer_enabled", parameters)
         self.assertNotIn("filesystem_watch_enabled", parameters)
 
-    def test_mpv_ipc_frames_event_and_reply_from_same_recv(self):
+    def ipc_controller(self, respond):
+        import socket
+        client, server = socket.socketpair()
         controller = MPVController.__new__(MPVController)
-        controller.socket_path = "/tmp/fake-meow.sock"
-        controller._ipc_buffer = b""
-        controller._ipc_lock = threading.Lock()
-        controller._ipc_request_id = 0
-        controller._ipc_timeout = 0.75
-        controller._ipc_socket = FakeIPCSocket([
-            (
-                b'{"event":"start-file"}\n'
-                b'{"data":"song.flac","error":"success","request_id":1}\n'
-            )
-        ])
+        controller._init_ipc()
+        controller._ipc_socket = client
+        controller._reader = threading.Thread(target=controller._read_ipc, args=(client,))
+        controller._reader.start()
 
-        with mock.patch("meowplayer.os.path.exists", return_value=True):
-            response = controller.command("get_property", "path")
+        def serve():
+            with server, server.makefile("rb") as incoming:
+                for line in incoming:
+                    request = json.loads(line)
+                    server.sendall(respond(request))
+        worker = threading.Thread(target=serve)
+        worker.start()
 
+        def close():
+            controller._closing = True
+            controller._close_ipc()
+            controller._reader.join(1)
+            worker.join(1)
+            self.assertFalse(controller._reader.is_alive())
+            self.assertFalse(worker.is_alive())
+        self.addCleanup(close)
+        return controller
+
+    def test_mpv_ipc_frames_event_and_reply_from_same_recv(self):
+        controller = self.ipc_controller(lambda r: (
+            b'{"event":"end-file","reason":"error"}\n'
+            b'{"event":"start-file"}\n' + json.dumps({
+                "data": "song.flac", "error": "success", "request_id": r["request_id"]
+            }).encode() + b"\n"))
+        response = controller.command("get_property", "path")
         self.assertEqual(response["data"], "song.flac")
-        self.assertEqual(response["request_id"], 1)
-        request = json.loads(
-            controller._ipc_socket.sent[0].decode("utf-8")
-        )
-        self.assertEqual(request["request_id"], 1)
-        self.assertEqual(request["command"], ["get_property", "path"])
+        self.assertIn("start-file", controller.playback_events)
+        self.assertNotIn("end-file", controller.playback_events)
+        self.assertNotIn("end-reason", controller.playback_events)
 
     def test_mpv_ipc_reuses_connection_and_matches_sequential_requests(self):
-        controller = MPVController.__new__(MPVController)
-        controller.socket_path = "/tmp/fake-meow.sock"
-        controller._ipc_buffer = b""
-        controller._ipc_lock = threading.Lock()
-        controller._ipc_request_id = 0
-        controller._ipc_timeout = 0.75
-        fake_socket = FakeIPCSocket([
-            b'{"data":70,"error":"success","request_id":1}\n',
+        controller = self.ipc_controller(lambda r: (
             b'{"event":"property-change","name":"pause","data":false}\n'
-            b'{"data":false,"error":"success","request_id":2}\n',
-        ])
-        controller._ipc_socket = fake_socket
-
-        with mock.patch("meowplayer.os.path.exists", return_value=True):
-            volume = controller.command("get_property", "volume")
-            paused = controller.command("get_property", "pause")
-
-        self.assertEqual(volume["data"], 70)
-        self.assertFalse(paused["data"])
-        self.assertIs(controller._ipc_socket, fake_socket)
-        self.assertEqual(len(fake_socket.sent), 2)
-        self.assertEqual(
-            [
-                json.loads(payload.decode("utf-8"))["request_id"]
-                for payload in fake_socket.sent
-            ],
-            [1, 2],
-        )
+            + json.dumps({"data": 70, "error": "success", "request_id": r["request_id"]}).encode()
+            + b"\n"))
+        sock = controller._ipc_socket
+        self.assertEqual(controller.command("get_property", "volume")["data"], 70)
+        self.assertFalse(controller.get_property("pause"))
+        self.assertEqual(controller.command("get_property", "volume")["request_id"], 2)
+        self.assertIs(sock, controller._ipc_socket)
+        self.assertEqual(controller._commands, 2)
 
     def test_mpv_ipc_skips_malformed_line_without_poisoning_reply(self):
+        controller = self.ipc_controller(lambda r: b'not-json\n' + json.dumps({
+            "error": "success", "request_id": r["request_id"]}).encode() + b"\n")
+        self.assertEqual(controller.command("stop")["error"], "success")
+
+    def test_gapless_path_confirmation_reads_fresh_state(self):
         controller = MPVController.__new__(MPVController)
-        controller.socket_path = "/tmp/fake-meow.sock"
-        controller._ipc_buffer = b""
-        controller._ipc_lock = threading.Lock()
-        controller._ipc_request_id = 0
-        controller._ipc_timeout = 0.75
-        controller._ipc_socket = FakeIPCSocket([
-            (
-                b'not-json\n'
-                b'{"error":"success","request_id":1}\n'
-            )
-        ])
-
-        with mock.patch("meowplayer.os.path.exists", return_value=True):
-            response = controller.command("stop")
-
-        self.assertEqual(response["error"], "success")
+        controller._init_ipc()
+        controller._properties["path"] = "/music/previous.flac"
+        with mock.patch.object(controller, "command", return_value={
+            "error": "success", "data": "/music/current.flac"
+        }) as command:
+            self.assertEqual(controller.current_path(), "/music/current.flac")
+            command.assert_called_once_with("get_property", "path")
 
     def test_advance_playlist_targets_exact_next_index(self):
         controller = MPVController.__new__(MPVController)

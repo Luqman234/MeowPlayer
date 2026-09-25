@@ -238,13 +238,13 @@ Cat Catalog / tags / lyrics / gapless queue
     ↓
 mpv
 
-YouTube search
+async YouTube search (JSON lines)
     ↓
-yt-dlp metadata
+first result / highlighted result
     ↓
-YouTube watch URL
-    ↓
-mpv ytdl hook + yt-dlp
+one background yt-dlp resolver → short-lived URL + header cache
+    ↓ Enter
+mpv direct stream (per-file headers, ytdl disabled)
     ↓
 audio stream
 ```
@@ -255,9 +255,39 @@ The online track still participates in ordinary playback controls such as pause,
 
 This feature is intentionally **opt-in and experimental**. It requires a working `yt-dlp` executable on `PATH`, and YouTube-side changes can temporarily break extraction until `yt-dlp` catches up. Local playback remains completely independent.
 
-MeowPlayer does not deliberately download the selected track into your music library. The selected URL is handed to mpv, whose ytdl hook asks `yt-dlp` to resolve a playable stream.
+MeowPlayer never saves online audio files or adds remote tracks to Cat Catalog. The cat now stalks the stream before you press Enter: the first search result is prefetched immediately, and selection changes are debounced for 150 ms. Search and resolution run in background workers; you can navigate results as they arrive.
+
+One resolver runs at a time, with at most one queued selection. Enter shares any existing resolve instead of starting another process. Successful URLs and their required HTTP headers live in a 16-entry memory-only LRU for at most three minutes (less when a signed URL expires sooner). A cache hit loads the direct URL into mpv without another yt-dlp extraction. Headers apply only to that file.
+
+If resolution fails, mpv's watch-URL ytdl hook remains the fallback. A rejected direct stream invalidates its cache entry, gets one fresh resolve, then falls back if necessary. Repeated Enter while resolving/loading remains ignored. Playback is only reported as streaming after mpv reports file-loaded, playback-restart, and a nonzero playback position.
+
+Without `--youtube`, no search or resolver worker starts. Local playback, ReplayGain, MPRIS, lyrics, Pawmarks, and Bad Larry keep their existing jobs.
 
 This is an unofficial integration built around mpv + yt-dlp, not an official YouTube Music API client.
+
+### Measuring the internet cat
+
+With `--debug` or `--log-file PATH`, look for `YT_LATENCY`, `YT_PREFETCH`, `YT_PLAY`, and `IPC_STATS`. Durations use a monotonic clock and include the time from Enter, including any unresolved stream work. Logs identify cache/fresh/fallback paths and mpv startup events. The IPC reader observes frequently used playback properties; gapless path/playlist-position/count queries remain synchronous to preserve gapless mutation safety.
+
+The developer benchmark uses actual mpv playback events and advancing time-pos, not merely a successful `loadfile` reply:
+
+```bash
+python tools/benchmark_youtube_startup.py 'https://www.youtube.com/watch?v=...' --runs 5 --json
+python tools/benchmark_youtube_startup.py --query 'On My Way' --runs 5 --json
+python tools/benchmark_youtube_startup.py 'https://www.youtube.com/watch?v=...' --candidates --runs 3
+```
+
+This opt-in tool uses the network and plays audio through your configured mpv output. It changes no library data. Normal CI uses fake extractors and a loopback HTTP audio fixture, never live YouTube.
+
+The target is **≤2 seconds from Enter on a prefetched result**, not a promise about YouTube or your network. See [measured results and methodology](docs/youtube-startup-performance.md). Development measurements uncovered intermittent five-second DNS stalls before mpv connected to the media host. On affected **glibc/Linux** systems only, a process-local comparison can help diagnose that issue:
+
+```bash
+RES_OPTIONS=single-request-reopen python tools/benchmark_youtube_startup.py 'https://www.youtube.com/watch?v=...' --runs 5 --json
+```
+
+MeowPlayer does not set this option or modify your DNS configuration. Cold extraction, DNS, and remote media opening remain external bottlenecks. `time-pos` confirms playback at mpv's output, not acoustic arrival at a speaker.
+
+MeowPlayer's own performance logs omit direct URLs and header values. **mpv's verbose debug log can still contain signed stream URLs and HTTP headers**; review/redact both log files before sharing them.
 
 ### Internet Nest controls
 

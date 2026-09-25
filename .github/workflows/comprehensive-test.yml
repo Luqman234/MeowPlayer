@@ -6,6 +6,7 @@ on:
     paths:
       - "*.py"
       - "tests/**"
+      - "tools/**"
       - "examples/**"
       - "pyproject.toml"
       - "requirements.txt"
@@ -15,6 +16,7 @@ on:
     paths:
       - "*.py"
       - "tests/**"
+      - "tools/**"
       - "examples/**"
       - "pyproject.toml"
       - "requirements.txt"
@@ -600,6 +602,10 @@ jobs:
           XDG_DATA_HOME: ${{ runner.temp }}/integration-data
           XDG_CACHE_HOME: ${{ runner.temp }}/integration-cache
         run: |
+          # This step overrides XDG_CONFIG_HOME, so ~/.config/mpv/mpv.conf
+          # from the earlier headless setup is not the active configuration.
+          mkdir -p "$XDG_CONFIG_HOME/mpv"
+          printf '%s\n' 'ao=null' 'video=no' > "$XDG_CONFIG_HOME/mpv/mpv.conf"
           python - <<'PY'
           import time
           from pathlib import Path
@@ -713,6 +719,8 @@ jobs:
               )
 
           try:
+              assert player.stream_resolver is None
+              assert player.youtube_search_session is None
               assert len(player.songs) == 2, player.songs
               assert len(player.metadata) == 2
 
@@ -754,6 +762,11 @@ jobs:
           finally:
               player.shutdown()
           PY
+
+      - name: Exercise direct HTTP streams and observed mpv properties
+        env:
+          MEOW_REAL_MPV: "1"
+        run: python -m unittest discover -s tests -p test_mpv_http.py -v
 
       - name: Exercise real Watchdog/inotify event delivery
         run: |
