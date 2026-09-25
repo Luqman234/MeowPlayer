@@ -1160,6 +1160,22 @@ meowplayer --youtube
 
 Then press `Y` from the TUI to open the **Internet Nest**. Type a song/title search, choose a result with the arrow keys, and press `Enter` to stream it.
 
+Internet Nest searches are no longer capped at 12 results. Both ordinary title searches and **Artist Scent** searches use yt-dlp's all-results search target and stream results into the TUI as they arrive. The list remains scrollable while the search is still running.
+
+```text
+search YouTube / Artist Scent
+            ↓
+        ytsearchall
+            ↓
+   result 1 arrives → visible immediately
+   result 2 arrives → appended
+   result 3 arrives → appended
+            ⋮
+   every result exposed by yt-dlp
+```
+
+“ALL” means **all results exposed by yt-dlp's YouTube search extractor for that query**. MeowPlayer no longer imposes its old 12-result limit, but YouTube/yt-dlp may still define what the upstream search itself makes available.
+
 While an Internet Nest track is playing, **Songbook can search LRCLIB using the remote track's title, artist, and duration**. These lyrics are intentionally **session-only**: MeowPlayer may display synchronized or plain LRCLIB lyrics for the currently streaming track, but it does **not** write them to the persistent lyric cache.
 
 ```text
