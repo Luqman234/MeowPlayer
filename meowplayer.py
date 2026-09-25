@@ -5542,6 +5542,23 @@ def parse_args(argv=None):
             "through yt-dlp + mpv"
         )
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help=(
+            "enable rotating MeowPlayer debug logs and a separate verbose "
+            "mpv log under the XDG state directory"
+        )
+    )
+    parser.add_argument(
+        "--log-file",
+        metavar="PATH",
+        default=None,
+        help=(
+            "write MeowPlayer debug logs to PATH; implies --debug "
+            "(mpv uses a sibling .mpv log)"
+        )
+    )
 
     return parser.parse_args(argv)
 
@@ -5549,7 +5566,58 @@ def parse_args(argv=None):
 def main():
     args = parse_args()
 
+    try:
+        debug_log_path = configure_debug_logging(
+            enabled=args.debug,
+            log_file=args.log_file,
+        )
+    except OSError as exc:
+        print(
+            f"Could not enable MeowPlayer debug logging: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    mpv_log_path = (
+        mpv_debug_log_path(debug_log_path)
+        if debug_log_path is not None
+        else None
+    )
+    if mpv_log_path is not None:
+        try:
+            mpv_log_path.parent.mkdir(parents=True, exist_ok=True)
+            mpv_log_path.unlink(missing_ok=True)
+        except OSError as exc:
+            LOGGER.warning("Could not prepare mpv debug log: %s", exc)
+            mpv_log_path = None
+
+    LOGGER.info("MeowPlayer %s starting", __version__)
+    LOGGER.debug(
+        "runtime python=%s platform=%s cwd=%s",
+        sys.version.replace("\n", " "),
+        sys.platform,
+        Path.cwd(),
+    )
+    LOGGER.debug(
+        "launch options music_dir=%r youtube=%s serious=%s maximum_meow=%s "
+        "bad_bad=%s very_bad=%s dangerous=%s gapless=%r replaygain=%r",
+        args.music_dir,
+        args.youtube,
+        args.serious_mode,
+        args.maximum_meow,
+        args.bad_bad_cat,
+        args.very_bad_cat,
+        args.dangerous_cat,
+        args.gapless_mode,
+        args.replaygain,
+    )
+    if debug_log_path is not None:
+        LOGGER.info("MeowPlayer debug log: %s", debug_log_path)
+        LOGGER.info("mpv debug log: %s", mpv_log_path)
+
     if args.dangerous_cat and not confirm_dangerous_cat():
+        LOGGER.info("Dangerous Cat confirmation cancelled")
+        shutdown_debug_logging()
         return
 
     if args.dangerous_cat:
@@ -5672,13 +5740,21 @@ def main():
             filesystem_watch_enabled=filesystem_watch_enabled,
             cat_chaos_mode=cat_chaos_mode,
             youtube_enabled=args.youtube,
+            debug_log_path=debug_log_path,
+            mpv_log_path=mpv_log_path,
         )
     except FileNotFoundError:
+        LOGGER.exception("MPV executable was not found during player startup")
         print(
             "MPV was not found.\n"
             + _platform_install_hint()
         )
+        shutdown_debug_logging()
         sys.exit(1)
+    except Exception:
+        LOGGER.exception("MeowPlayer initialization failed")
+        shutdown_debug_logging()
+        raise
 
     if not player.songs and not player.youtube.available:
         message = f"No supported music files found in:\n{music_dir}"
@@ -5692,6 +5768,7 @@ def main():
             )
         print(message)
         player.shutdown()
+        shutdown_debug_logging()
         sys.exit(0)
 
     if not player.songs and player.youtube.available:
@@ -5702,8 +5779,15 @@ def main():
 
     try:
         curses.wrapper(player.run)
+    except Exception:
+        LOGGER.exception("Unhandled exception escaped the curses TUI")
+        raise
     finally:
-        player.shutdown()
+        try:
+            player.shutdown()
+        finally:
+            LOGGER.info("MeowPlayer %s exiting", __version__)
+            shutdown_debug_logging()
 
 
 if __name__ == "__main__":
