@@ -107,6 +107,8 @@ The Settings Nest edits the same persistent XDG config used by the rest of MeowP
 
 0.17.1 also fixes the clean-install packaging failure where `meowplayer.py` imported `settings_nest` but the wheel did not contain `settings_nest.py`. The module is now explicitly included in the setuptools `py-modules` list, so wheel/sdist smoke installs can actually find the nest they were promised.
 
+The Internet Nest also now uses a **🐾 paw marker for the actively streaming online track in cat mode** instead of the generic 🌐 internet globe. Serious Mode keeps the conventional `▶` marker, while `>^.^<` remains the ordinary selection cursor for a highlighted result that is not currently playing.
+
 In short:
 
 ```text
@@ -1108,6 +1110,14 @@ query: porter robinson shelter
       Shelter (Official Video) — Porter Robinson · 3:50 · YouTube
       Something Comforting — Porter Robinson · 4:41 · YouTube
 ```
+
+Once an online result is actually streaming, cat mode marks that active row with a paw:
+
+```text
+🐾 Shelter — Porter Robinson & Madeon · 3:38 · YouTube
+```
+
+`>^.^<` is still the selection cursor for a highlighted result; `🐾` means **this is the Internet Nest track currently playing**. Serious Mode uses `▶` instead.
 
 The implementation deliberately keeps the local and online worlds separate:
 
