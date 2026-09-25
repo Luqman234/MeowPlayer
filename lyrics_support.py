@@ -430,18 +430,43 @@ def _internet_artist_parts(value):
     }
 
 
+_INTERNET_ALIAS_SPLIT = re.compile(r"\s*(?:/|\||｜)\s*")
+_INTERNET_ARTIST_TITLE_SPLIT = re.compile(r"\s+(?:-|–|—)\s+")
+_INTERNET_EXTRA_ARTIST_SPLIT = re.compile(
+    r"\s*(?:\band\b|\bwith\b|\+|×|・)\s*",
+    re.IGNORECASE,
+)
+
+
+def _dedupe_internet_values(values, limit=8):
+    result = []
+    seen = set()
+    for value in values:
+        text = " ".join(str(value or "").split()).strip(" -–—|/")
+        key = _normalized_identity(text)
+        if not text or not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return tuple(result)
+
+
 def _internet_aliases(value):
-    return [
-        part.strip()
-        for part in re.split(r"\s*/\s*", str(value or ""))
-        if part.strip()
-    ]
+    return _dedupe_internet_values(
+        _INTERNET_ALIAS_SPLIT.split(str(value or "")),
+        limit=6,
+    )
 
 
 def _internet_embedded_artist_title(value):
     parts = [
         part.strip()
-        for part in re.split(r"\s+-\s+", str(value or ""), maxsplit=1)
+        for part in _INTERNET_ARTIST_TITLE_SPLIT.split(
+            str(value or ""),
+            maxsplit=1,
+        )
         if part.strip()
     ]
     if len(parts) != 2:
@@ -452,10 +477,102 @@ def _internet_embedded_artist_title(value):
     )
 
 
+def _internet_title_variants(value):
+    cleaned = _internet_title(value)
+    if not cleaned:
+        return ()
+
+    values = [cleaned]
+    _embedded_artists, embedded_titles = (
+        _internet_embedded_artist_title(cleaned)
+    )
+    values.extend(embedded_titles)
+
+    for candidate in tuple(values):
+        values.extend(_internet_aliases(candidate))
+
+    return _dedupe_internet_values(values, limit=8)
+
+
+def _internet_artist_variants(value):
+    cleaned = _internet_artist(value)
+    if not cleaned:
+        return ()
+
+    values = [cleaned]
+    values.extend(_internet_aliases(cleaned))
+
+    for candidate in tuple(values):
+        values.extend(_INTERNET_ARTIST_SPLIT.split(candidate))
+        values.extend(_INTERNET_EXTRA_ARTIST_SPLIT.split(candidate))
+
+    return _dedupe_internet_values(values, limit=8)
+
+
+def _internet_search_candidates(title, artist):
+    clean_title = _internet_title(title)
+    clean_artist = _internet_artist(artist)
+
+    title_variants = list(_internet_title_variants(clean_title))
+    artist_variants = list(_internet_artist_variants(clean_artist))
+
+    embedded_artists, embedded_titles = (
+        _internet_embedded_artist_title(clean_title)
+    )
+    for value in embedded_artists:
+        for variant in _internet_artist_variants(value):
+            if variant not in artist_variants:
+                artist_variants.append(variant)
+    for value in embedded_titles:
+        for variant in _internet_title_variants(value):
+            if variant not in title_variants:
+                title_variants.append(variant)
+
+    candidates = []
+
+    def add(query, expected_title, expected_artist=""):
+        normalized = " ".join(str(query or "").split()).strip()
+        if normalized:
+            candidates.append(
+                (normalized, expected_title, expected_artist)
+            )
+
+    if clean_title and clean_artist:
+        add(
+            f"{clean_artist} {clean_title}",
+            clean_title,
+            clean_artist,
+        )
+
+    preferred_artists = artist_variants[:2]
+    for title_variant in title_variants[:6]:
+        for artist_variant in preferred_artists:
+            add(
+                f"{artist_variant} {title_variant}",
+                title_variant,
+                artist_variant,
+            )
+        add(title_variant, title_variant, "")
+
+    return tuple(candidates[:12])
+
+
 def _internet_title_matches(expected, actual):
-    return _identity_matches(
-        _internet_title(expected),
-        _internet_title(actual),
+    expected_key = _normalized_identity(_internet_title(expected))
+    actual_key = _normalized_identity(_internet_title(actual))
+    if not expected_key or not actual_key:
+        return False
+    if expected_key == actual_key:
+        return True
+
+    shorter, longer = sorted(
+        (expected_key, actual_key),
+        key=len,
+    )
+    return (
+        len(shorter) >= 8
+        and len(shorter) / len(longer) >= 0.65
+        and shorter in longer
     )
 
 
@@ -640,34 +757,9 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
     file_artist, file_title = _filename_artist_title(filename_stem)
 
     if metadata.get("lookup_mode") == "internet-nest":
-        clean_title = _internet_title(title)
-        clean_artist = _internet_artist(artist)
-        clean_query = " ".join(
-            part for part in (clean_artist, clean_title) if part
-        ).strip()
-
-        embedded_artists, embedded_titles = (
-            _internet_embedded_artist_title(clean_title)
-        )
-        alias_candidates = []
-        for title_alias in embedded_titles:
-            for artist_alias in embedded_artists:
-                alias_candidates.append(
-                    (
-                        f"{artist_alias} {title_alias}",
-                        title_alias,
-                        artist_alias,
-                    )
-                )
-            alias_candidates.append(
-                (title_alias, title_alias, "")
-            )
-
         search_candidates = (
             (query, title, artist),
-            (clean_query, clean_title, clean_artist),
-            *alias_candidates,
-            (clean_title, clean_title, ""),
+            *_internet_search_candidates(title, artist),
             (filename_stem, file_title, file_artist),
             (title, title, ""),
         )
