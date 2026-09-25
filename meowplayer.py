@@ -3273,6 +3273,10 @@ class MeowPlayer:
         self.online_current = None
         self.online_load_state = "idle"
         self.online_load_started_at = 0.0
+        self.online_request_started_at = 0.0
+        self.online_state_next_poll_at = 0.0
+        self.online_used_direct_stream = False
+        self.online_fallback_used = False
 
         reset_shuffle_bag = False
         if not preserve_sequence:
@@ -4892,8 +4896,15 @@ class MeowPlayer:
             else:
                 prefix = "   "
 
+            resolver_state = self.youtube.resolver_state(track)
+            speed_hint = {
+                "ready": "⚡",
+                "resolving": "…",
+                "failed": "!",
+            }.get(resolver_state, "·")
             label = (
-                f"{track.artist_title} · {track.duration_label} · YouTube"
+                f"{track.artist_title} · {track.duration_label} · "
+                f"YouTube {speed_hint}"
             )
             attr = curses.A_REVERSE if selected else curses.A_NORMAL
             if playing:
@@ -4995,11 +5006,17 @@ class MeowPlayer:
 
             if self.online_current is not None:
                 paused = self.mpv.get_property("pause")
-                if self.online_load_state == "resolving":
+                if self.online_load_state == "prefetching":
                     icon = "…"
                     label = self.text(
-                        "Resolving Stream",
-                        "Internet Cat Hunting",
+                        "Preparing Fast Stream",
+                        "Internet Cat Pre-Opening Pipe",
+                    )
+                elif self.online_load_state == "resolving":
+                    icon = "…"
+                    label = self.text(
+                        "Opening Stream",
+                        "Internet Cat Opening Pipe",
                     )
                 elif self.online_load_state == "failed":
                     icon = "!"
