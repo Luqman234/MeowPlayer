@@ -1362,6 +1362,30 @@ class MeowPlayer:
     def set_status(self, serious, cat):
         self.status_message = self.text(serious, cat)
 
+    def has_active_track(self):
+        return self.current is not None or self.online_current is not None
+
+    def current_artist_title(self):
+        if self.online_current is not None:
+            return self.online_current.artist_title
+        if self.current is not None:
+            return self.meta(self.current).artist_title
+        return ""
+
+    def current_title(self):
+        if self.online_current is not None:
+            return self.online_current.title
+        if self.current is not None:
+            return self.meta(self.current).title
+        return ""
+
+    def current_duration_fallback(self):
+        if self.online_current is not None:
+            return float(self.online_current.duration or 0.0)
+        if self.current is not None:
+            return float(self.meta(self.current).duration or 0.0)
+        return 0.0
+
     def cat_intercepts(self, action):
         return self.playback_saboteur.handle_user_action(self, action)
 
@@ -1381,7 +1405,7 @@ class MeowPlayer:
         )
 
     def cat_mood(self):
-        if self.current is None:
+        if not self.has_active_track():
             return "Waiting"
 
         paused = bool(self.mpv.get_property("pause"))
@@ -2683,6 +2707,36 @@ class MeowPlayer:
             )
         return True
 
+    def play_online(self, track):
+        if track is None:
+            return False
+
+        self.online_current = track
+        self.current = None
+        self.current_lyrics = None
+        self.lyrics_track_index = None
+        self.gapless_next_index = None
+        self._awaiting_mpv_path = False
+
+        self.mpv.load(track.url)
+        self.mpv.play()
+        self.set_status(
+            f"Streaming from YouTube: {track.artist_title}",
+            f"The internet cat is streaming: {track.artist_title}",
+        )
+        self.sync_mpris(force=True)
+        return True
+
+    def play_selected_youtube_result(self):
+        if not self.youtube_results:
+            return False
+
+        self.youtube_selected = max(
+            0,
+            min(self.youtube_selected, len(self.youtube_results) - 1),
+        )
+        return self.play_online(self.youtube_results[self.youtube_selected])
+
     def play(
         self,
         index,
@@ -2696,6 +2750,7 @@ class MeowPlayer:
             return
 
         index %= len(self.songs)
+        self.online_current = None
 
         reset_shuffle_bag = False
         if not preserve_sequence:
