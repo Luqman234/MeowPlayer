@@ -390,6 +390,65 @@ def _identity_matches(expected, actual):
     return expected_key == actual_key
 
 
+_INTERNET_TITLE_NOISE = re.compile(
+    r"\s*[\[(](?:official\s+)?(?:music\s+)?"
+    r"(?:video|audio|lyric(?:s|\s+video)?|visuali[sz]er|mv|hd|4k)"
+    r"[^\])]*[\])]",
+    re.IGNORECASE,
+)
+_INTERNET_FEATURE_SUFFIX = re.compile(
+    r"\s+(?:feat\.?|ft\.?|featuring)\s+.+$",
+    re.IGNORECASE,
+)
+_INTERNET_ARTIST_SPLIT = re.compile(
+    r"\s*(?:,|&|\bx\b|/|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b)\s*",
+    re.IGNORECASE,
+)
+
+
+def _internet_title(value):
+    text = " ".join(str(value or "").split())
+    text = _INTERNET_TITLE_NOISE.sub("", text)
+    text = _INTERNET_FEATURE_SUFFIX.sub("", text)
+    return " ".join(text.split()).strip(" -–—|")
+
+
+def _internet_artist(value):
+    text = " ".join(str(value or "").split()).strip()
+    text = re.sub(r"\s*-\s*Topic$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+Official$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"VEVO$", "", text, flags=re.IGNORECASE)
+    return text.strip(" -–—|")
+
+
+def _internet_artist_parts(value):
+    cleaned = _internet_artist(value)
+    return {
+        _normalized_identity(part)
+        for part in _INTERNET_ARTIST_SPLIT.split(cleaned)
+        if _normalized_identity(part)
+    }
+
+
+def _internet_title_matches(expected, actual):
+    return _identity_matches(
+        _internet_title(expected),
+        _internet_title(actual),
+    )
+
+
+def _internet_artist_matches(expected, actual):
+    if _identity_matches(
+        _internet_artist(expected),
+        _internet_artist(actual),
+    ):
+        return True
+
+    expected_parts = _internet_artist_parts(expected)
+    actual_parts = _internet_artist_parts(actual)
+    return bool(expected_parts and actual_parts and expected_parts & actual_parts)
+
+
 def _filename_artist_title(stem):
     parts = [
         part.strip()
@@ -420,13 +479,25 @@ def _lrclib_candidate_acceptable(
     remote_title = str(candidate.get("trackName") or "").strip()
     remote_artist = str(candidate.get("artistName") or "").strip()
 
-    if expected_title and remote_title and not _identity_matches(
+    internet_nest = metadata.get("lookup_mode") == "internet-nest"
+    title_matches = (
+        _internet_title_matches
+        if internet_nest
+        else _identity_matches
+    )
+    artist_matches = (
+        _internet_artist_matches
+        if internet_nest
+        else _identity_matches
+    )
+
+    if expected_title and remote_title and not title_matches(
         expected_title,
         remote_title,
     ):
         return False
 
-    if expected_artist and remote_artist and not _identity_matches(
+    if expected_artist and remote_artist and not artist_matches(
         expected_artist,
         remote_artist,
     ):
@@ -449,7 +520,11 @@ def _lrclib_candidate_acceptable(
         remote_duration = 0.0
 
     if local_duration > 0 and remote_duration > 0:
-        tolerance = max(10.0, local_duration * 0.08)
+        tolerance = (
+            max(45.0, local_duration * 0.20)
+            if internet_nest
+            else max(10.0, local_duration * 0.08)
+        )
         if abs(local_duration - remote_duration) > tolerance:
             return False
 
@@ -542,11 +617,25 @@ def _fetch_lrclib_result(metadata, timeout=5.0):
     filename_stem = metadata.get("filename_stem", "").strip()
     file_artist, file_title = _filename_artist_title(filename_stem)
 
-    search_candidates = (
-        (query, title, artist),
-        (filename_stem, file_title, file_artist),
-        (title, title, ""),
-    )
+    if metadata.get("lookup_mode") == "internet-nest":
+        clean_title = _internet_title(title)
+        clean_artist = _internet_artist(artist)
+        clean_query = " ".join(
+            part for part in (clean_artist, clean_title) if part
+        ).strip()
+        search_candidates = (
+            (query, title, artist),
+            (clean_query, clean_title, clean_artist),
+            (clean_title, clean_title, ""),
+            (filename_stem, file_title, file_artist),
+            (title, title, ""),
+        )
+    else:
+        search_candidates = (
+            (query, title, artist),
+            (filename_stem, file_title, file_artist),
+            (title, title, ""),
+        )
 
     search_queries = []
     seen_queries = set()
@@ -813,6 +902,7 @@ class LyricsManager:
             "filename_stem": str(title or "").strip(),
             "audio": None,
             "tags": None,
+            "lookup_mode": "internet-nest",
         }
 
     def load_transient(

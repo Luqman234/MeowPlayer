@@ -363,6 +363,81 @@ class LyricsTests(unittest.TestCase):
             calls,
         )
 
+    def test_internet_nest_lrclib_accepts_clean_song_behind_youtube_noise(self):
+        metadata = {
+            "title": "On My Way (Official Music Video)",
+            "artist": "Alan WalkerVEVO",
+            "album": "",
+            "duration": 238.0,
+            "filename_stem": "On My Way (Official Music Video)",
+            "lookup_mode": "internet-nest",
+        }
+        calls = []
+
+        def fake_request(path, params, timeout):
+            calls.append((path, dict(params)))
+            if path == "/api/get":
+                return None, "not-found"
+            if params.get("q") == "Alan Walker On My Way":
+                return [
+                    {
+                        "trackName": "On My Way",
+                        "artistName": (
+                            "Alan Walker, Sabrina Carpenter & Farruko"
+                        ),
+                        "duration": 205.0,
+                        "syncedLyrics": "[00:01.00]Correct internet lyric",
+                    }
+                ], "ok"
+            return [], "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "found")
+        self.assertIn("Correct internet lyric", result.text)
+        self.assertEqual(result.query, "Alan Walker On My Way")
+        self.assertIn(
+            (
+                "/api/search",
+                {"q": "Alan Walker On My Way"},
+            ),
+            calls,
+        )
+
+    def test_local_lrclib_matching_stays_strict_for_youtube_style_noise(self):
+        metadata = {
+            "title": "On My Way (Official Music Video)",
+            "artist": "Alan WalkerVEVO",
+            "album": "",
+            "duration": 238.0,
+            "filename_stem": "On My Way (Official Music Video)",
+        }
+
+        def fake_request(path, params, timeout):
+            if path == "/api/get":
+                return None, "not-found"
+            return [
+                {
+                    "trackName": "On My Way",
+                    "artistName": "Alan Walker",
+                    "duration": 205.0,
+                    "syncedLyrics": "[00:01.00]Should stay rejected",
+                }
+            ], "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "not-found")
+        self.assertEqual(result.text, "")
+
     def test_lrclib_rejects_wildly_wrong_duration(self):
         metadata = {
             "title": "Song",
