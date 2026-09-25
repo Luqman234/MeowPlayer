@@ -97,7 +97,6 @@ class YouTubeCatalog:
             "--dump-single-json",
             "--skip-download",
             "--no-warnings",
-            "--no-call-home",
             target,
         ]
 
