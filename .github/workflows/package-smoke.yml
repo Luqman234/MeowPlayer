@@ -26,6 +26,8 @@ on:
     paths:
       - "meowplayer.py"
       - "album_art.py"
+      - "bad_larry.py"
+      - "bad_larry_math.py"
       - "lyrics_support.py"
       - "library_watcher.py"
       - "meow_catalog.py"
@@ -33,7 +35,9 @@ on:
       - "meow_persistence.py"
       - "meow_logging.py"
       - "mpris_support.py"
+      - "online_metadata.py"
       - "visualizer.py"
+      - "youtube_online.py"
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/**"
