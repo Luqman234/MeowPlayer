@@ -140,6 +140,16 @@ def apology_matches(value):
     return str(value) == DANGEROUS_DISMISS_PHRASE
 
 
+def _player_has_active_track(player):
+    checker = getattr(player, "has_active_track", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception:
+            pass
+    return getattr(player, "current", None) is not None
+
+
 class PlaybackSaboteur:
     """Opt-in playback interference for MeowPlayer's malicious cat modes.
 
@@ -233,7 +243,7 @@ class PlaybackSaboteur:
         self.next_math_roll_at = float("inf")
 
     def _temporary_pause(self, player, now):
-        if getattr(player, "current", None) is None:
+        if not _player_has_active_track(player):
             return False
         try:
             if bool(player.mpv.get_property("pause")):
@@ -254,7 +264,7 @@ class PlaybackSaboteur:
         return True
 
     def _tempo_crime(self, player, now):
-        if getattr(player, "current", None) is None:
+        if not _player_has_active_track(player):
             return False
         speed = self.rng.choice(self.profile.speed_choices)
         try:
@@ -270,7 +280,7 @@ class PlaybackSaboteur:
         return True
 
     def _volume_theft(self, player, now):
-        if getattr(player, "current", None) is None:
+        if not _player_has_active_track(player):
             return False
         drop = self.rng.randint(
             self.profile.volume_drop_min,
@@ -293,7 +303,7 @@ class PlaybackSaboteur:
         return True
 
     def _rewind(self, player, stronger=False):
-        if getattr(player, "current", None) is None:
+        if not _player_has_active_track(player):
             return False
         low = self.profile.rewind_min
         high = self.profile.rewind_max * (1.25 if stronger else 1.0)
@@ -309,7 +319,7 @@ class PlaybackSaboteur:
         return True
 
     def _fast_forward(self, player):
-        if getattr(player, "current", None) is None:
+        if not _player_has_active_track(player):
             return False
         amount = self.rng.uniform(
             max(2.0, self.profile.rewind_min * 0.5),
@@ -326,7 +336,7 @@ class PlaybackSaboteur:
         return True
 
     def _restart_current(self, player):
-        if getattr(player, "current", None) is None:
+        if not _player_has_active_track(player):
             return False
         try:
             player.mpv.seek_absolute(0.0)
@@ -370,7 +380,7 @@ class PlaybackSaboteur:
         return True
 
     def _segment_loop(self, player, now):
-        if getattr(player, "current", None) is None:
+        if not _player_has_active_track(player):
             return False
         try:
             position = float(player.mpv.get_property("time-pos") or 0.0)
@@ -387,7 +397,7 @@ class PlaybackSaboteur:
         return True
 
     def _larry_chain(self, player, now):
-        if self.mode != "dangerous" or getattr(player, "current", None) is None:
+        if self.mode != "dangerous" or not _player_has_active_track(player):
             return False
         self._rewind(player, stronger=True)
         speed = self.rng.choice(self.profile.speed_choices)
@@ -407,7 +417,7 @@ class PlaybackSaboteur:
         return True
 
     def _execute_spontaneous(self, player, now):
-        if not self.enabled or getattr(player, "current", None) is None:
+        if not self.enabled or not _player_has_active_track(player):
             return False
 
         actions = ["rewind", "pause", "tempo", "volume"]
@@ -485,14 +495,14 @@ class PlaybackSaboteur:
         self.math_surrenders += 1
         penalty = skip_penalty(difficulty, self.math_surrenders)
 
-        if penalty["restart"] and getattr(player, "current", None) is not None:
+        if penalty["restart"] and _player_has_active_track(player):
             try:
                 player.mpv.seek_absolute(0.0)
             except Exception:
                 pass
 
         rewind = penalty["rewind"]
-        if rewind is not None and getattr(player, "current", None) is not None:
+        if rewind is not None and _player_has_active_track(player):
             amount = self.rng.uniform(rewind[0], rewind[1])
             try:
                 player.mpv.seek(-amount)
@@ -500,7 +510,7 @@ class PlaybackSaboteur:
                 pass
 
         speed = penalty["speed"]
-        if speed is not None and getattr(player, "current", None) is not None:
+        if speed is not None and _player_has_active_track(player):
             try:
                 player.mpv.set_property("speed", speed)
                 self._schedule(
@@ -565,7 +575,7 @@ class PlaybackSaboteur:
         self._run_pending(player, timestamp)
 
         math_created = False
-        if getattr(player, "current", None) is not None:
+        if _player_has_active_track(player):
             math_created = self._maybe_roll_math(timestamp)
         if self.pending_math_question is not None:
             return math_created
