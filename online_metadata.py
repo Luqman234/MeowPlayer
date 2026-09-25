@@ -13,7 +13,7 @@ from pathlib import Path
 
 MUSICBRAINZ_API_ROOT = "https://musicbrainz.org/ws/2"
 DEFAULT_USER_AGENT = (
-    "MeowPlayer/0.17.3 "
+    "MeowPlayer/0.17.4 "
     "(https://github.com/Luqman234/MeowPlayer)"
 )
 
