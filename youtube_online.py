@@ -50,6 +50,43 @@ class YouTubeSearchError(RuntimeError):
     pass
 
 
+YOUTUBE_SEARCH_MODES = {"all", "artist"}
+
+
+def normalize_youtube_search(query, search_mode="all"):
+    """Normalize user input and return (query, mode).
+
+    The ordinary search prompt also accepts an artist:Name prefix so artist
+    search is reachable without a second modal. The dedicated Artist Search UI
+    simply supplies search_mode="artist" directly.
+    """
+    query = str(query or "").strip()
+    mode = str(search_mode or "all").strip().lower()
+    if mode not in YOUTUBE_SEARCH_MODES:
+        mode = "all"
+
+    if mode == "all" and query.casefold().startswith("artist:"):
+        artist = query.split(":", 1)[1].strip()
+        if artist:
+            query = artist
+            mode = "artist"
+
+    return query, mode
+
+
+def youtube_search_target(query, limit, search_mode="all"):
+    """Build the yt-dlp ytsearch target for a general or artist-first search."""
+    query, mode = normalize_youtube_search(query, search_mode)
+    limit = max(1, min(50, int(limit)))
+    if mode == "artist":
+        # Keep this as a normal YouTube search rather than brittle uploader-only
+        # filtering: official tracks are often uploaded by labels/VEVO channels.
+        # Quoting the artist name plus "music" biases discovery toward that artist
+        # while preserving useful official/label uploads.
+        artist = " ".join(query.replace('"', " ").split())
+        query = f'"{artist}" music'
+    return f"ytsearch{limit}:{query}"
+
 @dataclass(frozen=True)
 class YouTubeTrack:
     video_id: str
@@ -118,7 +155,7 @@ class YouTubeCatalog:
             return "yt-dlp was not found on PATH."
         return ""
 
-    def search(self, query, limit=None):
+    def search(self, query, limit=None, search_mode="all"):
         if not self.enabled:
             raise YouTubeUnavailable(
                 "YouTube playback is disabled. Start MeowPlayer with --youtube."
@@ -128,13 +165,18 @@ class YouTubeCatalog:
                 "yt-dlp was not found. Install yt-dlp and restart MeowPlayer."
             )
 
-        query = str(query or "").strip()
+        query, search_mode = normalize_youtube_search(query, search_mode)
         if not query:
             return []
 
         # Compatibility helper for non-TUI callers. The UI consumes the session
         # queue directly, so it can navigate and prefetch before search finishes.
-        session = YouTubeSearchSession(self, query, limit=limit)
+        session = YouTubeSearchSession(
+            self,
+            query,
+            limit=limit,
+            search_mode=search_mode,
+        )
         tracks = []
         try:
             while True:
@@ -487,17 +529,26 @@ class YouTubeStreamResolver:
 class YouTubeSearchSession:
     """Line-oriented search delivery. No curses calls from this worker."""
 
-    def __init__(self, catalog, query, limit=None):
+    def __init__(self, catalog, query, limit=None, search_mode="all"):
         self.results = queue.SimpleQueue()
         self.cancel = threading.Event()
-        self.thread = threading.Thread(target=self._run, args=(catalog, query, limit),
-                                       name="yt-search", daemon=True)
+        self.query, self.search_mode = normalize_youtube_search(query, search_mode)
+        self.thread = threading.Thread(
+            target=self._run,
+            args=(catalog, self.query, limit, self.search_mode),
+            name="yt-search",
+            daemon=True,
+        )
         self.thread.start()
 
-    def _run(self, catalog, query, limit):
+    def _run(self, catalog, query, limit, search_mode):
         started = time.monotonic()
         process = None
-        LOGGER.debug("YT_LATENCY search_start=%.6f", started)
+        LOGGER.debug(
+            "YT_LATENCY search_start=%.6f search_mode=%s",
+            started,
+            search_mode,
+        )
         try:
             if not catalog.available:
                 raise YouTubeUnavailable(catalog.unavailable_reason)
@@ -505,7 +556,7 @@ class YouTubeSearchSession:
             command = [catalog.executable, "--ignore-config", "--flat-playlist",
                        "--skip-download", "--no-warnings", "--lazy-playlist",
                        "--print", "%(.{id,title,uploader,channel,duration,webpage_url})j",
-                       f"ytsearch{limit}:{query}"]
+                       youtube_search_target(query, limit, search_mode)]
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
