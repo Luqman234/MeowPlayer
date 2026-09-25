@@ -656,6 +656,25 @@ class MPVController:
             MPV_LOGGER.info("loadfile replace: %s", filename)
         self.command("loadfile", text, "replace")
 
+    def load_resolved_stream(self, stream_url, headers=None):
+        headers = dict(headers or {})
+        user_agent = headers.pop("User-Agent", None)
+        if user_agent:
+            self.set_property("user-agent", str(user_agent))
+
+        header_fields = [
+            f"{name}: {value}"
+            for name, value in headers.items()
+            if name and value is not None
+        ]
+        self.set_property("http-header-fields", header_fields)
+
+        MPV_LOGGER.info(
+            "loadfile replace: <pre-resolved YouTube stream> headers=%s",
+            len(header_fields) + (1 if user_agent else 0),
+        )
+        self.command("loadfile", str(stream_url), "replace")
+
     def append(self, filename):
         MPV_LOGGER.debug("loadfile append: %s", filename)
         return self.command("loadfile", str(filename), "append")
@@ -2985,7 +3004,10 @@ class MeowPlayer:
             resolved.protocol or "unknown",
         )
 
-        self.mpv.load(resolved.stream_url)
+        self.mpv.load_resolved_stream(
+            resolved.stream_url,
+            resolved.headers,
+        )
         self.mpv.play()
         self.set_status(
             f"Opening pre-resolved YouTube stream: {track.artist_title}",
