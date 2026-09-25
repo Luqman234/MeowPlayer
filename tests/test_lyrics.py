@@ -457,6 +457,141 @@ class LyricsTests(unittest.TestCase):
             calls,
         )
 
+    def test_internet_nest_lrclib_handles_title_alias_without_artist_prefix(self):
+        metadata = {
+            "title": "Ghost Rule / ゴーストルール [Official Audio]",
+            "artist": "DECO*27 - Topic",
+            "album": "",
+            "duration": 220.0,
+            "filename_stem": "Ghost Rule / ゴーストルール [Official Audio]",
+            "lookup_mode": "internet-nest",
+        }
+
+        def fake_request(path, params, timeout):
+            if path == "/api/get":
+                return None, "not-found"
+            if params.get("q") == "DECO*27 ゴーストルール":
+                return [
+                    {
+                        "trackName": "ゴーストルール",
+                        "artistName": "DECO*27",
+                        "duration": 219.0,
+                        "syncedLyrics": "[00:01.00]見つけた",
+                    }
+                ], "ok"
+            return [], "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "found")
+        self.assertEqual(result.query, "DECO*27 ゴーストルール")
+        self.assertIn("見つけた", result.text)
+
+    def test_internet_nest_lrclib_handles_em_dash_artist_title(self):
+        metadata = {
+            "title": "Mili — world.execute(me); [Official Audio]",
+            "artist": "Mili Official",
+            "album": "",
+            "duration": 220.0,
+            "filename_stem": "Mili — world.execute(me); [Official Audio]",
+            "lookup_mode": "internet-nest",
+        }
+
+        def fake_request(path, params, timeout):
+            if path == "/api/get":
+                return None, "not-found"
+            if params.get("q") == "Mili world.execute(me);":
+                return [
+                    {
+                        "trackName": "world.execute(me);",
+                        "artistName": "Mili",
+                        "duration": 219.0,
+                        "plainLyrics": "hello world",
+                    }
+                ], "ok"
+            return [], "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "found")
+        self.assertEqual(result.query, "Mili world.execute(me);")
+        self.assertEqual(result.text, "hello world")
+        self.assertFalse(result.synced)
+
+    def test_internet_nest_lrclib_handles_pipe_title_noise(self):
+        metadata = {
+            "title": "Shelter | Official Lyric Video",
+            "artist": "Porter Robinson & Madeon - Topic",
+            "album": "",
+            "duration": 230.0,
+            "filename_stem": "Shelter | Official Lyric Video",
+            "lookup_mode": "internet-nest",
+        }
+
+        def fake_request(path, params, timeout):
+            if path == "/api/get":
+                return None, "not-found"
+            if params.get("q") == "Porter Robinson & Madeon Shelter":
+                return [
+                    {
+                        "trackName": "Shelter",
+                        "artistName": "Porter Robinson & Madeon",
+                        "duration": 228.0,
+                        "syncedLyrics": "[00:01.00]Shelter",
+                    }
+                ], "ok"
+            return [], "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "found")
+        self.assertEqual(
+            result.query,
+            "Porter Robinson & Madeon Shelter",
+        )
+
+    def test_internet_nest_lrclib_caps_search_fanout(self):
+        metadata = {
+            "title": (
+                "Artist A / Artist B - "
+                "Title One / Title Two | Title Three"
+            ),
+            "artist": "Artist A / Artist B & Artist C",
+            "album": "",
+            "duration": 240.0,
+            "filename_stem": "unused",
+            "lookup_mode": "internet-nest",
+        }
+        search_calls = []
+
+        def fake_request(path, params, timeout):
+            if path == "/api/search":
+                search_calls.append(dict(params))
+            return None if path == "/api/get" else [], (
+                "not-found" if path == "/api/get" else "ok"
+            )
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "not-found")
+        self.assertLessEqual(len(search_calls), 10)
+
     def test_local_lrclib_matching_stays_strict_for_youtube_style_noise(self):
         metadata = {
             "title": "On My Way (Official Music Video)",
