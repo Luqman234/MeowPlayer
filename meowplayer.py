@@ -78,6 +78,10 @@ SUPPORTED_EXTENSIONS = {
     ".wav", ".m4a", ".aac", ".wma"
 }
 ONLINE_RETRY_GUARD_SECONDS = 8.0
+ONLINE_FAST_START_WAIT_SECONDS = 1.5
+ONLINE_STARTUP_TARGET_SECONDS = 2.0
+ONLINE_STATE_POLL_INTERVAL_SECONDS = 0.2
+ONLINE_DIRECT_OPEN_FALLBACK_SECONDS = 3.0
 
 LIBRARY_VIEWS = (
     "songs",
@@ -645,8 +649,12 @@ class MPVController:
         self.set_property("loop-file", "inf" if enabled else "no")
 
     def load(self, filename):
-        MPV_LOGGER.info("loadfile replace: %s", filename)
-        self.command("loadfile", str(filename), "replace")
+        text = str(filename)
+        if "googlevideo.com/" in text:
+            MPV_LOGGER.info("loadfile replace: <pre-resolved YouTube stream>")
+        else:
+            MPV_LOGGER.info("loadfile replace: %s", filename)
+        self.command("loadfile", text, "replace")
 
     def append(self, filename):
         MPV_LOGGER.debug("loadfile append: %s", filename)
@@ -839,6 +847,10 @@ class MeowPlayer:
         self.online_current = None
         self.online_load_state = "idle"
         self.online_load_started_at = 0.0
+        self.online_request_started_at = 0.0
+        self.online_state_next_poll_at = 0.0
+        self.online_used_direct_stream = False
+        self.online_fallback_used = False
         self.saved_state = saved_state or {}
         self.restore_session_enabled = restore_session
         self.mpris_enabled = mpris_enabled and not _is_termux()
@@ -1582,6 +1594,7 @@ class MeowPlayer:
         self.library_watcher.stop()
         self.album_art.clear(free_data=True)
         self.visualizer.stop()
+        self.youtube.close()
 
         if self.catalog is not None:
             try:
@@ -4376,6 +4389,7 @@ class MeowPlayer:
         )
         self.youtube_selected = 0
         self.view = "online"
+        self._prime_selected_youtube_result()
 
         if self.youtube_results:
             self.set_status(
@@ -5603,11 +5617,13 @@ class MeowPlayer:
                         0,
                         self.youtube_selected - 1,
                     )
+                    self._prime_selected_youtube_result()
                 elif key == curses.KEY_DOWN and self.youtube_results:
                     self.youtube_selected = min(
                         len(self.youtube_results) - 1,
                         self.youtube_selected + 1,
                     )
+                    self._prime_selected_youtube_result()
                 elif key in (10, 13, curses.KEY_ENTER):
                     self.play_selected_youtube_result()
                 elif key == ord("/"):
