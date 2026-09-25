@@ -1582,6 +1582,20 @@ This section is intentionally long because calling MeowPlayer a "tiny terminal w
 - `playerctl`, media keys, MPRIS metadata, and `mpris:artUrl`
 - Native Termux defaults and narrower phone-friendly behavior
 
+### Settings Nest — edit household rules without touching JSON
+
+- Press `,` from the TUI to open the **Settings Nest**
+- Arrow-key navigation with live value previews
+- `Enter` / `Space` toggles booleans or cycles values
+- `←` / `→` adjusts choices and ReplayGain preamp
+- `R` restores the selected option to its default
+- Changes are written through MeowPlayer's normal XDG config writer
+- Settings clearly say **LIVE** or **NEXT LAUNCH** instead of pretending everything hot-reloads
+- Live controls include gapless mode, ReplayGain, lyrics, online lyrics, MusicBrainz, album art, CAVA, and filesystem watching
+- Session restore and MPRIS are saved for the next launch
+
+In other words, editing `~/.config/meowplayer/config.json` by hand is still allowed, but no longer a mandatory rite of passage.
+
 ### Necessary feline infrastructure — absolutely essential, do not audit
 
 - Reactive moods: Waiting, Purring, Loafing, Zoomies, Tail-Chasing, Guarding Catnip, Whispering, Screaming
@@ -2732,6 +2746,7 @@ Loaded playlist entries must resolve to tracks already indexed in the current li
 | `V` | Toggle live spectrum visualizer |
 | `M` | Reload custom Smart Mix rules |
 | `G` | Pet the cat / add one Scritch |
+| `,` | Open the Settings Nest |
 | `Space` | Paws / resume |
 | `←` / `→` | Scritch backward / forward 5 seconds |
 | `N` | Next meow |
@@ -2740,6 +2755,72 @@ Loaded playlist entries must resolve to tracks already indexed in the current li
 | `S` | Toggle Pounce Mode |
 | `R` | Toggle Tail-Chase |
 | `X` | Quit / escape before the cat notices |
+
+## Settings Nest — the cat has obtained a control panel
+
+Press `,` from the main TUI to open the **Settings Nest**.
+
+```text
+SETTINGS NEST — 11 household rule(s)
+
+  Remember yesterday's nap              [     ON     ]  NEXT LAUNCH
+  Desktop cat privileges                [     ON     ]  NEXT LAUNCH
+  Terminal rectangle pictures           [     ON     ]  LIVE
+>^.^< No awkward silence between zoomies [    weak    ]  LIVE
+  Volume diplomacy                      [   track    ]  LIVE
+  Extra loudness seasoning              [  +0.0 dB   ]  LIVE
+  Songbook                              [     ON     ]  LIVE
+  Internet lyric cats                   [     ON     ]  LIVE
+  Metadata detective cat                [     ON     ]  LIVE
+  Wiggly fence                          [     ON     ]  LIVE
+  Hear files move through walls         [     ON     ]  LIVE
+```
+
+Controls:
+
+| Key | Settings Nest action |
+| --- | --- |
+| `↑` / `↓` | Move the paw |
+| `←` / `→` | Change/cycle the selected value |
+| `Enter` / `Space` | Toggle or advance the selected value |
+| `R` | Reset the selected option to its default |
+| `,` / `Q` / `Esc` | Leave Settings Nest and return to the previous view |
+| `X` | Quit MeowPlayer |
+
+Settings marked **LIVE** update the running player immediately. Settings marked **NEXT LAUNCH** are saved immediately but intentionally do not attempt a risky hot restart of their subsystem.
+
+Current live settings include:
+
+```text
+album art
+gapless mode
+ReplayGain mode
+ReplayGain preamp
+lyrics
+online lyrics
+MusicBrainz metadata
+CAVA visualizer
+filesystem watching
+```
+
+The two deliberate next-launch settings are:
+
+```text
+restore_session
+mpris_enabled
+```
+
+MPRIS stays next-launch because disconnecting and re-registering a D-Bus media service in the middle of normal playback is substantially more exciting than a settings screen needs to be.
+
+Every change still goes through the ordinary XDG config path:
+
+```text
+~/.config/meowplayer/config.json
+```
+
+So Settings Nest is not a second configuration system. It is simply a TUI editor for the same household rules.
+
+> **The cat may now edit configuration. The cat still does not get arbitrary JSON access.**
 
 ## Persistent config and state — because the cat has a memory now, unfortunately
 
@@ -3138,6 +3219,7 @@ MeowPlayer/
 ├── meow_catalog.py            # SQLite Cat Catalog + migrations
 ├── meow_smart.py              # Smart Mix parser/generator
 ├── meow_persistence.py        # XDG config + runtime state
+├── settings_nest.py           # Settings Nest definitions/value logic
 ├── meow_logging.py            # rotating debug logs + XDG log paths
 ├── mpris_support.py           # Linux MPRIS bridge
 ├── visualizer.py              # CAVA raw spectrum integration
