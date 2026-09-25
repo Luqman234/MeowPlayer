@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass, replace
@@ -65,7 +66,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.16.1"
+__version__ = "0.16.2"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -497,6 +498,12 @@ class MPVController:
                 break
             time.sleep(0.02)
 
+        self._ipc_socket = None
+        self._ipc_buffer = b""
+        self._ipc_lock = threading.Lock()
+        self._ipc_request_id = 0
+        self._ipc_timeout = 0.75
+
         if socket_ready:
             MPV_LOGGER.debug("mpv IPC socket ready: %s", self.socket_path)
         else:
@@ -505,34 +512,122 @@ class MPVController:
                 self.socket_path,
             )
 
-    def command(self, *args):
-        if not os.path.exists(self.socket_path):
-            return None
+    def _close_ipc(self):
+        sock = self._ipc_socket
+        self._ipc_socket = None
+        self._ipc_buffer = b""
 
-        request = {"command": list(args)}
+        if sock is None:
+            return
 
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.2)
-                sock.connect(self.socket_path)
-                sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
+            sock.close()
+        except OSError:
+            pass
 
-                data = b""
-                while not data.endswith(b"\n"):
-                    chunk = sock.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
+    def _ensure_ipc(self):
+        if self._ipc_socket is not None:
+            return self._ipc_socket
 
-            if data:
-                return json.loads(data.decode("utf-8"))
+        if not os.path.exists(self.socket_path):
+            raise FileNotFoundError(self.socket_path)
 
-        except (OSError, json.JSONDecodeError, socket.timeout) as exc:
-            MPV_LOGGER.debug(
-                "mpv IPC command failed command=%s error=%r",
-                args[0] if args else "<empty>",
-                exc,
-            )
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self._ipc_timeout)
+        try:
+            sock.connect(self.socket_path)
+        except Exception:
+            sock.close()
+            raise
+
+        self._ipc_socket = sock
+        self._ipc_buffer = b""
+        MPV_LOGGER.debug("Persistent mpv IPC connection established")
+        return sock
+
+    def _recv_ipc_message(self, deadline):
+        while True:
+            newline = self._ipc_buffer.find(b"\n")
+            if newline >= 0:
+                raw = self._ipc_buffer[:newline]
+                self._ipc_buffer = self._ipc_buffer[newline + 1:]
+
+                if not raw.strip():
+                    continue
+
+                try:
+                    return json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    MPV_LOGGER.warning(
+                        "Ignoring malformed mpv IPC line error=%r raw=%r",
+                        exc,
+                        raw[:240],
+                    )
+                    continue
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout("mpv IPC reply timed out")
+
+            sock = self._ensure_ipc()
+            sock.settimeout(remaining)
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("mpv IPC socket closed")
+            self._ipc_buffer += chunk
+
+    def command(self, *args):
+        command_name = args[0] if args else "<empty>"
+
+        with self._ipc_lock:
+            if not os.path.exists(self.socket_path):
+                return None
+
+            self._ipc_request_id += 1
+            request_id = self._ipc_request_id
+            request = {
+                "command": list(args),
+                "request_id": request_id,
+            }
+
+            try:
+                sock = self._ensure_ipc()
+                sock.sendall(
+                    (json.dumps(request) + "\n").encode("utf-8")
+                )
+
+                deadline = time.monotonic() + self._ipc_timeout
+                while True:
+                    message = self._recv_ipc_message(deadline)
+
+                    if message.get("request_id") == request_id:
+                        return message
+
+                    event = message.get("event")
+                    if event:
+                        MPV_LOGGER.debug(
+                            "mpv IPC event while waiting request_id=%s: %s",
+                            request_id,
+                            event,
+                        )
+                        continue
+
+                    MPV_LOGGER.debug(
+                        "Ignoring unmatched mpv IPC message while waiting "
+                        "request_id=%s message=%r",
+                        request_id,
+                        message,
+                    )
+
+            except (OSError, ConnectionError, socket.timeout) as exc:
+                MPV_LOGGER.debug(
+                    "mpv IPC command failed command=%s request_id=%s "
+                    "error=%r",
+                    command_name,
+                    request_id,
+                    exc,
+                )
+                self._close_ipc()
 
         return None
 
@@ -654,6 +749,8 @@ class MPVController:
             self.command("quit")
         except Exception:
             pass
+        finally:
+            self._close_ipc()
 
         try:
             self.process.terminate()
