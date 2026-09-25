@@ -3226,15 +3226,30 @@ class MeowPlayer:
                     break
                 if kind == "track":
                     self.youtube_results.append(value)
-                    self.set_status(f"Searching YouTube: {len(self.youtube_results)} result(s)...",
-                                    f"The internet cat found {len(self.youtube_results)} meow(s)...")
+                    if self.youtube_search_mode == "artist":
+                        self.set_status(
+                            f"Artist search: {len(self.youtube_results)} result(s)...",
+                            f"The artist-scent cat found {len(self.youtube_results)} meow(s)...",
+                        )
+                    else:
+                        self.set_status(
+                            f"Searching YouTube: {len(self.youtube_results)} result(s)...",
+                            f"The internet cat found {len(self.youtube_results)} meow(s)...",
+                        )
                 else:
                     self.youtube_search_session = None
                     if kind == "error":
                         self.set_status(value, value)
+                    elif self.youtube_search_mode == "artist":
+                        self.set_status(
+                            f"Artist search: {len(self.youtube_results)} result(s).",
+                            f"The artist-scent cat found {len(self.youtube_results)} meow(s).",
+                        )
                     else:
-                        self.set_status(f"YouTube search: {len(self.youtube_results)} result(s).",
-                                        f"The internet cat found {len(self.youtube_results)} meow(s).")
+                        self.set_status(
+                            f"YouTube search: {len(self.youtube_results)} result(s).",
+                            f"The internet cat found {len(self.youtube_results)} meow(s).",
+                        )
         if self.stream_resolver and self.youtube_results:
             track = self.youtube_results[self.youtube_selected]
             if self._prefetch_selection != track.video_id:
@@ -5366,13 +5381,13 @@ class MeowPlayer:
             elif self.view == "online":
                 if self.serious_mode:
                     controls = (
-                        "↑↓ Select  ENTER Stream  / Search  Y Search  "
+                        "↑↓ Select  ENTER Stream  / Search  A Artist  Y Search  "
                         "Q Library  Space Pause  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
-                        "↑↓ Choose  ENTER Stream  / Search  Y Search  "
+                        "↑↓ Choose  ENTER Stream  / Hunt  A Artist Scent  Y Search  "
                         "Q Nest  Space Paws  X Escape"
                     )
                     quote = self.cat_footer_message()
