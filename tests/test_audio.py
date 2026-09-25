@@ -401,6 +401,16 @@ class AudioEngineTests(unittest.TestCase):
             "error": "success", "request_id": r["request_id"]}).encode() + b"\n")
         self.assertEqual(controller.command("stop")["error"], "success")
 
+    def test_gapless_path_confirmation_reads_fresh_state(self):
+        controller = MPVController.__new__(MPVController)
+        controller._init_ipc()
+        controller._properties["path"] = "/music/previous.flac"
+        with mock.patch.object(controller, "command", return_value={
+            "error": "success", "data": "/music/current.flac"
+        }) as command:
+            self.assertEqual(controller.current_path(), "/music/current.flac")
+            command.assert_called_once_with("get_property", "path")
+
     def test_advance_playlist_targets_exact_next_index(self):
         controller = MPVController.__new__(MPVController)
         commands = []

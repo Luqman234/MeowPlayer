@@ -103,7 +103,7 @@ session. The user's original observation was about 1,200 requests in 13 s.
 
 - One persistent mpv socket, one reader, newline framing, pending request IDs,
   concurrent reply correlation, reconnect/resubscription, and bounded waits.
-- Frequent playback properties are observed. Playlist count/position remain
+- Frequent playback properties are observed. Gapless path/count/position remain
   fresh synchronous reads at the existing mutation gates. No append at -1.
 - Search emits small JSON lines from a background worker. The UI publishes
   partial results, prefetches the first, and debounces selection for 150 ms.

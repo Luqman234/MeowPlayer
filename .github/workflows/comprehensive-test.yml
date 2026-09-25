@@ -602,6 +602,10 @@ jobs:
           XDG_DATA_HOME: ${{ runner.temp }}/integration-data
           XDG_CACHE_HOME: ${{ runner.temp }}/integration-cache
         run: |
+          # This step overrides XDG_CONFIG_HOME, so ~/.config/mpv/mpv.conf
+          # from the earlier headless setup is not the active configuration.
+          mkdir -p "$XDG_CONFIG_HOME/mpv"
+          printf '%s\n' 'ao=null' 'video=no' > "$XDG_CONFIG_HOME/mpv/mpv.conf"
           python - <<'PY'
           import time
           from pathlib import Path

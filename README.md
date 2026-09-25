@@ -267,7 +267,7 @@ This is an unofficial integration built around mpv + yt-dlp, not an official You
 
 ### Measuring the internet cat
 
-With `--debug` or `--log-file PATH`, look for `YT_LATENCY`, `YT_PREFETCH`, `YT_PLAY`, and `IPC_STATS`. Durations use a monotonic clock and include the time from Enter, including any unresolved stream work. Logs identify cache/fresh/fallback paths and mpv startup events. The IPC reader observes frequently used playback properties; playlist-position/count queries remain synchronous to preserve gapless mutation safety.
+With `--debug` or `--log-file PATH`, look for `YT_LATENCY`, `YT_PREFETCH`, `YT_PLAY`, and `IPC_STATS`. Durations use a monotonic clock and include the time from Enter, including any unresolved stream work. Logs identify cache/fresh/fallback paths and mpv startup events. The IPC reader observes frequently used playback properties; gapless path/playlist-position/count queries remain synchronous to preserve gapless mutation safety.
 
 The developer benchmark uses actual mpv playback events and advancing time-pos, not merely a successful `loadfile` reply:
 

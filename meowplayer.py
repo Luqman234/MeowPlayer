@@ -761,7 +761,10 @@ class MPVController:
         return bool(response and response.get("error") == "success")
 
     def current_path(self):
-        value = self.get_property("path")
+        # The gapless scheduler uses this as a mutation barrier. An observed
+        # path can lag a playlist transition, so preserve its synchronous read.
+        response = self.command("get_property", "path")
+        value = response.get("data") if response and response.get("error") == "success" else None
         return str(value) if value else None
 
     def wait_for_path(self, filename, timeout=0.35):
