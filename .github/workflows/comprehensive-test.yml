@@ -60,6 +60,8 @@ jobs:
           python -m py_compile \
             meowplayer.py \
             album_art.py \
+            bad_larry.py \
+            bad_larry_math.py \
             lyrics_support.py \
             library_watcher.py \
             meow_catalog.py \
@@ -67,7 +69,8 @@ jobs:
             meow_persistence.py \
             mpris_support.py \
             online_metadata.py \
-            visualizer.py
+            visualizer.py \
+            youtube_online.py
 
       - name: Import every first-party module
         run: |
@@ -75,6 +78,8 @@ jobs:
           modules = [
               "meowplayer",
               "album_art",
+              "bad_larry",
+              "bad_larry_math",
               "lyrics_support",
               "library_watcher",
               "meow_catalog",
@@ -83,6 +88,7 @@ jobs:
               "mpris_support",
               "online_metadata",
               "visualizer",
+              "youtube_online",
           ]
 
           for module in modules:
@@ -185,6 +191,7 @@ jobs:
           grep -q -- "--no-online-metadata" /tmp/meowplayer-help.txt
           grep -q -- "--no-visualizer" /tmp/meowplayer-help.txt
           grep -q -- "--no-watch" /tmp/meowplayer-help.txt
+          grep -q -- "--youtube" /tmp/meowplayer-help.txt
           meowplayer --version
 
       - name: Verify XDG config and state persistence
@@ -789,6 +796,8 @@ jobs:
           required = {
               "meowplayer.py",
               "album_art.py",
+              "bad_larry.py",
+              "bad_larry_math.py",
               "lyrics_support.py",
               "library_watcher.py",
               "meow_catalog.py",
@@ -796,6 +805,7 @@ jobs:
               "meow_persistence.py",
               "mpris_support.py",
               "visualizer.py",
+              "youtube_online.py",
           }
 
           wheel = next(pathlib.Path("dist").glob("*.whl"))
@@ -835,6 +845,8 @@ jobs:
           modules = [
               "meowplayer",
               "album_art",
+              "bad_larry",
+              "bad_larry_math",
               "lyrics_support",
               "library_watcher",
               "meow_catalog",
@@ -842,6 +854,7 @@ jobs:
               "meow_persistence",
               "mpris_support",
               "visualizer",
+              "youtube_online",
           ]
 
           for module in modules:
