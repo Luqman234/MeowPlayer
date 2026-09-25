@@ -519,10 +519,19 @@ def _internet_search_candidates(title, artist):
     embedded_artists, embedded_titles = (
         _internet_embedded_artist_title(clean_title)
     )
+
+    embedded_artist_variants = []
     for value in embedded_artists:
-        for variant in _internet_artist_variants(value):
-            if variant not in artist_variants:
-                artist_variants.append(variant)
+        embedded_artist_variants.extend(
+            _internet_artist_variants(value)
+        )
+    artist_variants = list(
+        _dedupe_internet_values(
+            (*embedded_artist_variants, *artist_variants),
+            limit=8,
+        )
+    )
+
     for value in embedded_titles:
         for variant in _internet_title_variants(value):
             if variant not in title_variants:
