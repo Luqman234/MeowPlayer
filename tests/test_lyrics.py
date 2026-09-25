@@ -408,6 +408,55 @@ class LyricsTests(unittest.TestCase):
             calls,
         )
 
+    def test_internet_nest_lrclib_splits_bilingual_artist_title_aliases(self):
+        metadata = {
+            "title": (
+                "siinamota / 椎名もた - "
+                "Goodbye Everyone / さよーならみなさん"
+            ),
+            "artist": "U/M/A/A Inc. and 椎名もた / siinamota",
+            "album": "",
+            "duration": 269.0,
+            "filename_stem": (
+                "siinamota / 椎名もた - "
+                "Goodbye Everyone / さよーならみなさん"
+            ),
+            "lookup_mode": "internet-nest",
+        }
+        calls = []
+
+        def fake_request(path, params, timeout):
+            calls.append((path, dict(params)))
+            if path == "/api/get":
+                return None, "not-found"
+            if params.get("q") == "椎名もた さよーならみなさん":
+                return [
+                    {
+                        "trackName": "さよーならみなさん",
+                        "artistName": "椎名もた",
+                        "duration": 267.0,
+                        "syncedLyrics": "[00:01.00]みつけた",
+                    }
+                ], "ok"
+            return [], "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "found")
+        self.assertEqual(result.query, "椎名もた さよーならみなさん")
+        self.assertIn("みつけた", result.text)
+        self.assertIn(
+            (
+                "/api/search",
+                {"q": "椎名もた さよーならみなさん"},
+            ),
+            calls,
+        )
+
     def test_local_lrclib_matching_stays_strict_for_youtube_style_noise(self):
         metadata = {
             "title": "On My Way (Official Music Video)",
