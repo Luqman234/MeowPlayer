@@ -816,9 +816,17 @@ class LyricsManager:
         online_enabled=True,
         cache_dir=None,
         request_timeout=5.0,
+        lrclib_enabled=True,
+        musixmatch_enabled=False,
+        musixmatch_api_key=None,
     ):
         self.enabled = bool(enabled)
         self.online_enabled = bool(online_enabled)
+        self.lrclib_enabled = bool(lrclib_enabled)
+        self.musixmatch_api_key = str(musixmatch_api_key or "").strip()
+        self.musixmatch_enabled = bool(
+            musixmatch_enabled and self.musixmatch_api_key
+        )
         self.cache_dir = (
             Path(cache_dir).expanduser()
             if cache_dir is not None
@@ -900,8 +908,20 @@ class LyricsManager:
         except OSError:
             return None
 
+    def _online_provider_names(self):
+        providers = []
+        if self.lrclib_enabled:
+            providers.append("LRCLIB")
+        if self.musixmatch_enabled:
+            providers.append("Musixmatch")
+        return tuple(providers)
+
     def _start_online_fetch(self, identity, metadata):
         if not self.online_enabled:
+            return False
+
+        providers = self._online_provider_names()
+        if not providers:
             return False
 
         query = " ".join(
@@ -923,6 +943,9 @@ class LyricsManager:
                 "query": query,
                 "attempts": 0,
                 "synced": True,
+                "provider": providers[0],
+                "providers": providers,
+                "cacheable": True,
                 "metadata": metadata,
             }
             self._pending[identity] = state
@@ -930,34 +953,93 @@ class LyricsManager:
                 "status": "searching",
                 "query": query,
                 "attempts": 0,
+                "provider": providers[0],
+                "providers": providers,
             }
 
         def worker():
-            result = None
-            for attempt in range(1, 3):
-                result = _fetch_lrclib_result(
-                    metadata,
-                    timeout=self.request_timeout,
-                )
-                state["attempts"] = attempt
-                if result.status != "network-error":
+            results = []
+            attempts = 0
+            final = None
+
+            for provider in providers:
+                with self._pending_lock:
+                    current = self._pending.get(identity)
+                    if current is not state:
+                        return
+                    state["provider"] = provider
+                    self._online_status[identity] = {
+                        "status": "searching",
+                        "query": query,
+                        "attempts": attempts,
+                        "provider": provider,
+                        "providers": providers,
+                    }
+
+                result = None
+                for _ in range(2):
+                    attempts += 1
+                    if provider == "LRCLIB":
+                        result = _fetch_lrclib_result(
+                            metadata,
+                            timeout=self.request_timeout,
+                        )
+                    else:
+                        result = _fetch_musixmatch_result(
+                            metadata,
+                            self.musixmatch_api_key,
+                            timeout=self.request_timeout,
+                        )
+                    state["attempts"] = attempts
+                    if result.status != "network-error":
+                        break
+
+                if result is None:
+                    continue
+                results.append(result)
+                if result.status == "found":
+                    final = result
                     break
 
-            if result is None:
-                result = LyricsFetchResult("", "network-error", query)
+            if final is None:
+                auth = next((item for item in results if item.status == "auth-error"), None)
+                network = next((item for item in results if item.status == "network-error"), None)
+                if auth is not None:
+                    final = auth
+                elif network is not None:
+                    final = LyricsFetchResult(
+                        "",
+                        "network-error",
+                        query,
+                        provider=network.provider,
+                        cacheable=False,
+                    )
+                else:
+                    final = LyricsFetchResult(
+                        "",
+                        "not-found",
+                        query,
+                        provider=" + ".join(providers),
+                        cacheable=False,
+                    )
 
             with self._pending_lock:
                 current = self._pending.get(identity)
                 if current is state:
-                    state["text"] = result.text
-                    state["status"] = result.status
-                    state["query"] = result.query or query
-                    state["synced"] = bool(result.synced)
+                    state["text"] = final.text
+                    state["status"] = final.status
+                    state["query"] = final.query or query
+                    state["synced"] = bool(final.synced)
+                    state["provider"] = final.provider
+                    state["cacheable"] = bool(final.cacheable)
+                    state["attempts"] = attempts
                     state["done"] = True
                     self._online_status[identity] = {
-                        "status": result.status,
-                        "query": result.query or query,
-                        "attempts": state["attempts"],
+                        "status": final.status,
+                        "query": final.query or query,
+                        "attempts": attempts,
+                        "provider": final.provider,
+                        "providers": providers,
                     }
 
         threading.Thread(
@@ -973,6 +1055,15 @@ class LyricsManager:
         if not self.online_enabled:
             return {"status": "offline", "query": "", "attempts": 0}
 
+        providers = self._online_provider_names()
+        if not providers:
+            return {
+                "status": "offline",
+                "query": "",
+                "attempts": 0,
+                "providers": (),
+            }
+
         identity = self._cache_identity(Path(track_path).expanduser())
         with self._pending_lock:
             state = self._pending.get(identity)
@@ -981,14 +1072,21 @@ class LyricsManager:
                     "status": "searching",
                     "query": state.get("query", ""),
                     "attempts": state.get("attempts", 0),
+                    "provider": state.get("provider", providers[0]),
+                    "providers": providers,
                 }
             return dict(
                 self._online_status.get(
                     identity,
-                    {"status": "idle", "query": "", "attempts": 0},
+                    {
+                        "status": "idle",
+                        "query": "",
+                        "attempts": 0,
+                        "provider": providers[0],
+                        "providers": providers,
+                    },
                 )
             )
-
     def retry_online(self, track_path):
         if not self.enabled or not self.online_enabled:
             return False
@@ -1021,37 +1119,45 @@ class LyricsManager:
         if not lyric_text:
             return None
 
+        provider = state.get("provider", "LRCLIB")
+        cacheable = bool(state.get("cacheable", provider == "LRCLIB"))
+        source = "LRCLIB · downloaded" if provider == "LRCLIB" else "Musixmatch · API · session-only"
+
         if state.get("synced", True):
             document = parse_lrc(
                 lyric_text,
-                source="LRCLIB · downloaded",
+                source=source,
             )
             if document is None or not document.synced:
                 return None
-            self._save_cached_lrc(state["metadata"], lyric_text)
+            if cacheable:
+                self._save_cached_lrc(state["metadata"], lyric_text)
         else:
             document = parse_plain_lyrics(
                 lyric_text,
-                source="LRCLIB · downloaded · unsynchronized",
+                source=source + " · unsynchronized",
             )
             if document is None:
                 return None
-            self._save_cached_plain(state["metadata"], lyric_text)
+            if cacheable:
+                self._save_cached_plain(state["metadata"], lyric_text)
 
             # Never replace user-provided or embedded plain lyrics with a
-            # plain online copy. A synchronized LRCLIB result may still
+            # plain online copy. A synchronized online result may still
             # upgrade those local lyrics on a later lookup.
             existing = self._cache.get(identity)
             if (
                 existing is not None
                 and not existing.synced
-                and not existing.source.startswith("LRCLIB")
+                and not existing.source.startswith(("LRCLIB", "Musixmatch"))
             ):
                 with self._pending_lock:
                     self._online_status[identity] = {
                         "status": "found",
                         "query": state.get("query", ""),
                         "attempts": state.get("attempts", 1),
+                        "provider": provider,
+                        "providers": state.get("providers", self._online_provider_names()),
                     }
                 return None
 
@@ -1061,9 +1167,10 @@ class LyricsManager:
                 "status": "found",
                 "query": state.get("query", ""),
                 "attempts": state.get("attempts", 1),
+                "provider": provider,
+                "providers": state.get("providers", self._online_provider_names()),
             }
         return document
-
     def load(self, track_path):
         if not self.enabled:
             return None
@@ -1104,9 +1211,9 @@ class LyricsManager:
                 return embedded_synced
             embedded_plain = _embedded_plain(tags)
 
-        # 4. Ask LRCLIB in the background. A synchronized result may
-        # upgrade plain local lyrics later; an unsynchronized result is only
-        # used when there is no better local lyric document.
+        # 4. Ask configured online providers in the background. LRCLIB is
+        # tried first; Musixmatch can follow when configured with an API key.
+        # A synchronized result may upgrade plain local lyrics later.
         self._start_online_fetch(identity, metadata)
 
         # 5. Plain sidecar / embedded lyrics remain useful while fetching.
