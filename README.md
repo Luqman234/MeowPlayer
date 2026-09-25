@@ -2,12 +2,12 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.15.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.16.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.15.1 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.16.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -68,7 +68,7 @@ MeowPlayer tries to stay true to a few rules:
 
 | Area | What MeowPlayer actually uses |
 | --- | --- |
-| Playback | `mpv` JSON IPC, gapless priming, ReplayGain |
+| Playback | `mpv` JSON IPC, gapless priming, ReplayGain, optional yt-dlp online streams |
 | Library | SQLite **Cat Catalog**, recursive scanning, Watchdog/inotify |
 | Metadata | Mutagen locally, optional MusicBrainz enrichment for missing fields |
 | Lyrics | sidecar/embedded lyrics + optional LRCLIB synchronized/plain lookup |
@@ -76,6 +76,72 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.16.0 — The Cat Found the Internet Radio
+
+MeowPlayer can now opt into **experimental YouTube search and online audio playback** through the same mpv backend used for local music.
+
+Start it with:
+
+```bash
+meowplayer --youtube
+```
+
+Then press `Y` from the TUI to open the **Internet Nest**. Type a search, choose a result with the arrow keys, and press `Enter` to stream it.
+
+```text
+INTERNET NEST
+
+query: porter robinson shelter
+
+>^.^< Shelter — Porter Robinson & Madeon · 3:38 · YouTube
+      Shelter (Official Video) — Porter Robinson · 3:50 · YouTube
+      Something Comforting — Porter Robinson · 4:41 · YouTube
+```
+
+The implementation deliberately keeps the local and online worlds separate:
+
+```text
+local file
+    ↓
+Cat Catalog / tags / lyrics / gapless queue
+    ↓
+mpv
+
+YouTube search
+    ↓
+yt-dlp metadata
+    ↓
+YouTube watch URL
+    ↓
+mpv ytdl hook + yt-dlp
+    ↓
+audio stream
+```
+
+Online search results are **ephemeral**. They are not inserted into the SQLite Cat Catalog, do not pretend to be local files, and are not restored as a local track on the next launch. Switching back to a local track cleanly leaves online playback state.
+
+The online track still participates in ordinary playback controls such as pause, seek, volume, repeat, and MPRIS metadata. Bad Larry can also interfere with an active online stream because apparently the cat has jurisdiction over the internet now.
+
+This feature is intentionally **opt-in and experimental**. It requires a working `yt-dlp` executable on `PATH`, and YouTube-side changes can temporarily break extraction until `yt-dlp` catches up. Local playback remains completely independent.
+
+MeowPlayer does not deliberately download the selected track into your music library. The selected URL is handed to mpv, whose ytdl hook asks `yt-dlp` to resolve a playable stream.
+
+This is an unofficial integration built around mpv + yt-dlp, not an official YouTube Music API client.
+
+### Internet Nest controls
+
+```text
+Y          search YouTube / open Internet Nest
+↑ / ↓      choose a search result
+Enter      stream selected result
+/          search again while in Internet Nest
+Q or Esc   return to the local Music Nest
+Space      pause / resume
+← / →      seek
+```
+
+If `--youtube` is enabled but `yt-dlp` is missing, MeowPlayer fails soft and tells you what is unavailable. Your local library continues to work normally.
 
 ## What's new in 0.15.1 — The Lyrics Cat Learned Suspicion
 
@@ -533,6 +599,9 @@ Install the system runtime dependency and `pipx`:
 sudo pacman -S mpv python-pipx
 pipx ensurepath
 
+# Optional: online YouTube playback
+sudo pacman -S yt-dlp
+
 # Optional: make the bars wiggle
 sudo pacman -S cava
 ```
@@ -578,6 +647,7 @@ meowplayer --no-online-lyrics
 meowplayer --no-online-metadata
 meowplayer --no-visualizer
 meowplayer --no-watch
+meowplayer --youtube
 meowplayer --version
 ```
 
@@ -593,6 +663,9 @@ pipx reinstall meowplayer-terminal
 
 ```bash
 sudo apt install python3 mpv
+# Optional online playback:
+sudo apt install yt-dlp
+
 git clone https://github.com/Luqman234/MeowPlayer.git
 cd MeowPlayer
 python3 -m pip install .
@@ -604,6 +677,8 @@ meowplayer
 ```bash
 pkg update
 pkg install python python-pip mpv git
+# Optional online playback:
+pkg install yt-dlp
 termux-setup-storage
 
 cd ~
@@ -634,7 +709,8 @@ MPRIS is intentionally disabled on Termux because a normal Linux desktop D-Bus s
 - Pillow for album-art normalization/cache
 - Watchdog 6.x for live filesystem events
 - CAVA *(optional)* for the spectrum
-- Internet access *(optional)* for LRCLIB lyrics and MusicBrainz metadata enrichment
+- `yt-dlp` *(optional)* for `--youtube` search and streaming
+- Internet access *(optional)* for LRCLIB lyrics, MusicBrainz metadata enrichment, and YouTube playback
 - A terminal with curses support
 - Unix-domain socket support
 
@@ -642,7 +718,7 @@ Python dependencies live in `pyproject.toml` and are installed by normal `pip` /
 
 If Mutagen is unavailable, MeowPlayer can still discover and play files using filename/folder fallbacks, but rich metadata and cached duration will naturally be worse.
 
-If the internet disappears, the local player still plays. Downloaded lyrics and cached metadata remain available according to what was already stored. This is a music player, not a login screen with an audio feature.
+If the internet disappears, the local player still plays. Downloaded lyrics and cached metadata remain available according to what was already stored. YouTube search/streaming simply becomes unavailable. This is a music player, not a login screen with an audio feature.
 
 ## Music library views
 
