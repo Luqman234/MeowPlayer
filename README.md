@@ -79,6 +79,27 @@ MeowPlayer tries to stay true to a few rules:
 
 ## What's new in 0.15.1 — The Lyrics Cat Learned Suspicion
 
+### Emergency feline maintenance flags
+
+MeowPlayer now has two deliberately ridiculous cache-cleanup commands:
+
+```bash
+meowplayer --bad-bad-cat
+meowplayer --very-bad-cat
+```
+
+`--bad-bad-cat` clears only downloaded LRCLIB lyrics and exits. The more destructive `--very-bad-cat` clears the whole disposable MeowPlayer cache tree, including downloaded lyrics and generated album-art cache.
+
+For humans who insist on respectable command names, the exact same actions are also available as:
+
+```bash
+meowplayer --clear-lyrics-cache
+meowplayer --clear-cache
+```
+
+Neither command deletes configuration, saved playback state, Smart Mix definitions, ratings/history, or the persistent Cat Catalog.
+
+
 MeowPlayer 0.15.1 is a small release with one very important lesson:
 
 > finding lyrics is not the same thing as finding the **right** lyrics.
