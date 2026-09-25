@@ -1177,12 +1177,13 @@ class MeowPlayer:
         self.last_state_save = now
 
     def mpris_snapshot(self):
+        active = self.has_active_track()
         idle = True
         paused = False
         position = 0.0
         duration = 0.0
 
-        if self.current is not None:
+        if active:
             idle = bool(self.mpv.get_property("idle-active"))
             paused = bool(self.mpv.get_property("pause"))
 
@@ -1200,10 +1201,10 @@ class MeowPlayer:
             except (TypeError, ValueError):
                 duration = 0.0
 
-            if duration <= 0 and self.current is not None:
-                duration = self.meta(self.current).duration
+            if duration <= 0:
+                duration = self.current_duration_fallback()
 
-        if self.current is None or idle:
+        if not active or idle:
             playback_status = "Stopped"
         elif paused:
             playback_status = "Paused"
@@ -1211,7 +1212,26 @@ class MeowPlayer:
             playback_status = "Playing"
 
         metadata = None
-        if self.current is not None:
+        if self.online_current is not None:
+            track = self.online_current
+            safe_id = "".join(
+                char if char.isalnum() else "_"
+                for char in track.video_id
+            )
+            metadata = {
+                "track_id": (
+                    f"/org/mpris/MediaPlayer2/track/youtube_{safe_id}"
+                ),
+                "title": track.title,
+                "artist": track.artist,
+                "album": "YouTube",
+                "album_artist": track.artist,
+                "genre": "YouTube",
+                "art_url": track.thumbnail_url or None,
+                "url": track.url,
+                "length_us": int(max(0.0, duration) * 1_000_000),
+            }
+        elif self.current is not None:
             meta = self.meta(self.current)
             cover_path = (
                 self.album_art.cover_for(self.songs[self.current])
@@ -1256,8 +1276,10 @@ class MeowPlayer:
             "volume": self.volume / 100.0,
             "position_us": int(max(0.0, position) * 1_000_000),
             "metadata": metadata,
-            "has_track": self.current is not None and not idle,
-            "has_tracks": bool(self.songs),
+            "has_track": active and not idle,
+            "has_tracks": bool(
+                self.songs or self.youtube_results or self.youtube.enabled
+            ),
         }
 
     def sync_mpris(self, force=False):
@@ -1289,10 +1311,15 @@ class MeowPlayer:
             elif action == "previous":
                 self.previous_song()
             elif action == "pause":
-                if self.current is not None:
+                if self.has_active_track():
                     self.mpv.pause()
             elif action == "play":
-                if self.current is None:
+                if self.online_current is not None:
+                    if bool(self.mpv.get_property("idle-active")):
+                        self.play_online(self.online_current)
+                    else:
+                        self.mpv.play()
+                elif self.current is None:
                     self.play_selected_library_song()
                 elif bool(self.mpv.get_property("idle-active")):
                     self.play(
@@ -1304,7 +1331,12 @@ class MeowPlayer:
                 else:
                     self.mpv.play()
             elif action == "play_pause":
-                if self.current is None:
+                if self.online_current is not None:
+                    if bool(self.mpv.get_property("idle-active")):
+                        self.play_online(self.online_current)
+                    else:
+                        self.mpv.toggle_pause()
+                elif self.current is None:
                     self.play_selected_library_song()
                 elif bool(self.mpv.get_property("idle-active")):
                     self.play(
@@ -1316,13 +1348,13 @@ class MeowPlayer:
                 else:
                     self.mpv.toggle_pause()
             elif action == "stop":
-                if self.current is not None:
+                if self.has_active_track():
                     self.mpv.stop()
-            elif action == "seek" and self.current is not None:
+            elif action == "seek" and self.has_active_track():
                 self.mpv.seek(args[0])
                 position = self.mpv.get_property("time-pos") or 0
                 self.mpris.notify_seeked(float(position) * 1_000_000)
-            elif action == "set_position" and self.current is not None:
+            elif action == "set_position" and self.has_active_track():
                 self.mpv.seek_absolute(args[0])
                 self.mpris.notify_seeked(args[0] * 1_000_000)
             elif action == "set_volume":
