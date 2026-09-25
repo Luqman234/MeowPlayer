@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meowplayer-terminal"
-version = "0.17.0"
+version = "0.17.1"
 description = "A lightweight, aggressively cat-themed terminal music player powered by mpv."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -69,6 +69,7 @@ py-modules = [
     "meow_smart",
     "meow_persistence",
     "meow_logging",
+    "settings_nest",
     "mpris_support",
     "online_metadata",
     "visualizer",

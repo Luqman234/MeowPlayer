@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.17.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.17.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.17.1 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,44 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.17.1 — The Cat Has Obtained a Settings Nest
+
+MeowPlayer 0.17.1 gives the cat a first-class configuration screen and fixes the packaging mistake that briefly caused the cat to ship the house without the nest.
+
+Press `,` from the TUI to open **Settings Nest**.
+
+```text
+SETTINGS NEST
+
+  Remember yesterday's nap               [ ON ]       NEXT LAUNCH
+  Desktop cat privileges                 [ ON ]       NEXT LAUNCH
+  Terminal rectangle pictures            [ ON ]       LIVE
+>^.^< No awkward silence between zoomies [ weak ]     LIVE
+  Volume diplomacy                       [ track ]     LIVE
+  Extra loudness seasoning               [ +0.0 dB ]  LIVE
+  Songbook                               [ ON ]       LIVE
+  Internet lyric cats                    [ ON ]       LIVE
+  Metadata detective cat                 [ ON ]       LIVE
+  Wiggly fence                           [ ON ]       LIVE
+  Hear files move through walls          [ ON ]       LIVE
+```
+
+The Settings Nest edits the same persistent XDG config used by the rest of MeowPlayer. Live-safe settings apply immediately; settings that would require restarting a subsystem are clearly marked **NEXT LAUNCH**.
+
+0.17.1 also fixes the clean-install packaging failure where `meowplayer.py` imported `settings_nest` but the wheel did not contain `settings_nest.py`. The module is now explicitly included in the setuptools `py-modules` list, so wheel/sdist smoke installs can actually find the nest they were promised.
+
+The Internet Nest also now uses a **🐾 paw marker for the actively streaming online track in cat mode** instead of the generic 🌐 internet globe. Serious Mode keeps the conventional `▶` marker, while `>^.^<` remains the ordinary selection cursor for a highlighted result that is not currently playing.
+
+In short:
+
+```text
+0.17.0: the cat learned to follow an Artist Scent
+0.17.1: the cat obtained a settings panel
+        and remembered to put it in the box
+```
+
+> **MeowPlayer 0.17.1 — household rules are now editable from the TUI, and the wheel once again contains all required cats.**
 
 ## What's new in 0.17.0 — The Cat Has Discovered That Songs Come From Humans
 
@@ -1073,6 +1111,14 @@ query: porter robinson shelter
       Something Comforting — Porter Robinson · 4:41 · YouTube
 ```
 
+Once an online result is actually streaming, cat mode marks that active row with a paw:
+
+```text
+🐾 Shelter — Porter Robinson & Madeon · 3:38 · YouTube
+```
+
+`>^.^<` is still the selection cursor for a highlighted result; `🐾` means **this is the Internet Nest track currently playing**. Serious Mode uses `▶` instead.
+
 The implementation deliberately keeps the local and online worlds separate:
 
 ```text
@@ -1581,6 +1627,20 @@ This section is intentionally long because calling MeowPlayer a "tiny terminal w
 - Linux MPRIS / D-Bus integration
 - `playerctl`, media keys, MPRIS metadata, and `mpris:artUrl`
 - Native Termux defaults and narrower phone-friendly behavior
+
+### Settings Nest — edit household rules without touching JSON
+
+- Press `,` from the TUI to open the **Settings Nest**
+- Arrow-key navigation with live value previews
+- `Enter` / `Space` toggles booleans or cycles values
+- `←` / `→` adjusts choices and ReplayGain preamp
+- `R` restores the selected option to its default
+- Changes are written through MeowPlayer's normal XDG config writer
+- Settings clearly say **LIVE** or **NEXT LAUNCH** instead of pretending everything hot-reloads
+- Live controls include gapless mode, ReplayGain, lyrics, online lyrics, MusicBrainz, album art, CAVA, and filesystem watching
+- Session restore and MPRIS are saved for the next launch
+
+In other words, editing `~/.config/meowplayer/config.json` by hand is still allowed, but no longer a mandatory rite of passage.
 
 ### Necessary feline infrastructure — absolutely essential, do not audit
 
@@ -2732,6 +2792,7 @@ Loaded playlist entries must resolve to tracks already indexed in the current li
 | `V` | Toggle live spectrum visualizer |
 | `M` | Reload custom Smart Mix rules |
 | `G` | Pet the cat / add one Scritch |
+| `,` | Open the Settings Nest |
 | `Space` | Paws / resume |
 | `←` / `→` | Scritch backward / forward 5 seconds |
 | `N` | Next meow |
@@ -2740,6 +2801,72 @@ Loaded playlist entries must resolve to tracks already indexed in the current li
 | `S` | Toggle Pounce Mode |
 | `R` | Toggle Tail-Chase |
 | `X` | Quit / escape before the cat notices |
+
+## Settings Nest — the cat has obtained a control panel
+
+Press `,` from the main TUI to open the **Settings Nest**.
+
+```text
+SETTINGS NEST — 11 household rule(s)
+
+  Remember yesterday's nap              [     ON     ]  NEXT LAUNCH
+  Desktop cat privileges                [     ON     ]  NEXT LAUNCH
+  Terminal rectangle pictures           [     ON     ]  LIVE
+>^.^< No awkward silence between zoomies [    weak    ]  LIVE
+  Volume diplomacy                      [   track    ]  LIVE
+  Extra loudness seasoning              [  +0.0 dB   ]  LIVE
+  Songbook                              [     ON     ]  LIVE
+  Internet lyric cats                   [     ON     ]  LIVE
+  Metadata detective cat                [     ON     ]  LIVE
+  Wiggly fence                          [     ON     ]  LIVE
+  Hear files move through walls         [     ON     ]  LIVE
+```
+
+Controls:
+
+| Key | Settings Nest action |
+| --- | --- |
+| `↑` / `↓` | Move the paw |
+| `←` / `→` | Change/cycle the selected value |
+| `Enter` / `Space` | Toggle or advance the selected value |
+| `R` | Reset the selected option to its default |
+| `,` / `Q` / `Esc` | Leave Settings Nest and return to the previous view |
+| `X` | Quit MeowPlayer |
+
+Settings marked **LIVE** update the running player immediately. Settings marked **NEXT LAUNCH** are saved immediately but intentionally do not attempt a risky hot restart of their subsystem.
+
+Current live settings include:
+
+```text
+album art
+gapless mode
+ReplayGain mode
+ReplayGain preamp
+lyrics
+online lyrics
+MusicBrainz metadata
+CAVA visualizer
+filesystem watching
+```
+
+The two deliberate next-launch settings are:
+
+```text
+restore_session
+mpris_enabled
+```
+
+MPRIS stays next-launch because disconnecting and re-registering a D-Bus media service in the middle of normal playback is substantially more exciting than a settings screen needs to be.
+
+Every change still goes through the ordinary XDG config path:
+
+```text
+~/.config/meowplayer/config.json
+```
+
+So Settings Nest is not a second configuration system. It is simply a TUI editor for the same household rules.
+
+> **The cat may now edit configuration. The cat still does not get arbitrary JSON access.**
 
 ## Persistent config and state — because the cat has a memory now, unfortunately
 
@@ -2985,7 +3112,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.17.1 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -3116,8 +3243,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.17.0-py3-none-any.whl
-└── meowplayer_terminal-0.17.0.tar.gz
+├── meowplayer_terminal-0.17.1-py3-none-any.whl
+└── meowplayer_terminal-0.17.1.tar.gz
 ```
 
 The installed CLI is still:
@@ -3138,6 +3265,7 @@ MeowPlayer/
 ├── meow_catalog.py            # SQLite Cat Catalog + migrations
 ├── meow_smart.py              # Smart Mix parser/generator
 ├── meow_persistence.py        # XDG config + runtime state
+├── settings_nest.py           # Settings Nest definitions/value logic
 ├── meow_logging.py            # rotating debug logs + XDG log paths
 ├── mpris_support.py           # Linux MPRIS bridge
 ├── visualizer.py              # CAVA raw spectrum integration

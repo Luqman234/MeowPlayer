@@ -59,6 +59,12 @@ from online_metadata import (
     needs_online_metadata,
 )
 from visualizer import AudioVisualizer
+from settings_nest import (
+    SETTINGS_SPECS,
+    adjust_setting_value,
+    format_setting_value,
+    normalize_setting_value,
+)
 from youtube_online import (
     YouTubeCatalog,
     YouTubeStreamResolver,
@@ -68,7 +74,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.17.0"
+__version__ = "0.17.1"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -872,6 +878,7 @@ class MeowPlayer:
         youtube_enabled=False,
         debug_log_path=None,
         mpv_log_path=None,
+        app_config=None,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.debug_log_path = (
@@ -919,6 +926,9 @@ class MeowPlayer:
         self.online_load_state = "idle"
         self.online_load_started_at = 0.0
         self.saved_state = saved_state or {}
+        self.app_config = dict(app_config or {})
+        self.settings_selected = 0
+        self.settings_return_view = "library"
         self.restore_session_enabled = restore_session
         self.mpris_enabled = mpris_enabled and not _is_termux()
         self.album_art = AlbumArtManager(
@@ -1687,6 +1697,138 @@ class MeowPlayer:
     def set_status(self, serious, cat):
         self.status_message = self.text(serious, cat)
         LOGGER.debug("status=%s", self.status_message)
+
+    def open_settings_nest(self):
+        if self.view != "settings":
+            self.settings_return_view = self.view
+        self.view = "settings"
+        self.settings_selected = max(
+            0,
+            min(self.settings_selected, len(SETTINGS_SPECS) - 1),
+        )
+        self.set_status(
+            "Opened settings.",
+            "Opened the Settings Nest. Please do not let the cat edit JSON directly.",
+        )
+
+    def close_settings_nest(self):
+        target = self.settings_return_view
+        if target == "settings":
+            target = "library"
+        self.view = target
+        self.set_status(
+            "Settings saved.",
+            "Settings Nest closed. The household rules have been filed under P for Paws.",
+        )
+
+    def setting_value(self, spec):
+        return normalize_setting_value(
+            spec,
+            self.app_config.get(spec.key, spec.default),
+        )
+
+    def _persist_setting(self, spec, value):
+        self.app_config[spec.key] = value
+        saved = save_config(self.app_config)
+        LOGGER.info(
+            "Settings Nest changed key=%s value=%r saved=%s",
+            spec.key,
+            value,
+            saved,
+        )
+        return saved
+
+    def _apply_live_setting(self, spec, value):
+        if not spec.live:
+            return False
+
+        key = spec.key
+        if key == "gapless_mode":
+            self.gapless_mode = value
+            self.mpv.set_property("gapless-audio", value)
+            self.prime_gapless_next()
+        elif key == "replaygain_mode":
+            self.replaygain_mode = value
+            self.mpv.set_property("replaygain", value)
+        elif key == "replaygain_preamp":
+            self.replaygain_preamp = float(value)
+            self.mpv.set_property("replaygain-preamp", float(value))
+        elif key == "lyrics_enabled":
+            self.lyrics.enabled = bool(value)
+            if not value:
+                self.current_lyrics = None
+        elif key == "lyrics_online_enabled":
+            self.lyrics.online_enabled = bool(value)
+        elif key == "online_metadata_enabled":
+            self.online_metadata.enabled = bool(value)
+        elif key == "visualizer_enabled":
+            self.visualizer.stop()
+            self.visualizer = AudioVisualizer(enabled=bool(value))
+        elif key == "album_art_enabled":
+            self.album_art.clear(free_data=True)
+            self.album_art = AlbumArtManager(
+                enabled=bool(value) and not _is_termux()
+            )
+        elif key == "filesystem_watch_enabled":
+            self.library_watcher.stop()
+            self.library_watcher = LibraryWatcher(
+                self.music_dir,
+                SUPPORTED_EXTENSIONS,
+                enabled=bool(value),
+            )
+            self.library_watcher.start()
+        else:
+            return False
+
+        return True
+
+    def change_selected_setting(self, direction=1, reset=False):
+        if not SETTINGS_SPECS:
+            return False
+
+        self.settings_selected = max(
+            0,
+            min(self.settings_selected, len(SETTINGS_SPECS) - 1),
+        )
+        spec = SETTINGS_SPECS[self.settings_selected]
+        old_value = self.setting_value(spec)
+        new_value = (
+            normalize_setting_value(spec, spec.default)
+            if reset
+            else adjust_setting_value(spec, old_value, direction)
+        )
+
+        if new_value == old_value:
+            return False
+
+        saved = self._persist_setting(spec, new_value)
+        applied_live = self._apply_live_setting(spec, new_value)
+
+        if not saved:
+            self.set_status(
+                f"Changed {spec.label}, but config could not be saved.",
+                f"The cat changed {spec.cat_label}, then misplaced the config file.",
+            )
+        elif applied_live:
+            self.set_status(
+                f"{spec.label}: {format_setting_value(spec, new_value)} (live).",
+                (
+                    f"{spec.cat_label}: {format_setting_value(spec, new_value)}. "
+                    "The cat applied it immediately."
+                ),
+            )
+        else:
+            self.set_status(
+                (
+                    f"{spec.label}: {format_setting_value(spec, new_value)} "
+                    "(saved for next launch)."
+                ),
+                (
+                    f"{spec.cat_label}: {format_setting_value(spec, new_value)}. "
+                    "The cat wrote it down for the next summoning."
+                ),
+            )
+        return True
 
     def has_active_track(self):
         return self.current is not None or self.online_current is not None
@@ -4885,7 +5027,7 @@ class MeowPlayer:
             )
 
             if playing:
-                prefix = "▶  " if self.serious_mode else "🌐 "
+                prefix = "▶  " if self.serious_mode else "🐾 "
             elif selected and not self.serious_mode:
                 prefix = ">^.^< "
             else:
@@ -4904,6 +5046,73 @@ class MeowPlayer:
                     2,
                     (prefix + label)[:max(1, width - 4)],
                     attr,
+                )
+            except curses.error:
+                pass
+
+        return scroll
+
+    def draw_settings(
+        self,
+        stdscr,
+        width,
+        list_start,
+        list_height,
+        scroll,
+    ):
+        count = len(SETTINGS_SPECS)
+        if not count:
+            return 0
+
+        self.settings_selected = max(
+            0,
+            min(self.settings_selected, count - 1),
+        )
+        if self.settings_selected < scroll:
+            scroll = self.settings_selected
+        if self.settings_selected >= scroll + list_height:
+            scroll = self.settings_selected - list_height + 1
+
+        for screen_row, setting_index in enumerate(
+            range(scroll, min(count, scroll + list_height))
+        ):
+            spec = SETTINGS_SPECS[setting_index]
+            selected = setting_index == self.settings_selected
+            value = format_setting_value(spec, self.setting_value(spec))
+            label = spec.label if self.serious_mode else spec.cat_label
+            scope = "LIVE" if spec.live else "NEXT LAUNCH"
+            prefix = (
+                "> " if self.serious_mode and selected
+                else ">^.^< " if selected
+                else "  "
+            )
+            text = f"{prefix}{label:<34} [{value:^12}]  {scope}"
+            attr = curses.A_REVERSE if selected else curses.A_NORMAL
+            if not spec.live:
+                attr |= curses.A_DIM
+
+            try:
+                stdscr.addstr(
+                    list_start + screen_row,
+                    2,
+                    text[:max(1, width - 4)],
+                    attr,
+                )
+            except curses.error:
+                pass
+
+        detail_row = list_start + min(count - scroll, list_height)
+        if detail_row < list_start + list_height:
+            spec = SETTINGS_SPECS[self.settings_selected]
+            detail = spec.description
+            if not spec.live:
+                detail += " Saved now; takes effect on the next launch."
+            try:
+                stdscr.addstr(
+                    detail_row,
+                    2,
+                    detail[:max(1, width - 4)],
+                    curses.A_DIM,
                 )
             except curses.error:
                 pass
@@ -4931,6 +5140,7 @@ class MeowPlayer:
         library_scroll = 0
         stash_scroll = 0
         youtube_scroll = 0
+        settings_scroll = 0
         self.sync_mpris(force=True)
 
         while True:
@@ -4978,7 +5188,7 @@ class MeowPlayer:
             album_art_path = self.current_album_art()
             art_layout = (
                 None
-                if self.view == "lyrics"
+                if self.view in {"lyrics", "settings"}
                 else self.album_art_layout(
                     height,
                     width,
@@ -5189,6 +5399,18 @@ class MeowPlayer:
                             f"{self.current_lyrics.source} · {follow}"
                         )
                     )
+            elif self.view == "settings":
+                spec = SETTINGS_SPECS[self.settings_selected]
+                mode_line = self.text(
+                    (
+                        f"Settings — {len(SETTINGS_SPECS)} option(s) · "
+                        f"selected: {spec.label}"
+                    ),
+                    (
+                        f"SETTINGS NEST — {len(SETTINGS_SPECS)} household rule(s) · "
+                        f"paw on: {spec.cat_label}"
+                    ),
+                )
             elif self.view == "online":
                 query = self.youtube_query or "none"
                 artist_search = self.youtube_search_mode == "artist"
@@ -5326,6 +5548,14 @@ class MeowPlayer:
                     list_height,
                     library_scroll,
                 )
+            elif self.view == "settings":
+                settings_scroll = self.draw_settings(
+                    stdscr,
+                    width,
+                    list_start,
+                    list_height,
+                    settings_scroll,
+                )
             elif self.view == "online":
                 youtube_scroll = self.draw_youtube(
                     stdscr,
@@ -5356,52 +5586,65 @@ class MeowPlayer:
                 if self.serious_mode:
                     controls = (
                         "↑↓ Scroll  ENTER Follow  [ ] Rate  L Back  V Visualizer  "
-                        "N/P Track  Space Pause  X Quit"
+                        "N/P Track  , Settings  Space Pause  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Scroll  ENTER Follow  [ ] Judge  L Close Songbook  "
-                        "N/P Meow  G Pet  Space Paws  X Escape"
+                        "N/P Meow  , Settings  G Pet  Space Paws  X Escape"
                     )
                     quote = self.cat_footer_message()
             elif self.view == "library":
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Open/Play  1-7 Views  F Favorite  "
-                        "[ ] Rate  L Lyrics  V Viz  M Mixes  Y YouTube  Q Queue  X Quit"
+                        "[ ] Rate  L Lyrics  V Viz  M Mixes  Y YouTube  , Settings  Q Queue  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Open/Purr  1-7 Nests  F Pawmark  "
-                        "[ ] Judge  L Songbook  M Mixes  Y Internet  G Pet  Q Catnip"
+                        "[ ] Judge  L Songbook  M Mixes  Y Internet  , Settings  G Pet  Q Catnip"
+                    )
+                    quote = self.cat_footer_message()
+            elif self.view == "settings":
+                if self.serious_mode:
+                    controls = (
+                        "↑↓ Select  ←→ Change  Enter/Space Toggle  "
+                        "R Reset  ,/Q/Esc Back  X Quit"
+                    )
+                    quote = ""
+                else:
+                    controls = (
+                        "↑↓ Paw  ←→ Nudge  Enter/Space Change  "
+                        "R Factory Meow  ,/Q/Esc Leave Nest  X Escape"
                     )
                     quote = self.cat_footer_message()
             elif self.view == "online":
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Stream  / Search  A Artist  Y Search  "
-                        "Q Library  Space Pause  X Quit"
+                        ", Settings  Q Library  Space Pause  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Stream  / Hunt  A Artist Scent  Y Search  "
-                        "Q Nest  Space Paws  X Escape"
+                        ", Settings  Q Nest  Space Paws  X Escape"
                     )
                     quote = self.cat_footer_message()
             else:
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Play  [ ] Rate  D Remove  J/K Move  "
-                        "C Clear  W Save .m3u  O Load .m3u  Q Library  X Quit"
+                        "C Clear  W Save .m3u  O Load .m3u  , Settings  Q Library  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Devour  [ ] Judge  D Yeet  J/K Rearrange  "
-                        "C Spill  W Bury .m3u  O Dig up .m3u  G Pet  Q Nest  X Escape"
+                        "C Spill  W Bury .m3u  O Dig up .m3u  , Settings  G Pet  Q Nest  X Escape"
                     )
                     quote = self.cat_footer_message()
 
@@ -5431,9 +5674,13 @@ class MeowPlayer:
             stdscr.refresh()
 
             render_art_layout = (
-                lyrics_art_layout
-                if self.view == "lyrics"
-                else art_layout
+                None
+                if self.view == "settings"
+                else (
+                    lyrics_art_layout
+                    if self.view == "lyrics"
+                    else art_layout
+                )
             )
             if render_art_layout is not None:
                 self.album_art.render(
@@ -5500,6 +5747,42 @@ class MeowPlayer:
                         "BAD LARRY: FORMAL APOLOGY REJECTED.",
                         duration=6.0,
                     )
+                continue
+
+            if self.view == "settings":
+                if key == curses.KEY_UP:
+                    self.settings_selected = max(
+                        0,
+                        self.settings_selected - 1,
+                    )
+                    continue
+                if key == curses.KEY_DOWN:
+                    self.settings_selected = min(
+                        len(SETTINGS_SPECS) - 1,
+                        self.settings_selected + 1,
+                    )
+                    continue
+                if key == curses.KEY_LEFT:
+                    self.change_selected_setting(direction=-1)
+                    continue
+                if key == curses.KEY_RIGHT:
+                    self.change_selected_setting(direction=1)
+                    continue
+                if key in (10, 13, curses.KEY_ENTER, ord(" ")):
+                    self.change_selected_setting(direction=1)
+                    continue
+                if key in (ord("r"), ord("R")):
+                    self.change_selected_setting(reset=True)
+                    continue
+                if key in (ord(","), ord("q"), ord("Q"), 27):
+                    self.close_settings_nest()
+                    continue
+                if key not in (ord("x"), ord("X")):
+                    continue
+
+            if key == ord(","):
+                self.open_settings_nest()
+                settings_scroll = 0
                 continue
 
             if key in (ord("x"), ord("X")):
@@ -6166,6 +6449,7 @@ def main():
             youtube_enabled=args.youtube,
             debug_log_path=debug_log_path,
             mpv_log_path=mpv_log_path,
+            app_config=config,
         )
     except FileNotFoundError:
         LOGGER.exception("MPV executable was not found during player startup")
