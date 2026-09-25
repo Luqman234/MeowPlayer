@@ -272,7 +272,12 @@ def _metadata_text(tags, *names):
     for name in names:
         try:
             value = tags.get(name)
-        except (AttributeError, TypeError):
+        except (AttributeError, KeyError, TypeError, ValueError):
+            # Mutagen tag containers do not all accept the same key syntax.
+            # For example, MP4 aliases such as "©alb" are invalid Vorbis
+            # comment keys and Mutagen raises ValueError rather than treating
+            # them as a simple miss. One incompatible alias must not prevent
+            # trying the remaining metadata names or crash session restore.
             value = None
         text = _string_value(value)
         if text:
