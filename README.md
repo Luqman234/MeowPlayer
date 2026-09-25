@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.17.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.17.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB and optional Musixmatch can help the Songbook find words, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -75,7 +75,7 @@ MeowPlayer tries to stay true to a few rules:
 | Playback | `mpv` JSON IPC, gapless priming, ReplayGain, optional yt-dlp online streams |
 | Library | SQLite **Cat Catalog**, recursive scanning, Watchdog/inotify |
 | Metadata | Mutagen locally, optional MusicBrainz enrichment for missing fields |
-| Lyrics | sidecar/embedded lyrics + optional LRCLIB synchronized/plain lookup |
+| Lyrics | sidecar/embedded lyrics + LRCLIB + optional Musixmatch API fallback |
 | Discovery | Artists, Albums, Folders/Nests, Pawmarks, Purr History, Smart Mixes |
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
@@ -1567,8 +1567,10 @@ This section is intentionally long because calling MeowPlayer a "tiny terminal w
 
 - Same-name `.lrc` and `.txt` sidecars
 - Embedded synchronized/plain lyrics
-- Optional **LRCLIB** synchronized lookup
-- Background download + persistent local LRC cache
+- Optional **LRCLIB** synchronized/plain lookup
+- Optional **Musixmatch** synchronized/plain fallback with a user-provided API key
+- LRCLIB downloads can use the persistent local lyric cache; Musixmatch API responses stay session-only
+- Background provider chain prefers synchronized lyrics before settling for plain text
 - Truthful `Searching`, `network error`, and `not found` states instead of instantly blaming the song
 - Live timestamp following and manual scroll
 - Adaptive **lyrics + album-art split view** on wide Kitty terminals
@@ -1650,6 +1652,7 @@ meowplayer --replaygain track
 meowplayer --replaygain album --replaygain-preamp -1.0
 meowplayer --no-lyrics
 meowplayer --no-online-lyrics
+meowplayer --no-musixmatch
 meowplayer --no-online-metadata
 meowplayer --no-visualizer
 meowplayer --no-watch
@@ -1719,7 +1722,8 @@ MPRIS is intentionally disabled on Termux because a normal Linux desktop D-Bus s
 - Watchdog 6.x for live filesystem events
 - CAVA *(optional)* for the spectrum
 - `yt-dlp` *(optional)* for `--youtube` search and streaming
-- Internet access *(optional)* for LRCLIB lyrics, MusicBrainz metadata enrichment, and YouTube playback
+- Internet access *(optional)* for LRCLIB lyrics, optional Musixmatch fallback, MusicBrainz metadata enrichment, and YouTube playback
+- A Musixmatch developer API key *(optional)* if you want the second online lyric cat
 - A terminal with curses support
 - Unix-domain socket support
 
@@ -2292,27 +2296,43 @@ Disable it for one run:
 meowplayer --no-watch
 ```
 
-## Lyrics / Songbook — the cat has obtained the words and will now sing incorrectly
+## Lyrics / Songbook — two online lyric cats, one Songbook, zero vocal training
 
 Press `L` to open the **Songbook**.
 
 This is where the terminal music player briefly decides it is also a karaoke machine, except nobody promised the cat can carry a tune.
 
-MeowPlayer resolves lyrics in this order:
+MeowPlayer resolves lyrics with local files first and online providers as a background upgrade path:
 
 ```text
 same-name .lrc sidecar
         ↓
-downloaded LRCLIB cache
+downloaded LRCLIB synchronized cache
         ↓
 embedded synchronized lyrics
         ↓
-LRCLIB synchronized lookup (background)
-        ↓
+background online hunt starts
+        │
+        ├── LRCLIB synced? ───────────────→ use it + cache it
+        │
+        ├── LRCLIB plain? ────────────────→ hold as fallback
+        │
+        └── Musixmatch configured?
+                 ↓
+            synced subtitle? ─────────────→ use it for this session
+                 ↓ no
+            plain lyrics? ────────────────→ use if no better result
+
+Meanwhile, local plain lyrics are still immediately useful:
+
 same-name .txt sidecar
         ↓
 embedded plain lyrics
+        ↓
+downloaded LRCLIB plain cache
 ```
+
+The important bit: if LRCLIB only has plain lyrics but Musixmatch has synchronized subtitles, the synchronized result wins. The cat may be goofy; provider precedence is not.
 
 A local sidecar can simply live beside the song:
 
@@ -2333,23 +2353,35 @@ Synchronized LRC example:
 
 Multiple timestamps per line and standard `[offset:+/-milliseconds]` tags are supported.
 
-### Online LRCLIB lookup — ask the internet what the cat forgot
+### Online lyric providers — deploy Cat One, then Licensed Cat Two
 
-If synchronized lyrics are not available locally, MeowPlayer can ask **LRCLIB** in the background.
+If synchronized lyrics are not available locally, MeowPlayer asks **LRCLIB** first. If Musixmatch is configured and LRCLIB does not produce synchronized lyrics, MeowPlayer can ask the official **Musixmatch API** as a second provider.
 
 The UI distinguishes real states instead of immediately declaring defeat:
 
 ```text
 Searching LRCLIB for: Artist Title
         ↓
-found        → load + cache synchronized LRC
-not found    → report the query that actually missed
-network fail → report failure and allow a later retry
+synced found → use + cache LRCLIB result
+plain found  → keep it in one paw, keep searching
+no result    → deploy Musixmatch if configured
+        ↓
+Musixmatch subtitle found → synchronized Songbook, session-only
+Musixmatch plain found    → plain Songbook, session-only
+both empty                → report the scent that missed
 ```
 
-Transient network failure gets an automatic retry. Failed requests are not cached as permanent `None`, so one bad connection cannot curse the track for the rest of the session.
+In cat terms:
 
-Search fallback is intentionally forgiving of messy files: MeowPlayer can fall back from tagged metadata to artist/title search, filename stem, and title-only search.
+```text
+LRCLIB cat:      "I found words."
+Musixmatch cat:  "I found TIMED words."
+MeowPlayer:      "excellent, timed words win."
+```
+
+Transient network failure gets an automatic retry. Failed requests are not cached as permanent `None`, so one bad connection cannot curse the track for the rest of the session. If one provider fails but the other succeeds, the successful cat gets the Songbook.
+
+LRCLIB matching is intentionally forgiving of messy files: MeowPlayer can fall back from tagged metadata to artist/title search, filename stem, and title-only search. Musixmatch's official matcher is queried with track title + artist, with filename-derived artist/title as a fallback when useful.
 
 Successful downloads are cached under:
 
@@ -2357,12 +2389,20 @@ Successful downloads are cached under:
 ~/.cache/meowplayer/lyrics/
 ```
 
-or `$XDG_CACHE_HOME/meowplayer/lyrics/`. Once cached, they can be reused later without another network lookup. A user-provided same-name `.lrc` still has priority.
+or `$XDG_CACHE_HOME/meowplayer/lyrics/`. Those cached files are **LRCLIB results** and can be reused later without another network lookup. A user-provided same-name `.lrc` still has priority.
 
-Disable only online lookup:
+Musixmatch is treated differently: MeowPlayer displays official API results in memory for the current session but **does not persist Musixmatch lyric/subtitle bodies to the local lyric cache**. Licensed lyric cat visits; licensed lyric cat does not move into `~/.cache`.
+
+Disable all online lyric lookup:
 
 ```bash
 meowplayer --no-online-lyrics
+```
+
+Disable only Musixmatch while leaving LRCLIB online:
+
+```bash
+meowplayer --no-musixmatch
 ```
 
 Disable the entire lyrics subsystem:
@@ -2375,8 +2415,20 @@ Persistent config:
 
 ```json
 "lyrics_enabled": true,
-"lyrics_online_enabled": true
+"lyrics_online_enabled": true,
+"lyrics_lrclib_enabled": true,
+"lyrics_musixmatch_enabled": true,
+"musixmatch_api_key": null
 ```
+
+The recommended way to provide the Musixmatch key is an environment variable so the credential does not have to live in JSON:
+
+```bash
+export MUSIXMATCH_API_KEY='your-key-here'
+meowplayer
+```
+
+`MUSIXMATCH_API_KEY` takes precedence over `musixmatch_api_key` in the config file. The key is only sent to the official Musixmatch API; MeowPlayer does not log it intentionally.
 
 ### Songbook controls — pages, paws, and poor vocal technique
 
@@ -2766,6 +2818,9 @@ Representative config:
   "gapless_mode": "weak",
   "lyrics_enabled": true,
   "lyrics_online_enabled": true,
+  "lyrics_lrclib_enabled": true,
+  "lyrics_musixmatch_enabled": true,
+  "musixmatch_api_key": null,
   "online_metadata_enabled": true,
   "mpris_enabled": true,
   "music_dir": "/home/you/Music",
@@ -3059,7 +3114,7 @@ Serious Mode translates most of the visible vocabulary back into something fit f
                      ▼                                    ▼
               Catnip Stash                         Lyrics manager
               Pounce Bag                           local / embedded
-              playback sequence                    + LRCLIB thread
+              playback sequence                    + LRCLIB/Musixmatch worker
                      │                                    │
                      └──────────────┬─────────────────────┘
                                     ▼
@@ -3087,7 +3142,8 @@ Serious Mode translates most of the visible vocabulary back into something fit f
 - **SQLite** persists the Cat Catalog.
 - **Watchdog** supplies filesystem events; library mutation remains in the main application logic.
 - **MusicBrainz** is an optional enrichment source for missing metadata.
-- **LRCLIB** is an optional synchronized-lyrics source.
+- **LRCLIB** is the default online synchronized/plain lyrics source and may populate MeowPlayer's persistent lyric cache.
+- **Musixmatch** is an optional API-key-backed fallback for synchronized subtitles/plain lyrics; MeowPlayer keeps its lyric bodies session-only.
 - **Pillow** normalizes artwork into cached PNGs.
 - **CAVA** optionally supplies spectrum values.
 - **MPRIS / D-Bus** exposes desktop media controls.
@@ -3132,7 +3188,7 @@ meowplayer
 MeowPlayer/
 ├── meowplayer.py              # TUI, playback state, orchestration, cat
 ├── album_art.py               # artwork resolution/cache/Kitty rendering
-├── lyrics_support.py          # LRC/plain lyrics + LRCLIB
+├── lyrics_support.py          # local lyrics + LRCLIB + Musixmatch provider chain
 ├── online_metadata.py         # MusicBrainz enrichment worker/client
 ├── library_watcher.py         # Watchdog event collection/debounce
 ├── meow_catalog.py            # SQLite Cat Catalog + migrations
