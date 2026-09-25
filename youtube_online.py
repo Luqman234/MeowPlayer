@@ -74,10 +74,14 @@ def normalize_youtube_search(query, search_mode="all"):
     return query, mode
 
 
-def youtube_search_target(query, limit, search_mode="all"):
-    """Build the yt-dlp ytsearch target for a general or artist-first search."""
+def youtube_search_target(query, limit=None, search_mode="all"):
+    """Build the yt-dlp ytsearch target for a general or artist-first search.
+
+    limit=None requests every result exposed by yt-dlp's YouTube search
+    extractor. Explicit numeric limits remain supported for callers that want
+    bounded searches.
+    """
     query, mode = normalize_youtube_search(query, search_mode)
-    limit = max(1, min(50, int(limit)))
     if mode == "artist":
         # Keep this as a normal YouTube search rather than brittle uploader-only
         # filtering: official tracks are often uploaded by labels/VEVO channels.
@@ -85,6 +89,9 @@ def youtube_search_target(query, limit, search_mode="all"):
         # while preserving useful official/label uploads.
         artist = " ".join(query.replace('"', " ").split())
         query = f'"{artist}" music'
+    if limit is None:
+        return f"ytsearchall:{query}"
+    limit = max(1, min(50, int(limit)))
     return f"ytsearch{limit}:{query}"
 
 @dataclass(frozen=True)
@@ -129,12 +136,16 @@ class YouTubeCatalog:
         enabled=False,
         executable=None,
         timeout=20.0,
-        default_limit=12,
+        default_limit=None,
     ):
         self.enabled = bool(enabled)
         self.executable = executable or shutil.which("yt-dlp")
         self.timeout = max(1.0, float(timeout))
-        self.default_limit = max(1, min(50, int(default_limit)))
+        self.default_limit = (
+            None
+            if default_limit is None
+            else max(1, min(50, int(default_limit)))
+        )
         LOGGER.debug(
             "YouTubeCatalog enabled=%s executable=%s timeout=%s default_limit=%s",
             self.enabled,
@@ -552,7 +563,10 @@ class YouTubeSearchSession:
         try:
             if not catalog.available:
                 raise YouTubeUnavailable(catalog.unavailable_reason)
-            limit = catalog.default_limit if limit is None else max(1, min(50, int(limit)))
+            if limit is None:
+                limit = catalog.default_limit
+            elif limit is not None:
+                limit = max(1, min(50, int(limit)))
             command = [catalog.executable, "--ignore-config", "--flat-playlist",
                        "--skip-download", "--no-warnings", "--lazy-playlist",
                        "--print", "%(.{id,title,artist,artists,creator,uploader,channel,duration,webpage_url})j",
@@ -565,16 +579,22 @@ class YouTubeSearchSession:
             )
             seen = set()
             buffer = b""
+            last_progress = started
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 while not self.cancel.is_set():
-                    if time.monotonic() - started >= catalog.timeout:
-                        raise YouTubeSearchError("YouTube search timed out")
                     if not selector.select(timeout=0.1):
+                        if process.poll() is not None:
+                            break
+                        if time.monotonic() - last_progress >= catalog.timeout:
+                            raise YouTubeSearchError(
+                                "YouTube search stalled"
+                            )
                         continue
                     chunk = os.read(process.stdout.fileno(), 65536)
                     if not chunk:
                         break
+                    last_progress = time.monotonic()
                     buffer += chunk
                     while b"\n" in buffer:
                         line, buffer = buffer.split(b"\n", 1)
