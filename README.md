@@ -1409,6 +1409,8 @@ that exact uploader/channel
 
 YouTube does not expose a perfectly standardized “Singles” shelf through yt-dlp for every kind of channel, so MeowPlayer labels the first section **Singles / Uploads** and treats it as the creator's direct uploads rather than pretending every channel has identical YouTube Music structure. Labels, VEVO channels, Topic channels, ordinary creators, and artist channels can therefore use the same browsing machinery whenever yt-dlp exposes their channel pages.
 
+Creator Nest also understands that some channels — especially auto-generated **`- Topic`** channels — may not have a normal `/videos` tab at all. MeowPlayer first tries the explicit channel tab, then falls back to the channel root so yt-dlp can use the channel's uploads playlist. Playlist browsing similarly falls back from `/playlists` to `/releases` when the ordinary playlist tab is unavailable or empty.
+
 While an Internet Nest track is playing, **Songbook can search LRCLIB using the remote track's title, artist, and duration**. These lyrics are intentionally **session-only**: MeowPlayer may display synchronized or plain LRCLIB lyrics for the currently streaming track, but it does **not** write them to the persistent lyric cache.
 
 ```text
