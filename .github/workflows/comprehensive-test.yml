@@ -67,6 +67,7 @@ jobs:
             meow_catalog.py \
             meow_smart.py \
             meow_persistence.py \
+            meow_logging.py \
             mpris_support.py \
             online_metadata.py \
             visualizer.py \
@@ -85,6 +86,7 @@ jobs:
               "meow_catalog",
               "meow_smart",
               "meow_persistence",
+              "meow_logging",
               "mpris_support",
               "online_metadata",
               "visualizer",
@@ -192,6 +194,8 @@ jobs:
           grep -q -- "--no-visualizer" /tmp/meowplayer-help.txt
           grep -q -- "--no-watch" /tmp/meowplayer-help.txt
           grep -q -- "--youtube" /tmp/meowplayer-help.txt
+          grep -q -- "--debug" /tmp/meowplayer-help.txt
+          grep -q -- "--log-file" /tmp/meowplayer-help.txt
           meowplayer --version
 
       - name: Verify XDG config and state persistence
@@ -803,6 +807,7 @@ jobs:
               "meow_catalog.py",
               "meow_smart.py",
               "meow_persistence.py",
+              "meow_logging.py",
               "mpris_support.py",
               "visualizer.py",
               "youtube_online.py",
@@ -852,6 +857,7 @@ jobs:
               "meow_catalog",
               "meow_smart",
               "meow_persistence",
+              "meow_logging",
               "mpris_support",
               "visualizer",
               "youtube_online",
