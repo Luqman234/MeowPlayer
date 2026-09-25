@@ -1946,7 +1946,7 @@ The mascot reacts to player state:
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.15.1 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.16.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -2073,8 +2073,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.15.1-py3-none-any.whl
-└── meowplayer_terminal-0.15.1.tar.gz
+├── meowplayer_terminal-0.16.0-py3-none-any.whl
+└── meowplayer_terminal-0.16.0.tar.gz
 ```
 
 The installed CLI is still:
