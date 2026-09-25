@@ -46,7 +46,7 @@ from online_metadata import (
 from visualizer import AudioVisualizer
 
 
-__version__ = "0.15.0"
+__version__ = "0.15.1"
 
 
 SUPPORTED_EXTENSIONS = {
