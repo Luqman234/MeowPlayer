@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unicodedata
 from dataclasses import dataclass, replace
@@ -28,6 +29,7 @@ from bad_larry import (
     apology_matches,
     confirm_dangerous_cat,
 )
+from bad_larry_math import QUANTUM_EXAM_SECONDS, QUANTUM_FINAL_EXAM
 from lyrics_support import LyricsManager
 from library_watcher import LibraryWatcher
 from meow_catalog import LibraryCatalog
@@ -3576,6 +3578,249 @@ class MeowPlayer:
             stdscr.nodelay(True)
             stdscr.timeout(100)
 
+    @staticmethod
+    def _wrap_bad_larry_text(text, width):
+        width = max(12, int(width))
+        lines = []
+        for raw_line in str(text).splitlines():
+            if not raw_line:
+                lines.append("")
+                continue
+            wrapped = textwrap.wrap(
+                raw_line,
+                width=width,
+                replace_whitespace=False,
+                drop_whitespace=True,
+            )
+            lines.extend(wrapped or [""])
+        return lines
+
+    def prompt_bad_larry_math(self, stdscr, question):
+        stdscr.nodelay(False)
+        stdscr.timeout(-1)
+        curses.echo()
+
+        try:
+            curses.curs_set(1)
+        except curses.error:
+            pass
+
+        try:
+            stdscr.erase()
+            height, width = stdscr.getmaxyx()
+            body = self._wrap_bad_larry_text(
+                question.prompt,
+                max(12, width - 4),
+            )
+            lines = [
+                "BAD LARRY MATHEMATICS INCIDENT",
+                f"Difficulty: {question.label}",
+                "",
+            ] + body + [
+                "",
+                "Type your answer, SKIP to surrender, or ESCAPE for dismissal.",
+            ]
+
+            visible = lines[:max(1, height - 2)]
+            for row, line in enumerate(visible):
+                stdscr.addstr(row, 1, line[:max(1, width - 2)])
+
+            input_y = min(height - 1, len(visible))
+            stdscr.move(input_y, 0)
+            stdscr.clrtoeol()
+            stdscr.addstr(input_y, 0, "> "[:max(1, width - 1)])
+            stdscr.refresh()
+            raw = stdscr.getstr(
+                input_y,
+                min(2, max(0, width - 2)),
+                max(1, width - 3),
+            )
+            return raw.decode("utf-8", errors="replace").strip()
+        except curses.error:
+            return ""
+        finally:
+            curses.noecho()
+            try:
+                curses.curs_set(0)
+            except curses.error:
+                pass
+            stdscr.nodelay(True)
+            stdscr.timeout(100)
+
+    def show_bad_larry_no(self, stdscr):
+        stdscr.erase()
+        height, width = stdscr.getmaxyx()
+        lines = [
+            "IMO P6-STYLE: CORRECT",
+            "",
+            "Bad Larry:",
+            "No.",
+        ]
+        start_y = max(0, (height - len(lines)) // 2)
+        for offset, line in enumerate(lines):
+            x = max(0, (width - len(line)) // 2)
+            try:
+                stdscr.addstr(start_y + offset, x, line[:max(1, width - x - 1)])
+            except curses.error:
+                pass
+        stdscr.refresh()
+        time.sleep(1.0)
+
+    def run_bad_larry_quantum_exam(self, stdscr):
+        deadline = time.monotonic() + QUANTUM_EXAM_SECONDS
+        scroll = 0
+        stdscr.nodelay(False)
+        stdscr.timeout(200)
+        curses.noecho()
+
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+        try:
+            while True:
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining <= 0:
+                    return "timeout"
+
+                stdscr.erase()
+                height, width = stdscr.getmaxyx()
+                wrapped = self._wrap_bad_larry_text(
+                    QUANTUM_FINAL_EXAM,
+                    max(18, width - 4),
+                )
+                content_height = max(1, height - 5)
+                max_scroll = max(0, len(wrapped) - content_height)
+                scroll = max(0, min(scroll, max_scroll))
+                minutes = int(remaining) // 60
+                seconds = int(remaining) % 60
+
+                header = (
+                    f"BAD LARRY FINAL EXAM — {minutes:02d}:{seconds:02d} remaining"
+                )
+                try:
+                    stdscr.addstr(0, 1, header[:max(1, width - 2)], curses.A_BOLD)
+                    stdscr.addstr(
+                        1,
+                        1,
+                        "Bad Larry: No. New subject."[:max(1, width - 2)],
+                    )
+                except curses.error:
+                    pass
+
+                for row, line in enumerate(
+                    wrapped[scroll:scroll + content_height],
+                    start=2,
+                ):
+                    try:
+                        stdscr.addstr(row, 1, line[:max(1, width - 2)])
+                    except curses.error:
+                        pass
+
+                controls = (
+                    "UP/DOWN scroll | D = declare complete | "
+                    "S = surrender | Ctrl+E = dismiss Larry"
+                )
+                try:
+                    stdscr.addstr(
+                        height - 2,
+                        1,
+                        controls[:max(1, width - 2)],
+                        curses.A_DIM,
+                    )
+                except curses.error:
+                    pass
+                stdscr.refresh()
+
+                key = stdscr.getch()
+                if key == curses.KEY_UP:
+                    scroll = max(0, scroll - 1)
+                elif key == curses.KEY_DOWN:
+                    scroll = min(max_scroll, scroll + 1)
+                elif key in (ord("s"), ord("S")):
+                    return "skip"
+                elif key in (ord("d"), ord("D")):
+                    return "submitted"
+                elif key == 5:
+                    return "emergency"
+        finally:
+            stdscr.nodelay(True)
+            stdscr.timeout(100)
+
+    def handle_bad_larry_math_incident(self, stdscr, question):
+        answer = self.prompt_bad_larry_math(stdscr, question)
+        command = answer.strip().casefold()
+
+        if command == "escape":
+            apology = self.prompt_bad_larry_apology(stdscr)
+            if apology_matches(apology):
+                self.playback_saboteur.dismiss(self)
+                self.cat_chaos_mode = None
+                self.set_status(
+                    "Dangerous Cat Mode disabled.",
+                    "Bad Larry accepts your apology and has left The Room.",
+                )
+            else:
+                self.set_status(
+                    "Emergency dismissal denied.",
+                    "Bad Larry: that did not sound sincere.",
+                )
+            return
+
+        if command == "skip":
+            self.playback_saboteur.apply_math_skip(
+                self,
+                question.difficulty,
+            )
+            return
+
+        if not self.playback_saboteur.grade_math_answer(question, answer):
+            self.playback_saboteur.apply_math_wrong(self, question)
+            return
+
+        if question.difficulty != "imo-p6":
+            self.set_status(
+                "Math answer accepted.",
+                (
+                    "BAD LARRY: correct. This is becoming irritating. "
+                    f"Math streak: {self.playback_saboteur.math_correct}."
+                ),
+            )
+            return
+
+        self.show_bad_larry_no(stdscr)
+        result = self.run_bad_larry_quantum_exam(stdscr)
+        if result in {"skip", "timeout"}:
+            self.playback_saboteur.apply_math_skip(self, "quantum")
+            if result == "timeout":
+                self.set_status(
+                    "Quantum final exam timed out.",
+                    "BAD LARRY: five whole minutes. Disappointing.",
+                )
+            return
+
+        if result == "emergency":
+            apology = self.prompt_bad_larry_apology(stdscr)
+            if apology_matches(apology):
+                self.playback_saboteur.dismiss(self)
+                self.cat_chaos_mode = None
+                self.set_status(
+                    "Dangerous Cat Mode disabled.",
+                    "Bad Larry accepts your apology and has left The Room.",
+                )
+            else:
+                self.set_status(
+                    "Emergency dismissal denied.",
+                    "Bad Larry: formal apology rejected.",
+                )
+            return
+
+        self.set_status(
+            "Quantum final exam submitted.",
+            "BAD LARRY: I refuse to admit that counted.",
+        )
+
     def prompt_path(self, stdscr, prompt, default):
         height, width = stdscr.getmaxyx()
         label = f"{prompt} [{default}]: "
@@ -3885,6 +4130,9 @@ class MeowPlayer:
         while True:
             self.process_external_actions()
             self.playback_saboteur.tick(self)
+            math_question = self.playback_saboteur.pop_math_question()
+            if math_question is not None:
+                self.handle_bad_larry_math_incident(stdscr, math_question)
             self.process_filesystem_watch()
             self.process_online_metadata()
             self.persist_state()
@@ -4291,6 +4539,9 @@ class MeowPlayer:
 
             if self.maximum_meow and quote:
                 quote = f"🐱 MAXIMUM MEOW: {self.quote} 🐾♫🐾"
+
+            if self.playback_saboteur.mode == "dangerous":
+                controls += "  Ctrl+E Dismiss Larry"
 
             try:
                 if quote:
