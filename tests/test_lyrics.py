@@ -149,6 +149,52 @@ class LyricsTests(unittest.TestCase):
             self.assertEqual(cached.current_line(2.0), "Downloaded line")
             self.assertEqual(cached.source, "LRCLIB cache")
 
+    def test_transient_lrclib_lyrics_are_session_only_and_not_cached(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "cache"
+
+            with mock.patch(
+                "lyrics_support._fetch_lrclib_result",
+                return_value=LyricsFetchResult(
+                    "[00:01.00]Internet line\n",
+                    "found",
+                    "Internet Artist Online Track",
+                ),
+            ) as fetch:
+                manager = LyricsManager(
+                    enabled=True,
+                    online_enabled=True,
+                    cache_dir=cache_dir,
+                    request_timeout=0.25,
+                )
+                self.assertIsNone(
+                    manager.load_transient(
+                        "video-123",
+                        title="Online Track",
+                        artist="Internet Artist",
+                        duration=180,
+                    )
+                )
+
+                document = None
+                for _ in range(100):
+                    document = manager.poll_transient("video-123")
+                    if document is not None:
+                        break
+                    time.sleep(0.01)
+
+            self.assertIsNotNone(document)
+            self.assertTrue(document.synced)
+            self.assertEqual(document.current_line(2.0), "Internet line")
+            self.assertEqual(document.source, "LRCLIB · Internet Nest")
+            self.assertEqual(
+                manager.transient_status("video-123")["status"],
+                "found",
+            )
+            fetch.assert_called_once()
+            self.assertFalse(cache_dir.exists())
+
     def test_online_status_reports_searching_then_found(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

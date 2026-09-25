@@ -266,6 +266,51 @@ class AudioEngineTests(unittest.TestCase):
         self.assertIs(player.current_lyrics, document)
         self.assertIn("Lyrics downloaded", statuses[-1][0])
 
+    def test_internet_nest_songbook_reports_transient_lrclib_search(self):
+        player = self.make_player(count=1, current=None)
+        player.serious_mode = True
+        player.online_current = SimpleNamespace(
+            video_id="remote-1",
+            title="Online Track",
+            artist="Internet Artist",
+            duration=180,
+        )
+        player.lyrics.transient_status = lambda key: {
+            "status": "searching",
+            "query": "Internet Artist Online Track",
+            "attempts": 1,
+        }
+
+        message = player.lyrics_lookup_message()
+
+        self.assertIn("Searching LRCLIB", message)
+        self.assertIn("Internet Artist Online Track", message)
+
+    def test_internet_nest_lyrics_refresh_uses_session_only_result(self):
+        player = self.make_player(count=1, current=None)
+        player.serious_mode = True
+        player.online_current = SimpleNamespace(
+            video_id="remote-2",
+            title="Online Track",
+            artist="Internet Artist",
+            duration=180,
+        )
+        document = SimpleNamespace(
+            source="LRCLIB · Internet Nest",
+            synced=True,
+            lines=(SimpleNamespace(time=1.0, text="remote line"),),
+        )
+        player.lyrics.poll_transient = lambda key: document
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        changed = player.refresh_current_lyrics()
+
+        self.assertTrue(changed)
+        self.assertIs(player.current_lyrics, document)
+        self.assertIsNone(player.lyrics_track_index)
+        self.assertIn("this session", statuses[-1][0])
+
     def test_online_metadata_enrichment_only_fills_missing_fields(self):
         player = self.make_player(count=1, current=0)
         player.metadata = [

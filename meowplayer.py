@@ -74,7 +74,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.17.1"
+__version__ = "0.17.2"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -3236,6 +3236,14 @@ class MeowPlayer:
         self.current = None
         self.current_lyrics = None
         self.lyrics_track_index = None
+        lyrics = getattr(self, "lyrics", None)
+        if lyrics is not None and hasattr(lyrics, "load_transient"):
+            lyrics.load_transient(
+                track.video_id,
+                title=track.title,
+                artist=track.artist,
+                duration=track.duration,
+            )
         self.gapless_next_index = None
         self._awaiting_mpv_path = False
 
@@ -3977,31 +3985,59 @@ class MeowPlayer:
         self.lyrics_scroll = 0
 
     def refresh_current_lyrics(self):
-        if self.current is None:
+        online_track = getattr(self, "online_current", None)
+        if online_track is not None:
+            poll_transient = getattr(self.lyrics, "poll_transient", None)
+            if poll_transient is None:
+                return False
+            document = poll_transient(online_track.video_id)
+            track_index = None
+            fetched_message = (
+                f"Lyrics fetched for this session: {document.source}."
+                if document is not None
+                else ""
+            )
+        elif self.current is not None:
+            document = self.lyrics.poll(self.songs[self.current])
+            track_index = self.current
+            fetched_message = (
+                f"Lyrics downloaded: {document.source}."
+                if document is not None
+                else ""
+            )
+        else:
             return False
 
-        document = self.lyrics.poll(self.songs[self.current])
         if document is None:
             return False
 
         self.current_lyrics = document
-        self.lyrics_track_index = self.current
+        self.lyrics_track_index = track_index
         self.lyrics_follow = True
         self.lyrics_scroll = 0
         self.set_status(
-            f"Lyrics downloaded: {document.source}.",
+            fetched_message,
             "Lyrics acquired. The cat can now sing them incorrectly."
         )
         return True
 
     def lyrics_lookup_message(self):
-        if self.current is None:
+        online_track = getattr(self, "online_current", None)
+        if online_track is not None:
+            status_fn = getattr(self.lyrics, "transient_status", None)
+            state = (
+                status_fn(online_track.video_id)
+                if status_fn is not None
+                else {"status": "idle", "query": "", "attempts": 0}
+            )
+        elif self.current is not None:
+            state = self.lyrics.online_status(self.songs[self.current])
+        else:
             return self.text(
                 "Play a track to view lyrics.",
                 "Pick a meow before opening the songbook."
             )
 
-        state = self.lyrics.online_status(self.songs[self.current])
         status = state.get("status", "idle")
         query = state.get("query", "").strip()
 
@@ -4052,7 +4088,7 @@ class MeowPlayer:
 
     def current_lyric_text(self):
         if (
-            self.current is None
+            not self.has_active_track()
             or self.current_lyrics is None
             or not self.current_lyrics.synced
         ):
@@ -4078,14 +4114,27 @@ class MeowPlayer:
 
         self.previous_view = (
             self.view
-            if self.view in {"library", "stash"}
+            if self.view in {"library", "stash", "online"}
             else "library"
         )
         self.view = "lyrics"
         self.lyrics_follow = True
 
         if self.current_lyrics is None:
-            if self.current is not None:
+            online_track = getattr(self, "online_current", None)
+            if online_track is not None:
+                status_fn = getattr(self.lyrics, "transient_status", None)
+                retry_fn = getattr(self.lyrics, "retry_transient", None)
+                if status_fn is not None and retry_fn is not None:
+                    state = status_fn(online_track.video_id)
+                    if state.get("status") == "network-error":
+                        retry_fn(
+                            online_track.video_id,
+                            title=online_track.title,
+                            artist=online_track.artist,
+                            duration=online_track.duration,
+                        )
+            elif self.current is not None:
                 state = self.lyrics.online_status(self.songs[self.current])
                 if state.get("status") == "network-error":
                     self.lyrics.retry_online(self.songs[self.current])
@@ -4107,7 +4156,7 @@ class MeowPlayer:
     ):
         document = self.current_lyrics
 
-        if self.current is None:
+        if not self.has_active_track():
             message = self.text(
                 "Play a track to view lyrics.",
                 "Pick a meow before opening the songbook."

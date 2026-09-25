@@ -686,7 +686,15 @@ class LyricsManager:
         except OSError:
             return None
 
-    def _start_online_fetch(self, identity, metadata):
+    def _start_online_fetch(
+        self,
+        identity,
+        metadata,
+        *,
+        persistent=True,
+        cache_result=True,
+        source="LRCLIB · downloaded",
+    ):
         if not self.online_enabled:
             return False
 
@@ -710,6 +718,9 @@ class LyricsManager:
                 "attempts": 0,
                 "synced": True,
                 "metadata": metadata,
+                "persistent": bool(persistent),
+                "cache_result": bool(cache_result),
+                "source": source,
             }
             self._pending[identity] = state
             self._online_status[identity] = {
@@ -753,13 +764,7 @@ class LyricsManager:
         ).start()
         return True
 
-    def online_status(self, track_path):
-        if not self.enabled:
-            return {"status": "disabled", "query": "", "attempts": 0}
-        if not self.online_enabled:
-            return {"status": "offline", "query": "", "attempts": 0}
-
-        identity = self._cache_identity(Path(track_path).expanduser())
+    def _online_status_for_identity(self, identity):
         with self._pending_lock:
             state = self._pending.get(identity)
             if state is not None and not state.get("done"):
@@ -774,6 +779,112 @@ class LyricsManager:
                     {"status": "idle", "query": "", "attempts": 0},
                 )
             )
+
+    def online_status(self, track_path):
+        if not self.enabled:
+            return {"status": "disabled", "query": "", "attempts": 0}
+        if not self.online_enabled:
+            return {"status": "offline", "query": "", "attempts": 0}
+
+        identity = self._cache_identity(Path(track_path).expanduser())
+        return self._online_status_for_identity(identity)
+
+    def _transient_identity(self, key):
+        return ("internet-nest", str(key))
+
+    def _transient_metadata(
+        self,
+        *,
+        title,
+        artist="",
+        duration=0.0,
+        album="",
+    ):
+        try:
+            duration = max(0.0, float(duration or 0.0))
+        except (TypeError, ValueError):
+            duration = 0.0
+
+        return {
+            "title": str(title or "").strip(),
+            "artist": str(artist or "").strip(),
+            "album": str(album or "").strip(),
+            "duration": duration,
+            "filename_stem": str(title or "").strip(),
+            "audio": None,
+            "tags": None,
+        }
+
+    def load_transient(
+        self,
+        key,
+        *,
+        title,
+        artist="",
+        duration=0.0,
+        album="",
+    ):
+        """Fetch lyrics for remote media without reading or writing disk cache."""
+        if not self.enabled or not self.online_enabled:
+            return None
+
+        identity = self._transient_identity(key)
+        metadata = self._transient_metadata(
+            title=title,
+            artist=artist,
+            duration=duration,
+            album=album,
+        )
+        self._start_online_fetch(
+            identity,
+            metadata,
+            persistent=False,
+            cache_result=False,
+            source="LRCLIB · Internet Nest",
+        )
+        return None
+
+    def transient_status(self, key):
+        if not self.enabled:
+            return {"status": "disabled", "query": "", "attempts": 0}
+        if not self.online_enabled:
+            return {"status": "offline", "query": "", "attempts": 0}
+        return self._online_status_for_identity(
+            self._transient_identity(key)
+        )
+
+    def retry_transient(
+        self,
+        key,
+        *,
+        title,
+        artist="",
+        duration=0.0,
+        album="",
+    ):
+        if not self.enabled or not self.online_enabled:
+            return False
+
+        identity = self._transient_identity(key)
+        metadata = self._transient_metadata(
+            title=title,
+            artist=artist,
+            duration=duration,
+            album=album,
+        )
+
+        with self._pending_lock:
+            if identity in self._pending:
+                return False
+            self._online_status.pop(identity, None)
+
+        return self._start_online_fetch(
+            identity,
+            metadata,
+            persistent=False,
+            cache_result=False,
+            source="LRCLIB · Internet Nest",
+        )
 
     def retry_online(self, track_path):
         if not self.enabled or not self.online_enabled:
@@ -790,13 +901,7 @@ class LyricsManager:
 
         return self._start_online_fetch(identity, metadata)
 
-    def poll(self, track_path):
-        if not self.enabled or not self.online_enabled:
-            return None
-
-        track_path = Path(track_path).expanduser()
-        identity = self._cache_identity(track_path)
-
+    def _poll_identity(self, identity):
         with self._pending_lock:
             state = self._pending.get(identity)
             if state is None or not state.get("done"):
@@ -807,41 +912,49 @@ class LyricsManager:
         if not lyric_text:
             return None
 
+        source = str(state.get("source") or "LRCLIB · downloaded")
+        persistent = bool(state.get("persistent", True))
+        cache_result = bool(state.get("cache_result", True))
+
         if state.get("synced", True):
             document = parse_lrc(
                 lyric_text,
-                source="LRCLIB · downloaded",
+                source=source,
             )
             if document is None or not document.synced:
                 return None
-            self._save_cached_lrc(state["metadata"], lyric_text)
+            if persistent:
+                self._save_cached_lrc(state["metadata"], lyric_text)
         else:
             document = parse_plain_lyrics(
                 lyric_text,
-                source="LRCLIB · downloaded · unsynchronized",
+                source=f"{source} · unsynchronized",
             )
             if document is None:
                 return None
-            self._save_cached_plain(state["metadata"], lyric_text)
+            if persistent:
+                self._save_cached_plain(state["metadata"], lyric_text)
 
             # Never replace user-provided or embedded plain lyrics with a
             # plain online copy. A synchronized LRCLIB result may still
             # upgrade those local lyrics on a later lookup.
-            existing = self._cache.get(identity)
-            if (
-                existing is not None
-                and not existing.synced
-                and not existing.source.startswith("LRCLIB")
-            ):
-                with self._pending_lock:
-                    self._online_status[identity] = {
-                        "status": "found",
-                        "query": state.get("query", ""),
-                        "attempts": state.get("attempts", 1),
-                    }
-                return None
+            if cache_result:
+                existing = self._cache.get(identity)
+                if (
+                    existing is not None
+                    and not existing.synced
+                    and not existing.source.startswith("LRCLIB")
+                ):
+                    with self._pending_lock:
+                        self._online_status[identity] = {
+                            "status": "found",
+                            "query": state.get("query", ""),
+                            "attempts": state.get("attempts", 1),
+                        }
+                    return None
 
-        self._cache[identity] = document
+        if cache_result:
+            self._cache[identity] = document
         with self._pending_lock:
             self._online_status[identity] = {
                 "status": "found",
@@ -849,6 +962,19 @@ class LyricsManager:
                 "attempts": state.get("attempts", 1),
             }
         return document
+
+    def poll(self, track_path):
+        if not self.enabled or not self.online_enabled:
+            return None
+
+        track_path = Path(track_path).expanduser()
+        identity = self._cache_identity(track_path)
+        return self._poll_identity(identity)
+
+    def poll_transient(self, key):
+        if not self.enabled or not self.online_enabled:
+            return None
+        return self._poll_identity(self._transient_identity(key))
 
     def load(self, track_path):
         if not self.enabled:

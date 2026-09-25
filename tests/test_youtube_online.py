@@ -145,6 +145,9 @@ class YouTubeOnlineTests(unittest.TestCase):
         player.online_load_started_at = 0.0
         player.current_lyrics = object()
         player.lyrics_track_index = 3
+        player.lyrics = SimpleNamespace(
+            load_transient=mock.Mock(),
+        )
         player.gapless_next_index = 4
         player._awaiting_mpv_path = True
         player.mpv = FakeMPV()
@@ -165,6 +168,12 @@ class YouTubeOnlineTests(unittest.TestCase):
         self.assertIsNone(player.current)
         self.assertIs(player.online_current, track)
         self.assertIsNone(player.current_lyrics)
+        player.lyrics.load_transient.assert_called_once_with(
+            "xyz987",
+            title="Online Track",
+            artist="Internet Artist",
+            duration=180,
+        )
         self.assertIsNone(player.gapless_next_index)
         self.assertFalse(player._awaiting_mpv_path)
         self.assertEqual(player.mpv.loaded, [track.url])

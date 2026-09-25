@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.17.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.17.2** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.1 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.17.2 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,65 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.17.2 — The Internet Cat Borrowed the Songbook
+
+MeowPlayer 0.17.2 teaches the **Internet Nest** to use the existing Songbook without pretending a temporary YouTube result is a local-library song.
+
+When an Internet Nest track starts playing, MeowPlayer can now search **LRCLIB** using the remote track's:
+
+```text
+title
+artist
+duration
+```
+
+If LRCLIB finds synchronized lyrics, Songbook follows them against mpv's live `time-pos` just like a local track. If only plain lyrics exist, Songbook still shows them without pretending they are timed.
+
+The important rule is persistence:
+
+```text
+LOCAL LIBRARY TRACK
+LRCLIB
+  ↓
+Songbook
+  ↓
+persistent lyric cache allowed
+
+INTERNET NEST TRACK
+LRCLIB
+  ↓
+Songbook
+  ↓
+memory only
+  ↓
+no .lrc / .txt cache file
+```
+
+Internet Nest lyrics are deliberately **session-only**. MeowPlayer does not write them into the persistent LRCLIB cache, because a temporary online result should not quietly become durable local-library state.
+
+The transient lyric flow is keyed by the YouTube `video_id` and reuses the existing LRCLIB confidence checks, retry behavior, synchronized/plain parsing, and Songbook UI. What it does **not** reuse is disk persistence.
+
+Songbook also now treats an active Internet Nest stream as a real current track:
+
+- `L` can open Songbook while streaming from the Internet Nest
+- LRCLIB search / not-found / network-error state is shown normally
+- synchronized remote lyrics follow playback time
+- a failed lookup can be retried
+- closing Songbook returns to the Internet Nest
+- changing tracks clears the session-only lyric document
+
+And because this is MeowPlayer, the official architectural rule is:
+
+> **The internet cat may borrow the songbook. It does not get to file it permanently.**
+
+In short:
+
+```text
+0.17.1: the cat obtained a Settings Nest
+0.17.2: the internet cat obtained temporary lyrics
+        and was explicitly denied filing privileges
+```
 
 ## What's new in 0.17.1 — The Cat Has Obtained a Settings Nest
 
@@ -1100,6 +1159,22 @@ meowplayer --youtube
 ```
 
 Then press `Y` from the TUI to open the **Internet Nest**. Type a song/title search, choose a result with the arrow keys, and press `Enter` to stream it.
+
+While an Internet Nest track is playing, **Songbook can search LRCLIB using the remote track's title, artist, and duration**. These lyrics are intentionally **session-only**: MeowPlayer may display synchronized or plain LRCLIB lyrics for the currently streaming track, but it does **not** write them to the persistent lyric cache.
+
+```text
+Internet Nest track
+      ↓
+title + artist + duration
+      ↓
+LRCLIB
+      ↓
+Songbook
+      ↓
+memory only — no .lrc/.txt cache file
+```
+
+Local-library tracks keep the existing persistent LRCLIB cache behavior. The distinction is deliberate: a temporary YouTube result should not quietly become durable local-library state.
 
 ```text
 INTERNET NEST
@@ -3112,7 +3187,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.1 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.17.2 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -3243,8 +3318,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.17.1-py3-none-any.whl
-└── meowplayer_terminal-0.17.1.tar.gz
+├── meowplayer_terminal-0.17.2-py3-none-any.whl
+└── meowplayer_terminal-0.17.2.tar.gz
 ```
 
 The installed CLI is still:
