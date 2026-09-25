@@ -32,7 +32,7 @@ concurrency:
 env:
   PYTHONUTF8: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  MEOW_CI_REVISION: "framed-persistent-ipc-v11"
+  MEOW_CI_REVISION: "stable-gapless-reprime-v12"
 
 jobs:
   source-integrity:
@@ -658,7 +658,7 @@ jobs:
                   )
 
                   try:
-                      if int(last_pos) == 0 and int(last_count) >= 2:
+                      if int(last_pos) == 0 and int(last_count) == 2:
                           return int(last_pos), int(last_count)
                   except (TypeError, ValueError):
                       pass
@@ -666,10 +666,50 @@ jobs:
                   time.sleep(0.05)
 
               raise AssertionError(
-                  "gapless reservation never became visible; "
+                  "gapless reservation never became stable; "
                   f"playlist-pos={last_pos!r}; "
                   f"playlist-count={last_count!r}; "
                   f"path={player.mpv.current_path()!r}"
+              )
+
+          def wait_for_gapless_reprime(timeout=5.0):
+              deadline = time.monotonic() + timeout
+              last_pos = None
+              last_count = None
+              last_path = None
+
+              while time.monotonic() < deadline:
+                  player.sync_gapless_transition()
+                  last_path = player.mpv.current_path()
+                  last_pos = player.mpv.get_property(
+                      "playlist-current-pos"
+                  )
+                  last_count = player.mpv.get_property(
+                      "playlist-count"
+                  )
+
+                  try:
+                      stable_playlist = (
+                          int(last_pos) == 0
+                          and int(last_count) == 2
+                      )
+                  except (TypeError, ValueError):
+                      stable_playlist = False
+
+                  if (
+                      not player._awaiting_mpv_path
+                      and stable_playlist
+                  ):
+                      return
+
+                  time.sleep(0.05)
+
+              raise AssertionError(
+                  "gapless re-prime never stabilized; "
+                  f"awaiting={player._awaiting_mpv_path!r}; "
+                  f"path={last_path!r}; "
+                  f"playlist-pos={last_pos!r}; "
+                  f"playlist-count={last_count!r}"
               )
 
           try:
@@ -699,8 +739,12 @@ jobs:
               assert player.current == 1
               wait_for_player_path(player.songs[1])
 
-              player.sync_gapless_transition()
-              assert player._awaiting_mpv_path is False
+              # A primed handoff is asynchronous. v0.16.2 deliberately
+              # keeps _awaiting_mpv_path true if mpv is still reporting
+              # playlist-current-pos=-1 so the next reservation cannot be
+              # appended into an unstable playlist. Poll the real player until
+              # both the path and the one-track-ahead reservation are stable.
+              wait_for_gapless_reprime()
 
               player.persist_state(force=True)
               print(
