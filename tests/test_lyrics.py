@@ -8,6 +8,7 @@ from lyrics_support import (
     LyricsFetchResult,
     LyricsManager,
     _fetch_lrclib_result,
+    _fetch_musixmatch_result,
     parse_lrc,
     parse_plain_lyrics,
 )
@@ -454,6 +455,169 @@ class LyricsTests(unittest.TestCase):
         self.assertTrue(result.synced)
         self.assertIn("SYNCED", result.text)
 
+    def test_musixmatch_prefers_synchronized_subtitle(self):
+        metadata = {
+            "title": "Song",
+            "artist": "Artist",
+            "album": "",
+            "duration": 240.0,
+            "filename_stem": "Artist - Song",
+        }
+        calls = []
+
+        def fake_request(method, params, api_key, timeout):
+            calls.append((method, dict(params), api_key))
+            if method == "matcher.subtitle.get":
+                return {
+                    "subtitle": {
+                        "subtitle_body": "[00:01.00]Synced from Musixmatch"
+                    }
+                }, "ok"
+            self.fail("plain lyrics should not be requested after synced hit")
+
+        with mock.patch(
+            "lyrics_support._musixmatch_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_musixmatch_result(
+                metadata,
+                "test-key",
+                timeout=0.25,
+            )
+
+        self.assertEqual(result.status, "found")
+        self.assertTrue(result.synced)
+        self.assertEqual(result.provider, "Musixmatch")
+        self.assertFalse(result.cacheable)
+        self.assertIn("Synced from Musixmatch", result.text)
+        self.assertEqual(calls[0][0], "matcher.subtitle.get")
+        self.assertEqual(calls[0][2], "test-key")
+        self.assertEqual(calls[0][1]["q_track"], "Song")
+        self.assertEqual(calls[0][1]["q_artist"], "Artist")
+
+    def test_musixmatch_falls_back_to_plain_lyrics(self):
+        metadata = {
+            "title": "Song",
+            "artist": "Artist",
+            "album": "",
+            "duration": 0.0,
+            "filename_stem": "Artist - Song",
+        }
+
+        def fake_request(method, params, api_key, timeout):
+            if method == "matcher.subtitle.get":
+                return {}, "not-found"
+            if method == "matcher.lyrics.get":
+                return {
+                    "lyrics": {
+                        "lyrics_body": "First Musixmatch line\nSecond line"
+                    }
+                }, "ok"
+            self.fail(f"unexpected Musixmatch method: {method}")
+
+        with mock.patch(
+            "lyrics_support._musixmatch_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_musixmatch_result(
+                metadata,
+                "test-key",
+                timeout=0.25,
+            )
+
+        self.assertEqual(result.status, "found")
+        self.assertFalse(result.synced)
+        self.assertEqual(result.provider, "Musixmatch")
+        self.assertFalse(result.cacheable)
+        self.assertIn("First Musixmatch line", result.text)
+
+    def test_manager_falls_back_to_musixmatch_without_persistent_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "Artist - Song.flac"
+            track.write_bytes(b"not-real-audio")
+            cache_dir = root / "cache"
+
+            with mock.patch(
+                "lyrics_support._fetch_lrclib_result",
+                return_value=LyricsFetchResult(
+                    "",
+                    "not-found",
+                    "Artist Song",
+                ),
+            ) as lrclib_fetch, mock.patch(
+                "lyrics_support._fetch_musixmatch_result",
+                return_value=LyricsFetchResult(
+                    "[00:01.00]Licensed cat words\n",
+                    "found",
+                    "Artist Song",
+                    synced=True,
+                    provider="Musixmatch",
+                    cacheable=False,
+                ),
+            ) as musixmatch_fetch:
+                manager = LyricsManager(
+                    enabled=True,
+                    online_enabled=True,
+                    lrclib_enabled=True,
+                    musixmatch_enabled=True,
+                    musixmatch_api_key="test-key",
+                    cache_dir=cache_dir,
+                    request_timeout=0.25,
+                )
+                self.assertIsNone(manager.load(track))
+                document = None
+                for _ in range(100):
+                    document = manager.poll(track)
+                    if document is not None:
+                        break
+                    time.sleep(0.01)
+
+            self.assertIsNotNone(document)
+            self.assertTrue(document.synced)
+            self.assertIn("Musixmatch", document.source)
+            self.assertIn("session-only", document.source)
+            self.assertEqual(
+                document.current_line(2.0),
+                "Licensed cat words",
+            )
+            lrclib_fetch.assert_called_once()
+            musixmatch_fetch.assert_called_once()
+            self.assertEqual(list(cache_dir.glob("*.lrc")), [])
+            self.assertEqual(list(cache_dir.glob("*.txt")), [])
+
+    def test_musixmatch_is_not_used_without_api_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            track = root / "Artist - Song.flac"
+            track.write_bytes(b"not-real-audio")
+
+            with mock.patch(
+                "lyrics_support._fetch_lrclib_result",
+                return_value=LyricsFetchResult(
+                    "",
+                    "not-found",
+                    "Artist Song",
+                ),
+            ), mock.patch(
+                "lyrics_support._fetch_musixmatch_result",
+            ) as musixmatch_fetch:
+                manager = LyricsManager(
+                    enabled=True,
+                    online_enabled=True,
+                    musixmatch_enabled=True,
+                    musixmatch_api_key="",
+                    cache_dir=root / "cache",
+                    request_timeout=0.25,
+                )
+                self.assertIsNone(manager.load(track))
+                for _ in range(100):
+                    manager.poll(track)
+                    if manager.online_status(track)["status"] == "not-found":
+                        break
+                    time.sleep(0.01)
+
+            musixmatch_fetch.assert_not_called()
     def test_downloaded_plain_lrclib_lyrics_show_and_cache_offline(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
