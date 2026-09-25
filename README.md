@@ -2,12 +2,12 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.15.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.15.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.15.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.15.1 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -71,11 +71,72 @@ MeowPlayer tries to stay true to a few rules:
 | Playback | `mpv` JSON IPC, gapless priming, ReplayGain |
 | Library | SQLite **Cat Catalog**, recursive scanning, Watchdog/inotify |
 | Metadata | Mutagen locally, optional MusicBrainz enrichment for missing fields |
-| Lyrics | sidecar/embedded lyrics + optional LRCLIB synchronized lookup |
+| Lyrics | sidecar/embedded lyrics + optional LRCLIB synchronized/plain lookup |
 | Discovery | Artists, Albums, Folders/Nests, Pawmarks, Purr History, Smart Mixes |
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.15.1 — The Lyrics Cat Learned Suspicion
+
+MeowPlayer 0.15.1 is a small release with one very important lesson:
+
+> finding lyrics is not the same thing as finding the **right** lyrics.
+
+The LRCLIB path now validates candidates instead of accepting the first result that happens to contain words.
+
+A real failure that triggered this update looked like this:
+
+```text
+local track:      04:18
+LRCLIB candidate: 01:02
+difference:       03:16
+previous verdict: MINE.
+new verdict:      absolutely not.
+```
+
+Candidate selection now checks the useful identity clues LRCLIB provides:
+
+```text
+LRCLIB candidate
+      ↓
+has lyrics?
+      ↓
+title plausible?
+      ↓
+artist plausible?
+      ↓
+duration plausible?
+      ↓
+accept
+```
+
+Large duration mismatches are treated as a hard rejection instead of something that a good title match can accidentally overpower. If one search result is rejected, MeowPlayer keeps examining later candidates instead of giving up or grabbing the first lyric result it sees.
+
+Downloaded lyric cache keys were also versioned for this change, so lyrics cached by the old overly-trusting matcher are not silently reused after upgrading.
+
+### Plain LRCLIB lyrics are useful now too
+
+LRCLIB does not always have synchronized lyrics. In 0.15.1, a valid result with only `plainLyrics` is still displayed in the **Songbook**.
+
+```text
+syncedLyrics available?
+        │
+        ├── yes → timed Songbook lyrics + playback highlighting
+        │
+        └── no
+             ↓
+        plainLyrics available?
+             │
+             ├── yes → normal scrollable Songbook lyrics
+             └── no  → no lyric document
+```
+
+MeowPlayer still prefers synchronized lyrics whenever a plausible synchronized candidate exists. Plain downloaded lyrics do **not** receive fake timestamps or pretend to follow playback.
+
+Unsynchronized LRCLIB lyrics are cached separately and can be reused offline. Local sidecar and embedded lyrics still retain priority over a plain online copy.
+
+The cat is still allowed on the internet. It now has to check the nametag first. 🐈‍⬛
 
 ## What's new in 0.15.0 — The Metadata Cat Goes Online
 
@@ -1693,7 +1754,7 @@ The mascot reacts to player state:
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.15.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.15.1 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -1820,8 +1881,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.15.0-py3-none-any.whl
-└── meowplayer_terminal-0.15.0.tar.gz
+├── meowplayer_terminal-0.15.1-py3-none-any.whl
+└── meowplayer_terminal-0.15.1.tar.gz
 ```
 
 The installed CLI is still:
