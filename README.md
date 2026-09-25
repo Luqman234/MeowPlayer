@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.17.2** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.17.3** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.2 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.17.3 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,73 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.17.3 — The Cat Refused to Stop at Twelve
+
+MeowPlayer 0.17.3 removes the old **12-result ceiling** from the Internet Nest.
+
+Normal title searches and **Artist Scent** searches now ask yt-dlp for every search result it exposes instead of stopping after the first twelve:
+
+```text
+before:
+ytsearch12:<query>
+
+now:
+ytsearchall:<query>
+```
+
+Artist Scent follows the same rule:
+
+```text
+ytsearchall:"Porter Robinson" music
+```
+
+The important part is that MeowPlayer does **not** wait for the whole search to finish before showing anything. yt-dlp still streams search entries line-by-line, so the Internet Nest behaves like a growing catalog:
+
+```text
+search starts
+    ↓
+result 1 arrives → visible immediately
+result 2 arrives → appended
+result 3 arrives → appended
+    ⋮
+more results keep arriving while you browse
+```
+
+The TUI already knows how to scroll over an arbitrary result list, so 0.17.3 simply stops cutting that list off at twelve.
+
+The search watchdog also changed. Previously, the timeout measured the **entire search duration**, which made no sense once searches could legitimately keep producing results for longer. It is now an **inactivity timeout**:
+
+```text
+results still arriving
+        ↓
+keep searching
+
+no search output for the timeout window
+        ↓
+consider the search stalled
+```
+
+There is also no hidden 12-result limit in the payload parser anymore. Explicit bounded searches are still supported for tests and tooling:
+
+```python
+youtube_search_target("query", 5)
+# ytsearch5:query
+```
+
+“ALL” means **all results exposed by yt-dlp's YouTube search extractor for that query**. MeowPlayer no longer imposes its own result ceiling, although YouTube and yt-dlp can still determine what the upstream search makes available.
+
+0.17.3 also benefits from the recent Internet Nest LRCLIB matching hardening: messy YouTube metadata, alternate titles, multilingual aliases, Topic/VEVO-style uploader names, and artist/title formatting are handled more generally rather than through one-song exceptions.
+
+In short:
+
+```text
+0.17.2: the internet cat borrowed the Songbook
+0.17.3: the internet cat kept scrolling
+        and discovered result number thirteen
+```
+
+> **MeowPlayer 0.17.3 — the Internet Nest no longer assumes the internet ends after twelve songs.**
 
 ## What's new in 0.17.2 — The Internet Cat Borrowed the Songbook
 
@@ -3203,7 +3270,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.2 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.17.3 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -3334,8 +3401,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.17.2-py3-none-any.whl
-└── meowplayer_terminal-0.17.2.tar.gz
+├── meowplayer_terminal-0.17.3-py3-none-any.whl
+└── meowplayer_terminal-0.17.3.tar.gz
 ```
 
 The installed CLI is still:
