@@ -1,4 +1,4 @@
-# MeowPlayer 🐈🎵
+# MeowPlayer 🐱🎵
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
