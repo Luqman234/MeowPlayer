@@ -66,8 +66,10 @@ from settings_nest import (
     normalize_setting_value,
 )
 from youtube_online import (
+    YouTubeBrowseSession,
     YouTubeCatalog,
     YouTubeDownloadSession,
+    YouTubePlaylist,
     YouTubeStreamResolver,
     YouTubeSearchSession,
     network_subprocess_env,
@@ -925,6 +927,13 @@ class MeowPlayer:
         self.youtube_selected = 0
         self.youtube_query = ""
         self.youtube_search_mode = "all"
+        self.creator_session = None
+        self.creator_name = ""
+        self.creator_channel_url = ""
+        self.creator_level = "menu"
+        self.creator_items = []
+        self.creator_selected = 0
+        self.creator_playlist = None
         self.online_current = None
         self.online_load_state = "idle"
         self.online_load_started_at = 0.0
@@ -1677,6 +1686,8 @@ class MeowPlayer:
             self.youtube_search_session.close()
         if self.youtube_download_session:
             self.youtube_download_session.close()
+        if self.creator_session:
+            self.creator_session.close()
         if self.stream_resolver:
             self.stream_resolver.close()
         self.online_metadata.stop()
@@ -3422,24 +3433,19 @@ class MeowPlayer:
         )
         return self.play_online(self.youtube_results[self.youtube_selected])
 
-    def download_selected_youtube_result(self):
-        if not self.youtube_results:
+    def download_youtube_track(self, track):
+        if track is None:
             return False
 
         if self.youtube_download_session is not None:
-            track = self.youtube_download_track
-            label = track.artist_title if track is not None else "another track"
+            active = self.youtube_download_track
+            label = active.artist_title if active is not None else "another track"
             self.set_status(
                 f"Download already in progress: {label}",
                 f"The adoption cat is already carrying home: {label}",
             )
             return False
 
-        self.youtube_selected = max(
-            0,
-            min(self.youtube_selected, len(self.youtube_results) - 1),
-        )
-        track = self.youtube_results[self.youtube_selected]
         destination = self.music_dir / "Internet Nest"
         self.youtube_download_track = track
         self.youtube_download_session = YouTubeDownloadSession(
@@ -3450,6 +3456,196 @@ class MeowPlayer:
         self.set_status(
             f"Downloading to library: {track.artist_title}",
             f"Adopting this meow into the Music Nest: {track.artist_title}",
+        )
+        return True
+
+    def download_selected_youtube_result(self):
+        if not self.youtube_results:
+            return False
+
+        self.youtube_selected = max(
+            0,
+            min(self.youtube_selected, len(self.youtube_results) - 1),
+        )
+        return self.download_youtube_track(
+            self.youtube_results[self.youtube_selected]
+        )
+
+    def open_selected_youtube_creator(self):
+        if not self.youtube_results:
+            return False
+
+        self.youtube_selected = max(
+            0,
+            min(self.youtube_selected, len(self.youtube_results) - 1),
+        )
+        track = self.youtube_results[self.youtube_selected]
+        if not track.channel_url:
+            self.set_status(
+                "This result does not expose a browsable YouTube channel.",
+                "This meow left no trail back to its creator nest.",
+            )
+            return False
+
+        if self.creator_session is not None:
+            self.creator_session.close()
+            self.creator_session = None
+
+        self.creator_name = track.artist
+        self.creator_channel_url = track.channel_url
+        self.creator_level = "menu"
+        self.creator_items = []
+        self.creator_selected = 0
+        self.creator_playlist = None
+        self.view = "creator"
+        self.set_status(
+            f"Opened creator channel: {self.creator_name}",
+            f"Found {self.creator_name}'s Creator Nest.",
+        )
+        return True
+
+    def start_creator_browse(self, level, playlist=None):
+        if level not in {"uploads", "playlists", "playlist"}:
+            return False
+
+        if self.creator_session is not None:
+            self.creator_session.close()
+
+        if level == "playlist":
+            if playlist is None:
+                return False
+            source_url = playlist.url
+            mode = "playlist"
+            self.creator_playlist = playlist
+        else:
+            source_url = self.creator_channel_url
+            mode = level
+            self.creator_playlist = None
+
+        self.creator_level = level
+        self.creator_items = []
+        self.creator_selected = 0
+        self.creator_session = YouTubeBrowseSession(
+            self.youtube,
+            source_url,
+            mode,
+        )
+
+        if level == "uploads":
+            serious = f"Loading uploads from {self.creator_name}..."
+            cat = f"Sniffing {self.creator_name}'s singles and uploads..."
+        elif level == "playlists":
+            serious = f"Loading playlists from {self.creator_name}..."
+            cat = f"Digging through {self.creator_name}'s playlist basket..."
+        else:
+            serious = f"Loading playlist: {playlist.title}..."
+            cat = f"Opening playlist: {playlist.title}..."
+
+        self.set_status(serious, cat)
+        return True
+
+    def process_creator_browse(self):
+        session = self.creator_session
+        if session is None:
+            return False
+
+        changed = False
+        while True:
+            try:
+                kind, value = session.results.get_nowait()
+            except queue.Empty:
+                break
+
+            changed = True
+            if kind in {"track", "playlist"}:
+                self.creator_items.append(value)
+                continue
+
+            self.creator_session = None
+            if kind == "error":
+                self.set_status(value, value)
+            else:
+                self.set_status(
+                    f"Creator browse: {len(self.creator_items)} item(s).",
+                    f"Creator Nest found {len(self.creator_items)} thing(s).",
+                )
+            session.close()
+            break
+
+        if (
+            self.stream_resolver
+            and self.creator_level in {"uploads", "playlist"}
+            and self.creator_items
+        ):
+            self.creator_selected = max(
+                0,
+                min(self.creator_selected, len(self.creator_items) - 1),
+            )
+            track = self.creator_items[self.creator_selected]
+            if hasattr(track, "video_id") and self._prefetch_selection != track.video_id:
+                self._prefetch_selection = track.video_id
+                self.stream_resolver.request(
+                    track,
+                    prefetch=True,
+                    debounce=0.15,
+                )
+
+        return changed
+
+    def activate_creator_selection(self):
+        if self.creator_level == "menu":
+            if self.creator_selected == 0:
+                return self.start_creator_browse("uploads")
+            return self.start_creator_browse("playlists")
+
+        if not self.creator_items:
+            return False
+
+        self.creator_selected = max(
+            0,
+            min(self.creator_selected, len(self.creator_items) - 1),
+        )
+        item = self.creator_items[self.creator_selected]
+        if self.creator_level == "playlists":
+            return self.start_creator_browse("playlist", item)
+        return self.play_online(item)
+
+    def download_selected_creator_track(self):
+        if (
+            self.creator_level not in {"uploads", "playlist"}
+            or not self.creator_items
+        ):
+            return False
+        self.creator_selected = max(
+            0,
+            min(self.creator_selected, len(self.creator_items) - 1),
+        )
+        return self.download_youtube_track(
+            self.creator_items[self.creator_selected]
+        )
+
+    def go_back_creator(self):
+        if self.creator_session is not None:
+            self.creator_session.close()
+            self.creator_session = None
+
+        if self.creator_level == "playlist":
+            return self.start_creator_browse("playlists")
+        if self.creator_level in {"uploads", "playlists"}:
+            self.creator_level = "menu"
+            self.creator_items = []
+            self.creator_selected = 0
+            self.creator_playlist = None
+            self.set_status(
+                f"Creator channel: {self.creator_name}",
+                f"Back at {self.creator_name}'s Creator Nest.",
+            )
+            return True
+
+        self.view = "online"
+        self.set_status(
+            "Returned to Internet Nest results.",
+            "The cat backed out to the Internet Nest.",
         )
         return True
 
@@ -5175,6 +5371,95 @@ class MeowPlayer:
 
         return scroll
 
+    def draw_creator(
+        self,
+        stdscr,
+        width,
+        list_start,
+        list_height,
+        scroll,
+    ):
+        if self.creator_level == "menu":
+            items = [
+                self.text("Singles / Uploads", "Singles / Uploads"),
+                self.text("Playlists", "Playlist Basket"),
+            ]
+        else:
+            items = self.creator_items
+
+        if items:
+            self.creator_selected = max(
+                0,
+                min(self.creator_selected, len(items) - 1),
+            )
+        else:
+            self.creator_selected = 0
+
+        if self.creator_selected < scroll:
+            scroll = self.creator_selected
+        if self.creator_selected >= scroll + list_height:
+            scroll = self.creator_selected - list_height + 1
+
+        if not items:
+            message = self.text(
+                "Loading creator items...",
+                "The creator cat is still sniffing around...",
+            )
+            if self.creator_session is None:
+                message = self.text(
+                    "No items found in this creator section.",
+                    "This corner of the Creator Nest is empty.",
+                )
+            try:
+                stdscr.addstr(
+                    list_start,
+                    2,
+                    message[:max(1, width - 4)],
+                    curses.A_DIM,
+                )
+            except curses.error:
+                pass
+            return scroll
+
+        for screen_row, item_index in enumerate(
+            range(scroll, min(len(items), scroll + list_height))
+        ):
+            item = items[item_index]
+            selected = item_index == self.creator_selected
+            prefix = ">^.^< " if selected and not self.serious_mode else "   "
+
+            if self.creator_level == "menu":
+                label = str(item)
+            elif self.creator_level == "playlists":
+                label = f"{item.title} · {item.count_label}"
+            else:
+                playing = (
+                    self.online_current is not None
+                    and item.video_id == self.online_current.video_id
+                )
+                if playing:
+                    prefix = "▶  " if self.serious_mode else "🐾 "
+                label = f"{item.artist_title} · {item.duration_label} · YouTube"
+                active_download = getattr(self, "youtube_download_track", None)
+                if (
+                    active_download is not None
+                    and item.video_id == active_download.video_id
+                ):
+                    label += self.text(" · downloading", " · adopting")
+
+            attr = curses.A_REVERSE if selected else curses.A_NORMAL
+            try:
+                stdscr.addstr(
+                    list_start + screen_row,
+                    2,
+                    (prefix + label)[:max(1, width - 4)],
+                    attr,
+                )
+            except curses.error:
+                pass
+
+        return scroll
+
     def draw_settings(
         self,
         stdscr,
@@ -5263,12 +5548,14 @@ class MeowPlayer:
         library_scroll = 0
         stash_scroll = 0
         youtube_scroll = 0
+        creator_scroll = 0
         settings_scroll = 0
         self.sync_mpris(force=True)
 
         while True:
             self.process_external_actions()
             self.process_youtube()
+            self.process_creator_browse()
             self.process_youtube_download()
             self.refresh_online_playback_state()
             self.playback_saboteur.tick(self)
@@ -5535,6 +5822,27 @@ class MeowPlayer:
                         f"paw on: {spec.cat_label}"
                     ),
                 )
+            elif self.view == "creator":
+                if self.creator_level == "menu":
+                    section = "channel"
+                    count = 2
+                elif self.creator_level == "uploads":
+                    section = "singles / uploads"
+                    count = len(self.creator_items)
+                elif self.creator_level == "playlists":
+                    section = "playlists"
+                    count = len(self.creator_items)
+                else:
+                    section = (
+                        self.creator_playlist.title
+                        if self.creator_playlist is not None
+                        else "playlist"
+                    )
+                    count = len(self.creator_items)
+                mode_line = self.text(
+                    f"Creator — {self.creator_name} / {section} · {count} item(s)",
+                    f"Creator Nest — {self.creator_name} / {section} · {count} thing(s)",
+                )
             elif self.view == "online":
                 query = self.youtube_query or "none"
                 artist_search = self.youtube_search_mode == "artist"
@@ -5680,6 +5988,14 @@ class MeowPlayer:
                     list_height,
                     settings_scroll,
                 )
+            elif self.view == "creator":
+                creator_scroll = self.draw_creator(
+                    stdscr,
+                    width,
+                    list_start,
+                    list_height,
+                    creator_scroll,
+                )
             elif self.view == "online":
                 youtube_scroll = self.draw_youtube(
                     stdscr,
@@ -5745,6 +6061,23 @@ class MeowPlayer:
                         "R Factory Meow  ,/Q/Esc Leave Nest  X Escape"
                     )
                     quote = self.cat_footer_message()
+            elif self.view == "creator":
+                if self.creator_level == "menu":
+                    controls = self.text(
+                        "↑↓ Select  ENTER Open  Esc Back  Q Library  X Quit",
+                        "↑↓ Choose  ENTER Enter  Esc Back  Q Music Nest  X Escape",
+                    )
+                elif self.creator_level == "playlists":
+                    controls = self.text(
+                        "↑↓ Select  ENTER Open Playlist  Esc Back  Q Library  X Quit",
+                        "↑↓ Choose  ENTER Open Basket  Esc Back  Q Music Nest  X Escape",
+                    )
+                else:
+                    controls = self.text(
+                        "↑↓ Select  ENTER Stream  D Download  Esc Back  Q Library  X Quit",
+                        "↑↓ Choose  ENTER Stream  D Adopt  Esc Back  Q Music Nest  X Escape",
+                    )
+                quote = "" if self.serious_mode else self.cat_footer_message()
             elif self.view == "online":
                 if self.serious_mode:
                     controls = (
@@ -5970,7 +6303,7 @@ class MeowPlayer:
                     )
                     continue
 
-                if self.view == "online":
+                if self.view in {"online", "creator"}:
                     self.view = "library"
                     self.set_status(
                         "Returned to local library.",
@@ -6185,6 +6518,9 @@ class MeowPlayer:
                     self.play_selected_youtube_result()
                 elif key in (ord("d"), ord("D")):
                     self.download_selected_youtube_result()
+                elif key in (ord("c"), ord("C")):
+                    if self.open_selected_youtube_creator():
+                        creator_scroll = 0
                 elif key == ord("/"):
                     if self.open_youtube_search(stdscr):
                         youtube_scroll = 0
@@ -6197,6 +6533,31 @@ class MeowPlayer:
                         "Returned to local library.",
                         "The cat left the Internet Nest.",
                     )
+
+            elif self.view == "creator":
+                item_count = (
+                    2
+                    if self.creator_level == "menu"
+                    else len(self.creator_items)
+                )
+                if key == curses.KEY_UP and item_count:
+                    self.creator_selected = max(
+                        0,
+                        self.creator_selected - 1,
+                    )
+                elif key == curses.KEY_DOWN and item_count:
+                    self.creator_selected = min(
+                        item_count - 1,
+                        self.creator_selected + 1,
+                    )
+                elif key in (10, 13, curses.KEY_ENTER):
+                    if self.activate_creator_selection():
+                        creator_scroll = 0
+                elif key in (ord("d"), ord("D")):
+                    self.download_selected_creator_track()
+                elif key == 27:
+                    if self.go_back_creator():
+                        creator_scroll = 0
 
             elif self.view == "stash":
                 if key == curses.KEY_UP and self.catnip_stash:
