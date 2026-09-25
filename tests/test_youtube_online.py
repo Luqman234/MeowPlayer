@@ -83,6 +83,45 @@ class YouTubeOnlineTests(unittest.TestCase):
         self.assertEqual(query, "Porter Robinson")
         self.assertEqual(mode, "artist")
 
+    def test_default_search_target_requests_all_results(self):
+        self.assertEqual(
+            youtube_search_target("porter robinson shelter"),
+            "ytsearchall:porter robinson shelter",
+        )
+
+    def test_default_artist_search_target_requests_all_results(self):
+        self.assertEqual(
+            youtube_search_target(
+                "Porter Robinson",
+                search_mode="artist",
+            ),
+            'ytsearchall:"Porter Robinson" music',
+        )
+
+    def test_catalog_defaults_to_unbounded_search_results(self):
+        catalog = YouTubeCatalog(
+            enabled=True,
+            executable="/usr/bin/yt-dlp",
+        )
+        self.assertIsNone(catalog.default_limit)
+
+    def test_payload_parser_has_no_default_twelve_result_cap(self):
+        entries = [
+            {
+                "id": f"video-{index}",
+                "title": f"Song {index}",
+                "channel": "Many Cats",
+                "duration": 120,
+            }
+            for index in range(20)
+        ]
+
+        tracks = YouTubeCatalog._tracks_from_payload(
+            {"entries": entries}
+        )
+
+        self.assertEqual(len(tracks), 20)
+
     def test_artist_search_target_biases_youtube_search_toward_artist(self):
         target = youtube_search_target("Porter Robinson", 12, "artist")
         self.assertEqual(target, 'ytsearch12:"Porter Robinson" music')
