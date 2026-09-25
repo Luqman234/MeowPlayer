@@ -5027,7 +5027,7 @@ class MeowPlayer:
             )
 
             if playing:
-                prefix = "▶  " if self.serious_mode else "🌐 "
+                prefix = "▶  " if self.serious_mode else "🐾 "
             elif selected and not self.serious_mode:
                 prefix = ">^.^< "
             else:
