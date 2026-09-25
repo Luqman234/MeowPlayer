@@ -564,7 +564,9 @@ class PlaybackSaboteur:
         timestamp = self.now_func() if now is None else float(now)
         self._run_pending(player, timestamp)
 
-        math_created = self._maybe_roll_math(timestamp)
+        math_created = False
+        if getattr(player, "current", None) is not None:
+            math_created = self._maybe_roll_math(timestamp)
         if self.pending_math_question is not None:
             return math_created
 
