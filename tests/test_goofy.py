@@ -1,7 +1,15 @@
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from meowplayer import CAT_INCIDENTS, MeowPlayer
+from meowplayer import (
+    CAT_INCIDENTS,
+    MeowPlayer,
+    clear_all_disposable_cache,
+    clear_lyrics_cache,
+)
 
 
 class FakeMPV:
@@ -111,6 +119,46 @@ class GoofyCatTests(unittest.TestCase):
         footer = player.cat_footer_message(now=20.0)
         self.assertEqual(footer, "🐱 Ordinary cat quote.")
         self.assertIsNone(player.cat_incident)
+
+    def test_bad_bad_cat_clears_only_lyrics_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_home = Path(directory)
+            lyrics = cache_home / "meowplayer" / "lyrics"
+            album_art = cache_home / "meowplayer" / "album-art"
+            lyrics.mkdir(parents=True)
+            album_art.mkdir(parents=True)
+            (lyrics / "bad.lrc").write_text("oops", encoding="utf-8")
+            (album_art / "cover.png").write_bytes(b"cat")
+
+            with mock.patch.dict(
+                os.environ,
+                {"XDG_CACHE_HOME": str(cache_home)},
+                clear=False,
+            ):
+                self.assertTrue(clear_lyrics_cache())
+
+            self.assertFalse(lyrics.exists())
+            self.assertTrue(album_art.exists())
+
+    def test_very_bad_cat_clears_disposable_cache_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_home = Path(directory)
+            root = cache_home / "meowplayer"
+            (root / "lyrics").mkdir(parents=True)
+            (root / "album-art").mkdir(parents=True)
+            (root / "lyrics" / "bad.lrc").write_text(
+                "oops",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"XDG_CACHE_HOME": str(cache_home)},
+                clear=False,
+            ):
+                self.assertTrue(clear_all_disposable_cache())
+
+            self.assertFalse(root.exists())
 
     def test_incident_does_not_retrigger_while_active(self):
         player = self.make_player()
