@@ -5586,13 +5586,13 @@ class MeowPlayer:
                 if self.serious_mode:
                     controls = (
                         "↑↓ Scroll  ENTER Follow  [ ] Rate  L Back  V Visualizer  "
-                        "N/P Track  Space Pause  X Quit"
+                        "N/P Track  , Settings  Space Pause  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Scroll  ENTER Follow  [ ] Judge  L Close Songbook  "
-                        "N/P Meow  G Pet  Space Paws  X Escape"
+                        "N/P Meow  , Settings  G Pet  Space Paws  X Escape"
                     )
                     quote = self.cat_footer_message()
             elif self.view == "library":
@@ -5638,13 +5638,13 @@ class MeowPlayer:
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Play  [ ] Rate  D Remove  J/K Move  "
-                        "C Clear  W Save .m3u  O Load .m3u  Q Library  X Quit"
+                        "C Clear  W Save .m3u  O Load .m3u  , Settings  Q Library  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Devour  [ ] Judge  D Yeet  J/K Rearrange  "
-                        "C Spill  W Bury .m3u  O Dig up .m3u  G Pet  Q Nest  X Escape"
+                        "C Spill  W Bury .m3u  O Dig up .m3u  , Settings  G Pet  Q Nest  X Escape"
                     )
                     quote = self.cat_footer_message()
 
