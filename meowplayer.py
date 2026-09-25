@@ -3985,11 +3985,12 @@ class MeowPlayer:
         self.lyrics_scroll = 0
 
     def refresh_current_lyrics(self):
-        if self.online_current is not None:
+        online_track = getattr(self, "online_current", None)
+        if online_track is not None:
             poll_transient = getattr(self.lyrics, "poll_transient", None)
             if poll_transient is None:
                 return False
-            document = poll_transient(self.online_current.video_id)
+            document = poll_transient(online_track.video_id)
             track_index = None
             fetched_message = (
                 f"Lyrics fetched for this session: {document.source}."
@@ -4021,10 +4022,11 @@ class MeowPlayer:
         return True
 
     def lyrics_lookup_message(self):
-        if self.online_current is not None:
+        online_track = getattr(self, "online_current", None)
+        if online_track is not None:
             status_fn = getattr(self.lyrics, "transient_status", None)
             state = (
-                status_fn(self.online_current.video_id)
+                status_fn(online_track.video_id)
                 if status_fn is not None
                 else {"status": "idle", "query": "", "attempts": 0}
             )
@@ -4119,17 +4121,18 @@ class MeowPlayer:
         self.lyrics_follow = True
 
         if self.current_lyrics is None:
-            if self.online_current is not None:
+            online_track = getattr(self, "online_current", None)
+            if online_track is not None:
                 status_fn = getattr(self.lyrics, "transient_status", None)
                 retry_fn = getattr(self.lyrics, "retry_transient", None)
                 if status_fn is not None and retry_fn is not None:
-                    state = status_fn(self.online_current.video_id)
+                    state = status_fn(online_track.video_id)
                     if state.get("status") == "network-error":
                         retry_fn(
-                            self.online_current.video_id,
-                            title=self.online_current.title,
-                            artist=self.online_current.artist,
-                            duration=self.online_current.duration,
+                            online_track.video_id,
+                            title=online_track.title,
+                            artist=online_track.artist,
+                            duration=online_track.duration,
                         )
             elif self.current is not None:
                 state = self.lyrics.online_status(self.songs[self.current])
