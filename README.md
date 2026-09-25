@@ -673,7 +673,7 @@ Start it with:
 meowplayer --youtube
 ```
 
-Then press `Y` from the TUI to open the **Internet Nest**. Type a search, choose a result with the arrow keys, and press `Enter` to stream it.
+Then press `Y` from the TUI to open the **Internet Nest**. Type a song/title search, choose a result with the arrow keys, and press `Enter` to stream it.
 
 ```text
 INTERNET NEST
@@ -684,6 +684,34 @@ query: porter robinson shelter
       Shelter (Official Video) — Porter Robinson · 3:50 · YouTube
       Something Comforting — Porter Robinson · 4:41 · YouTube
 ```
+
+### Artist search — follow the human scent instead
+
+Inside the Internet Nest, press `A` to search by **artist name**.
+
+```text
+A
+↓
+Internet Nest artist scent: Porter Robinson
+↓
+yt-dlp search: "Porter Robinson" music
+↓
+songs / official uploads / useful label uploads
+```
+
+Artist search is deliberately **artist-first, not uploader-only**. YouTube uploads are messy: an official track may come from the artist, a `- Topic` channel, VEVO, or a record label. MeowPlayer therefore biases the YouTube query toward the artist name instead of hard-filtering everything by channel and accidentally throwing away legitimate uploads.
+
+The normal `Y` / `/` search prompt also accepts this shortcut:
+
+```text
+artist:Porter Robinson
+artist:Beach House
+artist:YOASOBI
+```
+
+The current search mode is shown in the Internet Nest header as either a normal query/scent or an **artist / artist scent**.
+
+The artist label shown beside each result now keeps artist/creator metadata from yt-dlp when available, falling back through uploader/channel information the same way as before.
 
 The implementation deliberately keeps the local and online worlds separate:
 
@@ -741,7 +769,7 @@ The target is **≤2 seconds from Enter on a prefetched result**, not a promise 
 RES_OPTIONS=single-request-reopen python tools/benchmark_youtube_startup.py 'https://www.youtube.com/watch?v=...' --runs 5 --json
 ```
 
-MeowPlayer does not set this option or modify your DNS configuration. Cold extraction, DNS, and remote media opening remain external bottlenecks. `time-pos` confirms playback at mpv's output, not acoustic arrival at a speaker.
+As of 0.16.4, MeowPlayer applies `single-request-reopen` **process-locally on affected glibc systems** to its YouTube-facing child processes. It does not rewrite system DNS configuration or force a public resolver. Cold extraction, DNS, and remote media opening remain external bottlenecks. `time-pos` confirms playback at mpv's output, not acoustic arrival at a speaker.
 
 MeowPlayer's own performance logs omit direct URLs and header values. **mpv's verbose debug log can still contain signed stream URLs and HTTP headers**; review/redact both log files before sharing them.
 
@@ -749,9 +777,11 @@ MeowPlayer's own performance logs omit direct URLs and header values. **mpv's ve
 
 ```text
 Y          search YouTube / open Internet Nest
+A          search by artist name
 ↑ / ↓      choose a search result
 Enter      stream selected result
-/          search again while in Internet Nest
+/          normal search again while in Internet Nest
+artist:X   artist search from the normal search prompt
 Q or Esc   return to the local Music Nest
 Space      pause / resume
 ← / →      seek
