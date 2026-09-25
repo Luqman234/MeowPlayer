@@ -607,6 +607,10 @@ class MPVController:
                                 if name == "time-pos" and isinstance(value, (int, float)) and value > 0:
                                     self.playback_events.setdefault("first-nonzero-time-pos", time.monotonic())
                             else:
+                                if event == "start-file":
+                                    # A prior entry's end/error may arrive after
+                                    # loadfile was sent but before this start.
+                                    self.playback_events.clear()
                                 self.playback_events[event] = time.monotonic()
                                 if event == "end-file":
                                     self.playback_events["end-reason"] = message.get("reason")

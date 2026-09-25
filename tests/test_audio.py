@@ -377,12 +377,15 @@ class AudioEngineTests(unittest.TestCase):
 
     def test_mpv_ipc_frames_event_and_reply_from_same_recv(self):
         controller = self.ipc_controller(lambda r: (
+            b'{"event":"end-file","reason":"error"}\n'
             b'{"event":"start-file"}\n' + json.dumps({
                 "data": "song.flac", "error": "success", "request_id": r["request_id"]
             }).encode() + b"\n"))
         response = controller.command("get_property", "path")
         self.assertEqual(response["data"], "song.flac")
         self.assertIn("start-file", controller.playback_events)
+        self.assertNotIn("end-file", controller.playback_events)
+        self.assertNotIn("end-reason", controller.playback_events)
 
     def test_mpv_ipc_reuses_connection_and_matches_sequential_requests(self):
         controller = self.ipc_controller(lambda r: (
