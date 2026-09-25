@@ -11,6 +11,7 @@ from youtube_online import (
     YouTubeTrack,
     YouTubeUnavailable,
     normalize_youtube_search,
+    youtube_creator_browse_targets,
     youtube_creator_section_url,
     youtube_download_command,
     youtube_search_target,
@@ -103,6 +104,43 @@ class YouTubeOnlineTests(unittest.TestCase):
         self.assertEqual(
             tracks[0].channel_url,
             "https://www.youtube.com/@creatorcat",
+        )
+
+    def test_topic_channel_uploads_fall_back_to_channel_root(self):
+        targets = youtube_creator_browse_targets(
+            "https://www.youtube.com/channel/UCtopic",
+            "uploads",
+        )
+
+        self.assertEqual(
+            targets,
+            (
+                "https://www.youtube.com/channel/UCtopic/videos",
+                "https://www.youtube.com/channel/UCtopic",
+            ),
+        )
+
+    def test_creator_playlists_fall_back_to_releases(self):
+        targets = youtube_creator_browse_targets(
+            "https://www.youtube.com/@creatorcat",
+            "playlists",
+        )
+
+        self.assertEqual(
+            targets,
+            (
+                "https://www.youtube.com/@creatorcat/playlists",
+                "https://www.youtube.com/@creatorcat/releases",
+            ),
+        )
+
+    def test_creator_section_url_normalizes_releases_to_channel_root(self):
+        self.assertEqual(
+            youtube_creator_section_url(
+                "https://www.youtube.com/@creatorcat/releases",
+                "videos",
+            ),
+            "https://www.youtube.com/@creatorcat/videos",
         )
 
     def test_creator_section_urls_are_built_from_channel_root(self):

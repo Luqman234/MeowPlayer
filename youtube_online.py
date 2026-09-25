@@ -897,11 +897,8 @@ class YouTubeDownloadSession:
         self.thread.join(timeout=2.0)
 
 
-def youtube_creator_section_url(channel_url, section):
-    """Return a creator channel subsection URL suitable for yt-dlp."""
-    if section not in {"videos", "playlists"}:
-        raise ValueError(f"Unsupported creator section: {section}")
-
+def youtube_creator_root_url(channel_url):
+    """Normalize a YouTube channel URL back to its channel root."""
     raw = str(channel_url or "").strip().rstrip("/")
     if not raw.startswith(("https://", "http://")):
         return ""
@@ -909,6 +906,7 @@ def youtube_creator_section_url(channel_url, section):
     for suffix in (
         "/videos",
         "/playlists",
+        "/releases",
         "/featured",
         "/streams",
         "/shorts",
@@ -916,7 +914,50 @@ def youtube_creator_section_url(channel_url, section):
         if raw.endswith(suffix):
             raw = raw[:-len(suffix)]
             break
-    return f"{raw}/{section}"
+    return raw
+
+
+def youtube_creator_section_url(channel_url, section):
+    """Return a creator channel subsection URL suitable for yt-dlp."""
+    if section not in {"videos", "playlists", "releases"}:
+        raise ValueError(f"Unsupported creator section: {section}")
+
+    root = youtube_creator_root_url(channel_url)
+    if not root:
+        return ""
+    return f"{root}/{section}"
+
+
+def youtube_creator_browse_targets(channel_url, mode):
+    """Return ordered yt-dlp targets with fallbacks for uneven channel layouts."""
+    root = youtube_creator_root_url(channel_url)
+    if not root:
+        return ()
+
+    if mode == "uploads":
+        candidates = (
+            youtube_creator_section_url(root, "videos"),
+            root,
+        )
+    elif mode == "playlists":
+        candidates = (
+            youtube_creator_section_url(root, "playlists"),
+            youtube_creator_section_url(root, "releases"),
+        )
+    elif mode == "playlist":
+        candidates = (str(channel_url or "").strip(),)
+    else:
+        raise ValueError(f"Unsupported YouTube browse mode: {mode}")
+
+    ordered = []
+    seen = set()
+    for candidate in candidates:
+        candidate = str(candidate or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        ordered.append(candidate)
+    return tuple(ordered)
 
 
 class YouTubeBrowseSession:
@@ -951,29 +992,22 @@ class YouTubeBrowseSession:
         )
         self.thread.start()
 
-    def _target(self):
-        if self.mode == "uploads":
-            return youtube_creator_section_url(
-                self.source_url,
-                "videos",
-            )
-        if self.mode == "playlists":
-            return youtube_creator_section_url(
-                self.source_url,
-                "playlists",
-            )
-        return self.source_url
+    def _targets(self):
+        return youtube_creator_browse_targets(
+            self.source_url,
+            self.mode,
+        )
 
     def _run(self):
         process = None
-        started = time.monotonic()
         try:
             if not self.catalog.available:
                 raise YouTubeBrowseError(
                     self.catalog.unavailable_reason
                 )
-            target = self._target()
-            if not target:
+
+            targets = self._targets()
+            if not targets:
                 raise YouTubeBrowseError(
                     "This result does not expose a browsable YouTube channel."
                 )
@@ -983,78 +1017,140 @@ class YouTubeBrowseSession:
                 "channel_id,channel_url,uploader_id,uploader_url,duration,"
                 "playlist_count,n_entries,webpage_url,original_url,url})j"
             )
-            command = [
-                self.catalog.executable,
-                "--ignore-config",
-                "--flat-playlist",
-                "--skip-download",
-                "--no-warnings",
-                "--lazy-playlist",
-                "--print",
-                fields,
-                target,
-            ]
-            LOGGER.info(
-                "YouTube browse requested mode=%s source=%s",
-                self.mode,
-                target,
-            )
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                env=network_subprocess_env(PYTHONUNBUFFERED="1"),
-            )
-            last_progress = started
             seen = set()
-            buffer = b""
+            succeeded = False
 
-            with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
-                while not self.cancel.is_set():
-                    if not selector.select(timeout=0.1):
-                        if process.poll() is not None:
-                            break
-                        if time.monotonic() - last_progress >= self.timeout:
-                            raise YouTubeBrowseError(
-                                "YouTube channel browsing stalled."
+            for attempt, target in enumerate(targets, start=1):
+                if self.cancel.is_set():
+                    return
+
+                process = None
+                buffer = b""
+                before_count = len(seen)
+                last_progress = time.monotonic()
+                try:
+                    command = [
+                        self.catalog.executable,
+                        "--ignore-config",
+                        "--flat-playlist",
+                        "--skip-download",
+                        "--no-warnings",
+                        "--lazy-playlist",
+                        "--print",
+                        fields,
+                        target,
+                    ]
+                    LOGGER.info(
+                        "YouTube browse requested mode=%s source=%s attempt=%s/%s",
+                        self.mode,
+                        target,
+                        attempt,
+                        len(targets),
+                    )
+                    process = subprocess.Popen(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        env=network_subprocess_env(PYTHONUNBUFFERED="1"),
+                    )
+
+                    with selectors.DefaultSelector() as selector:
+                        selector.register(
+                            process.stdout,
+                            selectors.EVENT_READ,
+                        )
+                        while not self.cancel.is_set():
+                            if not selector.select(timeout=0.1):
+                                if process.poll() is not None:
+                                    break
+                                if (
+                                    time.monotonic() - last_progress
+                                    >= self.timeout
+                                ):
+                                    raise YouTubeBrowseError(
+                                        "YouTube channel browsing stalled."
+                                    )
+                                continue
+
+                            chunk = os.read(
+                                process.stdout.fileno(),
+                                65536,
                             )
+                            if not chunk:
+                                break
+                            last_progress = time.monotonic()
+                            buffer += chunk
+
+                            while b"\n" in buffer:
+                                line, buffer = buffer.split(b"\n", 1)
+                                data = json.loads(line)
+
+                                if self.mode == "playlists":
+                                    item = self.catalog._playlist_from_entry(
+                                        data
+                                    )
+                                    if (
+                                        item is None
+                                        or item.playlist_id in seen
+                                    ):
+                                        continue
+                                    seen.add(item.playlist_id)
+                                    self.results.put(("playlist", item))
+                                    continue
+
+                                tracks = self.catalog._tracks_from_payload(
+                                    {"entries": [data]}
+                                )
+                                for track in tracks:
+                                    if track.video_id in seen:
+                                        continue
+                                    seen.add(track.video_id)
+                                    self.results.put(("track", track))
+
+                    if self.cancel.is_set():
+                        return
+
+                    returncode = process.wait(timeout=1)
+                    if returncode == 0:
+                        produced_items = len(seen) > before_count
+                        if produced_items or attempt == len(targets):
+                            succeeded = True
+                            break
+                        LOGGER.info(
+                            "YouTube browse target was empty mode=%s source=%s; "
+                            "trying fallback",
+                            self.mode,
+                            target,
+                        )
                         continue
 
-                    chunk = os.read(process.stdout.fileno(), 65536)
-                    if not chunk:
-                        break
-                    last_progress = time.monotonic()
-                    buffer += chunk
+                    LOGGER.info(
+                        "YouTube browse target failed mode=%s source=%s "
+                        "returncode=%s; trying fallback if available",
+                        self.mode,
+                        target,
+                        returncode,
+                    )
+                except YouTubeBrowseError as exc:
+                    LOGGER.info(
+                        "YouTube browse target unavailable mode=%s source=%s "
+                        "reason=%s; trying fallback if available",
+                        self.mode,
+                        target,
+                        exc,
+                    )
+                finally:
+                    if process is not None:
+                        if process.poll() is None:
+                            process.kill()
+                        process.communicate()
+                    process = None
 
-                    while b"\n" in buffer:
-                        line, buffer = buffer.split(b"\n", 1)
-                        data = json.loads(line)
-
-                        if self.mode == "playlists":
-                            item = self.catalog._playlist_from_entry(data)
-                            if item is None or item.playlist_id in seen:
-                                continue
-                            seen.add(item.playlist_id)
-                            self.results.put(("playlist", item))
-                            continue
-
-                        tracks = self.catalog._tracks_from_payload(
-                            {"entries": [data]}
-                        )
-                        for track in tracks:
-                            if track.video_id in seen:
-                                continue
-                            seen.add(track.video_id)
-                            self.results.put(("track", track))
-
-            if (
-                not self.cancel.is_set()
-                and process.wait(timeout=1) != 0
-            ):
+            if not succeeded:
                 raise YouTubeBrowseError(
                     "yt-dlp could not browse this YouTube channel."
                 )
+
             if not self.cancel.is_set():
                 self.results.put(("done", None))
         except YouTubeBrowseError as exc:
