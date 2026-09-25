@@ -2,12 +2,12 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.16.2** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.16.3** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.2 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.16.3 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -76,6 +76,207 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.16.3 — The Cat Hunts Before You Press Enter
+
+Internet Nest is now built around **background search, selected-result prefetch, direct-stream caching, and observed mpv state** instead of making the user wait for every expensive operation after pressing `Enter`.
+
+The old path was functionally correct but badly timed:
+
+```text
+search
+  ↓
+block the TUI until yt-dlp finishes
+  ↓
+show results
+  ↓
+Enter
+  ↓
+resolve the YouTube watch URL
+  ↓
+wait again
+  ↓
+open the media stream
+  ↓
+music
+```
+
+0.16.3 moves that work earlier:
+
+```text
+Internet Nest search worker
+        ↓
+results appear as they arrive
+        ↓
+first / highlighted result
+        ↓
+150 ms selection debounce
+        ↓
+one background resolver
+        ↓
+short-lived ResolvedStream cache
+
+              later...
+
+             Enter
+               ↓
+cached direct audio URL + per-file headers
+               ↓
+mpv with ytdl disabled for that file
+               ↓
+music
+```
+
+### Search no longer owns the TUI
+
+YouTube search now runs in a background worker and publishes usable JSON-line results incrementally instead of blocking curses until the whole search subprocess completes.
+
+The first result can begin prefetching immediately. Moving the selection schedules the highlighted result after a **150 ms debounce**, so rapidly tapping the arrow keys does not spawn a resolver for every transient row.
+
+Only **one resolver worker** runs at a time, with at most **one queued request**. Same-video resolves are deduplicated.
+
+### Enter can reuse work that already happened
+
+Resolved streams live in a **16-entry, memory-only LRU** for at most **180 seconds**, shortened when the signed media URL expires sooner.
+
+A resolved entry keeps only what playback needs, including the selected direct audio URL and the required per-file HTTP headers. MeowPlayer does not download the media, does not add the remote track to Cat Catalog, and does not persist the cache across launches.
+
+On a cache hit:
+
+```text
+Enter
+  ↓
+no second yt-dlp extraction
+  ↓
+direct stream handed to mpv
+  ↓
+required HTTP headers apply to this file only
+```
+
+If the direct stream is rejected, MeowPlayer invalidates the entry, performs one fresh resolve, and can still fall back to mpv's ordinary YouTube watch-URL ytdl hook. Repeated `Enter` while the same track is resolving/loading remains suppressed.
+
+Without `--youtube`, none of the search or resolver workers start.
+
+### mpv state is observed instead of constantly interrogated
+
+The persistent JSON IPC connection introduced in 0.16.2 now has one reader responsible for newline framing, asynchronous events, request-ID waiters, reconnect/resubscription, and shutdown.
+
+Frequently-read playback properties are observed and cached rather than queried synchronously on every TUI loop. In a matched property-read workload, command traffic fell from:
+
+```text
+before: 77.09 commands / second
+after:   0.00 commands / second after observer setup
+```
+
+Gapless safety is deliberately different. Path, playlist position, and playlist count still use fresh synchronous replies at the existing mutation gates where stale state could corrupt the one-track-ahead playlist.
+
+The stable local-gapless invariant remains:
+
+```text
+playlist-current-pos = 0
+playlist-count       = 2
+```
+
+and MeowPlayer still refuses to mutate the future playlist while mpv reports `playlist-current-pos = -1`.
+
+### What the latency measurements actually showed
+
+The optimization work measured real mpv playback rather than treating a successful `loadfile` command as "started". Startup timing requires the expected direct stream plus mpv's `file-loaded`, `playback-restart`, non-idle state, and advancing playback time.
+
+Development measurements used mpv 0.41.0, yt-dlp 2026.08.19, Linux/glibc, and YouTube video `jNQXAC9IVRw`.
+
+| Measurement | Result |
+| --- | ---: |
+| Previous mpv watch-URL → playback baseline | 12,419 ms |
+| Full JSON extractor baseline | 7,004 ms / 87,723 bytes |
+| Direct `-g` candidate | 7,066 ms / 1,162 bytes |
+| Selected-JSON candidate | 6,837 ms / 1,477 bytes |
+| Default DNS, cold median / p95 (3 runs) | 12,713 / 13,925 ms |
+| Default DNS, warm median / p95 (3 runs) | 5,350 / 5,484 ms |
+| DNS diagnostic, cold median / p95 (5 runs) | 2,824 / 3,792 ms |
+| DNS diagnostic, warm median / p95 (5 runs) | **290 / 331 ms** |
+| Final diagnostic cold run | 2,687 ms |
+| Final diagnostic warm run | **288 ms** |
+| Final diagnostic direct-open time | **287 ms** |
+
+The selected-JSON resolver was chosen because it keeps the HTTP headers needed for robust direct playback. The speedup does **not** come from yt-dlp suddenly extracting YouTube in a few hundred milliseconds; the major win is performing extraction before `Enter` and reusing that result.
+
+The original search completed in **6,779 ms**. In the DNS diagnostic environment, streaming search produced its first result in **1,586 ms** and all results in **1,675 ms**. A later default-DNS run took **10,017 ms** to first result and **10,108 ms** total. That means there is no demonstrated universal default-network search-speedup claim: the important guaranteed improvement is that the TUI stays responsive and can consume results incrementally.
+
+### About the 2-second target
+
+The engineering target was **≤2 seconds from Enter to actual mpv playback on a prefetched result**.
+
+That target was **not met in the measured default environment**. A media-host DNS lookup independently reproduced a roughly **5,027 ms** delay before TCP connection, closely matching the multi-second warm-start penalty there.
+
+With the process-only resolver diagnostic:
+
+```bash
+RES_OPTIONS=single-request-reopen \
+  python tools/benchmark_youtube_startup.py \
+  'https://www.youtube.com/watch?v=...' \
+  --runs 5 --json
+```
+
+all five warm samples were below one second, with a **290 ms median and 331 ms p95**.
+
+MeowPlayer does **not** set `RES_OPTIONS`, alter system DNS, or pretend that diagnostic result represents every machine. Cold extraction still exceeded two seconds in most diagnostic runs. Network resolution, YouTube extraction, and remote media opening remain external bottlenecks.
+
+In other words:
+
+```text
+MeowPlayer-controlled warm path
+        ↓
+can be ~0.3 s
+
+affected default resolver path
+        ↓
+can still lose ~5 s before TCP
+```
+
+The cat learned to hunt early. It cannot personally repair your DNS server.
+
+### Better measurements, less log leakage
+
+Debug mode now records performance-oriented `YT_LATENCY`, `YT_PREFETCH`, `YT_PLAY`, and `IPC_STATS` events using a monotonic clock.
+
+MeowPlayer's own performance log omits direct stream URLs and HTTP-header values. The verbose mpv debug log can still contain signed media URLs and headers, so it should still be reviewed before sharing.
+
+For reproducible investigation:
+
+```bash
+python tools/benchmark_youtube_startup.py \
+  'https://www.youtube.com/watch?v=...' \
+  --runs 5 --json
+
+python tools/benchmark_youtube_startup.py \
+  --query 'On My Way' \
+  --runs 5 --json
+
+python tools/benchmark_youtube_startup.py \
+  'https://www.youtube.com/watch?v=...' \
+  --candidates --runs 3
+```
+
+Full raw measurements, reproduction commands, methodology, DNS diagnostics, and caveats live in [`docs/youtube-startup-performance.md`](docs/youtube-startup-performance.md).
+
+### Validation
+
+The performance work was designed not to turn normal CI into "hope YouTube is up today".
+
+Validation includes:
+
+- 162 local tests, including opt-in real-mpv / loopback-HTTP coverage.
+- Deterministic tests for cache expiry, resolve deduplication, rapid selection changes, debounce, Enter during/after prefetch, cancellation, late results, fallback/re-resolution, partial IPC frames, interleaved replies, observed values, reconnect/resubscription, reader shutdown, and HTTP-header isolation.
+- Existing real Linux coverage for mpv IPC, stable gapless `position=0/count=2`, top-level playback/re-prime, debug logs, D-Bus/MPRIS, Watchdog/inotify, and Pillow.
+- Wheel/sdist build, Twine metadata validation, clean-wheel dependency checks, installed CLI version/help checks, and coverage.
+- Normal CI never contacts YouTube; direct-stream integration uses a local HTTP fixture.
+
+A follow-up real-mpv CI run also caught a gapless re-prime timing regression. Gapless path confirmation therefore explicitly retains a fresh synchronous reply, while ordinary playback observations remain cached. The test's null-audio configuration was also moved under its overridden `XDG_CONFIG_HOME` so integration behavior does not accidentally depend on host audio availability.
+
+0.16.3 is therefore mostly a performance-and-architecture release:
+
+> **the expensive internet cat starts hunting before you press Enter, and the playback cat stops asking mpv the same question 77 times per second.**
 
 ## What's new in 0.16.2 — The Cat Learned How Newlines Work
 
@@ -2109,7 +2310,7 @@ The mascot reacts to player state:
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.2 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.16.3 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -2236,8 +2437,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.16.2-py3-none-any.whl
-└── meowplayer_terminal-0.16.2.tar.gz
+├── meowplayer_terminal-0.16.3-py3-none-any.whl
+└── meowplayer_terminal-0.16.3.tar.gz
 ```
 
 The installed CLI is still:
