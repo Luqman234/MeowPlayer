@@ -64,6 +64,7 @@ from youtube_online import (
     YouTubeStreamResolver,
     YouTubeSearchSession,
     network_subprocess_env,
+    normalize_youtube_search,
 )
 
 
@@ -913,6 +914,7 @@ class MeowPlayer:
         self.youtube_results = []
         self.youtube_selected = 0
         self.youtube_query = ""
+        self.youtube_search_mode = "all"
         self.online_current = None
         self.online_load_state = "idle"
         self.online_load_started_at = 0.0
@@ -4477,7 +4479,7 @@ class MeowPlayer:
             stdscr.nodelay(True)
             stdscr.timeout(100)
 
-    def open_youtube_search(self, stdscr):
+    def open_youtube_search(self, stdscr, search_mode="all"):
         if not self.youtube.enabled:
             self.set_status(
                 "YouTube playback is disabled. Restart with --youtube.",
@@ -4492,24 +4494,46 @@ class MeowPlayer:
             )
             return False
 
-        query = self.prompt_text(
-            stdscr,
-            self.text("YouTube search", "Internet Nest search"),
+        requested_mode = "artist" if search_mode == "artist" else "all"
+        prompt = self.text(
+            "YouTube artist search" if requested_mode == "artist" else "YouTube search",
+            (
+                "Internet Nest artist scent"
+                if requested_mode == "artist"
+                else "Internet Nest search (artist:Name also works)"
+            ),
         )
+        query = self.prompt_text(stdscr, prompt)
+        query, search_mode = normalize_youtube_search(query, requested_mode)
         if not query:
             LOGGER.debug("YouTube search cancelled or empty")
             return False
 
-        LOGGER.info("YouTube search requested query=%r", query)
+        LOGGER.info(
+            "YouTube search requested mode=%s query=%r",
+            search_mode,
+            query,
+        )
         if self.youtube_search_session:
             self.youtube_search_session.close()
         self.youtube_query = query
+        self.youtube_search_mode = search_mode
         self.youtube_results = []
         self.youtube_selected = 0
         self._prefetch_selection = None
-        self.youtube_search_session = YouTubeSearchSession(self.youtube, query)
+        self.youtube_search_session = YouTubeSearchSession(
+            self.youtube,
+            query,
+            search_mode=search_mode,
+        )
         self.view = "online"
-        self.set_status("Searching YouTube...", "The internet cat is hunting...")
+        if search_mode == "artist":
+            self.set_status(
+                f"Searching YouTube for artist: {query}...",
+                f'The internet cat is stalking artist "{query}"...',
+            )
+        else:
+            self.set_status("Searching YouTube...", "The internet cat is hunting...")
         return True
 
     def prompt_path(self, stdscr, prompt, default):
@@ -4821,8 +4845,8 @@ class MeowPlayer:
 
         if not results:
             message = self.text(
-                "No YouTube results. Press / or Y to search.",
-                "The Internet Nest is empty. Press / or Y and send the cat out.",
+                "No YouTube results. Press / or Y to search, A for artist search.",
+                "The Internet Nest is empty. / hunts songs; A stalks an artist.",
             )
             try:
                 stdscr.addstr(
@@ -5152,13 +5176,16 @@ class MeowPlayer:
                     )
             elif self.view == "online":
                 query = self.youtube_query or "none"
+                artist_search = self.youtube_search_mode == "artist"
+                serious_label = "artist" if artist_search else "query"
+                cat_label = "artist scent" if artist_search else "scent"
                 mode_line = self.text(
                     (
-                        f"YouTube Online — query: {query} · "
+                        f"YouTube Online — {serious_label}: {query} · "
                         f"{len(self.youtube_results)} result(s)"
                     ),
                     (
-                        f"Internet Nest — scent: {query} · "
+                        f"Internet Nest — {cat_label}: {query} · "
                         f"{len(self.youtube_results)} meow(s)"
                     ),
                 )
@@ -5736,6 +5763,9 @@ class MeowPlayer:
                     self.play_selected_youtube_result()
                 elif key == ord("/"):
                     if self.open_youtube_search(stdscr):
+                        youtube_scroll = 0
+                elif key in (ord("a"), ord("A")):
+                    if self.open_youtube_search(stdscr, search_mode="artist"):
                         youtube_scroll = 0
                 elif key == 27:
                     self.view = "library"
