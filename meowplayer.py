@@ -3,6 +3,7 @@
 import argparse
 import curses
 import json
+import logging
 import os
 import queue
 import random
@@ -37,6 +38,11 @@ from meow_smart import (
     build_smart_playlists,
     load_custom_mix_definitions,
 )
+from meow_logging import (
+    configure_debug_logging,
+    mpv_debug_log_path,
+    shutdown_debug_logging,
+)
 from meow_persistence import (
     load_config,
     load_state,
@@ -59,7 +65,11 @@ from youtube_online import (
 )
 
 
-__version__ = "0.16.0"
+__version__ = "0.16.1"
+
+
+LOGGER = logging.getLogger("meowplayer")
+MPV_LOGGER = logging.getLogger("meowplayer.mpv")
 
 
 SUPPORTED_EXTENSIONS = {
@@ -396,6 +406,7 @@ def build_mpv_command(
     gapless_mode="weak",
     replaygain_mode="track",
     replaygain_preamp=0.0,
+    debug_log_path=None,
 ):
     gapless_mode = (
         gapless_mode
@@ -413,7 +424,7 @@ def build_mpv_command(
     except (TypeError, ValueError):
         replaygain_preamp = 0.0
 
-    return [
+    command = [
         "mpv",
         "--no-video",
         "--idle=yes",
@@ -428,6 +439,14 @@ def build_mpv_command(
         f"--input-ipc-server={socket_path}",
     ]
 
+    if debug_log_path:
+        command.extend([
+            f"--log-file={Path(debug_log_path).expanduser()}",
+            "--msg-level=all=v",
+        ])
+
+    return command
+
 
 class MPVController:
     def __init__(
@@ -435,6 +454,7 @@ class MPVController:
         gapless_mode="weak",
         replaygain_mode="track",
         replaygain_preamp=0.0,
+        debug_log_path=None,
     ):
         self.socket_path = os.path.join(
             tempfile.gettempdir(),
@@ -446,21 +466,44 @@ class MPVController:
         except FileNotFoundError:
             pass
 
+        self.debug_log_path = (
+            Path(debug_log_path).expanduser()
+            if debug_log_path
+            else None
+        )
+        command = build_mpv_command(
+            self.socket_path,
+            gapless_mode=gapless_mode,
+            replaygain_mode=replaygain_mode,
+            replaygain_preamp=replaygain_preamp,
+            debug_log_path=self.debug_log_path,
+        )
+        MPV_LOGGER.debug(
+            "Starting mpv pid-pending socket=%s debug_log=%s",
+            self.socket_path,
+            self.debug_log_path,
+        )
         self.process = subprocess.Popen(
-            build_mpv_command(
-                self.socket_path,
-                gapless_mode=gapless_mode,
-                replaygain_mode=replaygain_mode,
-                replaygain_preamp=replaygain_preamp,
-            ),
+            command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        MPV_LOGGER.info("mpv started pid=%s", self.process.pid)
 
+        socket_ready = False
         for _ in range(50):
             if os.path.exists(self.socket_path):
+                socket_ready = True
                 break
             time.sleep(0.02)
+
+        if socket_ready:
+            MPV_LOGGER.debug("mpv IPC socket ready: %s", self.socket_path)
+        else:
+            MPV_LOGGER.warning(
+                "mpv IPC socket did not appear within startup window: %s",
+                self.socket_path,
+            )
 
     def command(self, *args):
         if not os.path.exists(self.socket_path):
@@ -484,8 +527,12 @@ class MPVController:
             if data:
                 return json.loads(data.decode("utf-8"))
 
-        except (OSError, json.JSONDecodeError, socket.timeout):
-            pass
+        except (OSError, json.JSONDecodeError, socket.timeout) as exc:
+            MPV_LOGGER.debug(
+                "mpv IPC command failed command=%s error=%r",
+                args[0] if args else "<empty>",
+                exc,
+            )
 
         return None
 
@@ -502,9 +549,11 @@ class MPVController:
         self.set_property("loop-file", "inf" if enabled else "no")
 
     def load(self, filename):
+        MPV_LOGGER.info("loadfile replace: %s", filename)
         self.command("loadfile", str(filename), "replace")
 
     def append(self, filename):
+        MPV_LOGGER.debug("loadfile append: %s", filename)
         self.command("loadfile", str(filename), "append")
 
     def advance_playlist(self):
@@ -588,15 +637,19 @@ class MPVController:
         return not bool(paused)
 
     def stop(self):
+        MPV_LOGGER.info("stop")
         self.command("stop")
 
     def seek(self, seconds):
+        MPV_LOGGER.debug("seek relative: %s", seconds)
         self.command("seek", seconds, "relative")
 
     def seek_absolute(self, seconds):
+        MPV_LOGGER.debug("seek absolute: %s", seconds)
         self.command("seek", max(0.0, seconds), "absolute", "exact")
 
     def quit(self):
+        MPV_LOGGER.info("mpv shutdown requested")
         try:
             self.command("quit")
         except Exception:
