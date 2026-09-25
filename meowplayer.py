@@ -3,6 +3,7 @@
 import argparse
 import curses
 import json
+import logging
 import os
 import queue
 import random
@@ -37,6 +38,11 @@ from meow_smart import (
     build_smart_playlists,
     load_custom_mix_definitions,
 )
+from meow_logging import (
+    configure_debug_logging,
+    mpv_debug_log_path,
+    shutdown_debug_logging,
+)
 from meow_persistence import (
     load_config,
     load_state,
@@ -59,7 +65,11 @@ from youtube_online import (
 )
 
 
-__version__ = "0.16.0"
+__version__ = "0.16.1"
+
+
+LOGGER = logging.getLogger("meowplayer")
+MPV_LOGGER = logging.getLogger("meowplayer.mpv")
 
 
 SUPPORTED_EXTENSIONS = {
@@ -396,6 +406,7 @@ def build_mpv_command(
     gapless_mode="weak",
     replaygain_mode="track",
     replaygain_preamp=0.0,
+    debug_log_path=None,
 ):
     gapless_mode = (
         gapless_mode
@@ -413,7 +424,7 @@ def build_mpv_command(
     except (TypeError, ValueError):
         replaygain_preamp = 0.0
 
-    return [
+    command = [
         "mpv",
         "--no-video",
         "--idle=yes",
@@ -428,6 +439,14 @@ def build_mpv_command(
         f"--input-ipc-server={socket_path}",
     ]
 
+    if debug_log_path:
+        command.extend([
+            f"--log-file={Path(debug_log_path).expanduser()}",
+            "--msg-level=all=v",
+        ])
+
+    return command
+
 
 class MPVController:
     def __init__(
@@ -435,6 +454,7 @@ class MPVController:
         gapless_mode="weak",
         replaygain_mode="track",
         replaygain_preamp=0.0,
+        debug_log_path=None,
     ):
         self.socket_path = os.path.join(
             tempfile.gettempdir(),
@@ -446,21 +466,44 @@ class MPVController:
         except FileNotFoundError:
             pass
 
+        self.debug_log_path = (
+            Path(debug_log_path).expanduser()
+            if debug_log_path
+            else None
+        )
+        command = build_mpv_command(
+            self.socket_path,
+            gapless_mode=gapless_mode,
+            replaygain_mode=replaygain_mode,
+            replaygain_preamp=replaygain_preamp,
+            debug_log_path=self.debug_log_path,
+        )
+        MPV_LOGGER.debug(
+            "Starting mpv pid-pending socket=%s debug_log=%s",
+            self.socket_path,
+            self.debug_log_path,
+        )
         self.process = subprocess.Popen(
-            build_mpv_command(
-                self.socket_path,
-                gapless_mode=gapless_mode,
-                replaygain_mode=replaygain_mode,
-                replaygain_preamp=replaygain_preamp,
-            ),
+            command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        MPV_LOGGER.info("mpv started pid=%s", self.process.pid)
 
+        socket_ready = False
         for _ in range(50):
             if os.path.exists(self.socket_path):
+                socket_ready = True
                 break
             time.sleep(0.02)
+
+        if socket_ready:
+            MPV_LOGGER.debug("mpv IPC socket ready: %s", self.socket_path)
+        else:
+            MPV_LOGGER.warning(
+                "mpv IPC socket did not appear within startup window: %s",
+                self.socket_path,
+            )
 
     def command(self, *args):
         if not os.path.exists(self.socket_path):
@@ -484,8 +527,12 @@ class MPVController:
             if data:
                 return json.loads(data.decode("utf-8"))
 
-        except (OSError, json.JSONDecodeError, socket.timeout):
-            pass
+        except (OSError, json.JSONDecodeError, socket.timeout) as exc:
+            MPV_LOGGER.debug(
+                "mpv IPC command failed command=%s error=%r",
+                args[0] if args else "<empty>",
+                exc,
+            )
 
         return None
 
@@ -502,9 +549,11 @@ class MPVController:
         self.set_property("loop-file", "inf" if enabled else "no")
 
     def load(self, filename):
+        MPV_LOGGER.info("loadfile replace: %s", filename)
         self.command("loadfile", str(filename), "replace")
 
     def append(self, filename):
+        MPV_LOGGER.debug("loadfile append: %s", filename)
         self.command("loadfile", str(filename), "append")
 
     def advance_playlist(self):
@@ -588,15 +637,19 @@ class MPVController:
         return not bool(paused)
 
     def stop(self):
+        MPV_LOGGER.info("stop")
         self.command("stop")
 
     def seek(self, seconds):
+        MPV_LOGGER.debug("seek relative: %s", seconds)
         self.command("seek", seconds, "relative")
 
     def seek_absolute(self, seconds):
+        MPV_LOGGER.debug("seek absolute: %s", seconds)
         self.command("seek", max(0.0, seconds), "absolute", "exact")
 
     def quit(self):
+        MPV_LOGGER.info("mpv shutdown requested")
         try:
             self.command("quit")
         except Exception:
@@ -634,8 +687,20 @@ class MeowPlayer:
         filesystem_watch_enabled=True,
         cat_chaos_mode=None,
         youtube_enabled=False,
+        debug_log_path=None,
+        mpv_log_path=None,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
+        self.debug_log_path = (
+            Path(debug_log_path).expanduser()
+            if debug_log_path
+            else None
+        )
+        self.mpv_log_path = (
+            Path(mpv_log_path).expanduser()
+            if mpv_log_path
+            else None
+        )
         self.serious_mode = serious_mode
         self.maximum_meow = maximum_meow
         self.cat_chaos_mode = (
@@ -645,6 +710,15 @@ class MeowPlayer:
         )
         self.playback_saboteur = PlaybackSaboteur(self.cat_chaos_mode)
         self.youtube = YouTubeCatalog(enabled=youtube_enabled)
+        LOGGER.info(
+            "Initializing player music_dir=%s youtube=%s serious=%s "
+            "maximum_meow=%s cat_chaos=%s",
+            self.music_dir,
+            youtube_enabled,
+            serious_mode,
+            maximum_meow,
+            self.cat_chaos_mode,
+        )
         self.youtube_results = []
         self.youtube_selected = 0
         self.youtube_query = ""
@@ -831,8 +905,12 @@ class MeowPlayer:
                     " The internet cat cannot find yt-dlp and is staring "
                     "accusingly at PATH."
                 )
+        if self.debug_log_path is not None:
+            initial_serious += f" Debug log: {self.debug_log_path}."
+            initial_cat += f" Debug paws: {self.debug_log_path}."
 
         self.status_message = self.text(initial_serious, initial_cat)
+        LOGGER.debug("Initial status: %s", self.status_message)
         self.quote = random.choice(CAT_QUOTES)
         now = time.monotonic()
         self.last_quote_change = now
@@ -855,6 +933,7 @@ class MeowPlayer:
             gapless_mode=self.gapless_mode,
             replaygain_mode=self.replaygain_mode,
             replaygain_preamp=self.replaygain_preamp,
+            debug_log_path=self.mpv_log_path,
         )
         self.mpv.set_property("volume", self.volume)
         self.mpv.set_repeat(self.repeat)
@@ -1370,6 +1449,7 @@ class MeowPlayer:
             self.sync_mpris(force=True)
 
     def shutdown(self):
+        LOGGER.info("Player shutdown starting")
         self.persist_state(force=True)
         self.playback_saboteur.dismiss(self)
         self.online_metadata.stop()
@@ -1387,12 +1467,14 @@ class MeowPlayer:
             self.catalog = None
 
         self.mpv.quit()
+        LOGGER.info("Player shutdown complete")
 
     def text(self, serious, cat):
         return serious if self.serious_mode else cat
 
     def set_status(self, serious, cat):
         self.status_message = self.text(serious, cat)
+        LOGGER.debug("status=%s", self.status_message)
 
     def has_active_track(self):
         return self.current is not None or self.online_current is not None
@@ -2743,6 +2825,14 @@ class MeowPlayer:
         if track is None:
             return False
 
+        LOGGER.info(
+            "Starting online playback video_id=%s title=%r artist=%r url=%s",
+            track.video_id,
+            track.title,
+            track.artist,
+            track.url,
+        )
+
         self.online_current = track
         self.current = None
         self.current_lyrics = None
@@ -2782,6 +2872,12 @@ class MeowPlayer:
             return
 
         index %= len(self.songs)
+        LOGGER.info(
+            "Starting local playback index=%s path=%s automatic=%s",
+            index,
+            self.songs[index],
+            automatic,
+        )
         self.online_current = None
 
         reset_shuffle_bag = False
@@ -2855,7 +2951,12 @@ class MeowPlayer:
             self.mpv.play()
 
         self.gapless_next_index = None
-        self._awaiting_mpv_path = True
+        # A successful primed advance was already confirmed above by
+        # wait_for_path(). Do not require a second instantaneous path read
+        # from sync_gapless_transition(); mpv can briefly return no path
+        # between asynchronous property updates even after the handoff was
+        # observed. Manual/fallback loadfile paths still require confirmation.
+        self._awaiting_mpv_path = not advanced
 
         if record_listen and self.catalog is not None:
             self.catalog.record_play(self.songs[index])
@@ -4001,7 +4102,10 @@ class MeowPlayer:
             self.text("YouTube search", "Internet Nest search"),
         )
         if not query:
+            LOGGER.debug("YouTube search cancelled or empty")
             return False
+
+        LOGGER.info("YouTube search requested query=%r", query)
 
         try:
             stdscr.erase()
@@ -4023,6 +4127,7 @@ class MeowPlayer:
         try:
             results = self.youtube.search(query)
         except (YouTubeUnavailable, YouTubeSearchError) as exc:
+            LOGGER.warning("YouTube search failed query=%r error=%s", query, exc)
             self.set_status(
                 f"YouTube search failed: {exc}",
                 f"The internet cat fell off the router: {exc}",
@@ -4031,6 +4136,11 @@ class MeowPlayer:
 
         self.youtube_query = query
         self.youtube_results = list(results)
+        LOGGER.info(
+            "YouTube search completed query=%r results=%s",
+            query,
+            len(self.youtube_results),
+        )
         self.youtube_selected = 0
         self.view = "online"
 
@@ -5437,6 +5547,23 @@ def parse_args(argv=None):
             "through yt-dlp + mpv"
         )
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help=(
+            "enable rotating MeowPlayer debug logs and a separate verbose "
+            "mpv log under the XDG state directory"
+        )
+    )
+    parser.add_argument(
+        "--log-file",
+        metavar="PATH",
+        default=None,
+        help=(
+            "write MeowPlayer debug logs to PATH; implies --debug "
+            "(mpv uses a sibling .mpv log)"
+        )
+    )
 
     return parser.parse_args(argv)
 
@@ -5444,7 +5571,58 @@ def parse_args(argv=None):
 def main():
     args = parse_args()
 
+    try:
+        debug_log_path = configure_debug_logging(
+            enabled=args.debug,
+            log_file=args.log_file,
+        )
+    except OSError as exc:
+        print(
+            f"Could not enable MeowPlayer debug logging: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    mpv_log_path = (
+        mpv_debug_log_path(debug_log_path)
+        if debug_log_path is not None
+        else None
+    )
+    if mpv_log_path is not None:
+        try:
+            mpv_log_path.parent.mkdir(parents=True, exist_ok=True)
+            mpv_log_path.unlink(missing_ok=True)
+        except OSError as exc:
+            LOGGER.warning("Could not prepare mpv debug log: %s", exc)
+            mpv_log_path = None
+
+    LOGGER.info("MeowPlayer %s starting", __version__)
+    LOGGER.debug(
+        "runtime python=%s platform=%s cwd=%s",
+        sys.version.replace("\n", " "),
+        sys.platform,
+        Path.cwd(),
+    )
+    LOGGER.debug(
+        "launch options music_dir=%r youtube=%s serious=%s maximum_meow=%s "
+        "bad_bad=%s very_bad=%s dangerous=%s gapless=%r replaygain=%r",
+        args.music_dir,
+        args.youtube,
+        args.serious_mode,
+        args.maximum_meow,
+        args.bad_bad_cat,
+        args.very_bad_cat,
+        args.dangerous_cat,
+        args.gapless_mode,
+        args.replaygain,
+    )
+    if debug_log_path is not None:
+        LOGGER.info("MeowPlayer debug log: %s", debug_log_path)
+        LOGGER.info("mpv debug log: %s", mpv_log_path)
+
     if args.dangerous_cat and not confirm_dangerous_cat():
+        LOGGER.info("Dangerous Cat confirmation cancelled")
+        shutdown_debug_logging()
         return
 
     if args.dangerous_cat:
@@ -5567,13 +5745,21 @@ def main():
             filesystem_watch_enabled=filesystem_watch_enabled,
             cat_chaos_mode=cat_chaos_mode,
             youtube_enabled=args.youtube,
+            debug_log_path=debug_log_path,
+            mpv_log_path=mpv_log_path,
         )
     except FileNotFoundError:
+        LOGGER.exception("MPV executable was not found during player startup")
         print(
             "MPV was not found.\n"
             + _platform_install_hint()
         )
+        shutdown_debug_logging()
         sys.exit(1)
+    except Exception:
+        LOGGER.exception("MeowPlayer initialization failed")
+        shutdown_debug_logging()
+        raise
 
     if not player.songs and not player.youtube.available:
         message = f"No supported music files found in:\n{music_dir}"
@@ -5587,6 +5773,7 @@ def main():
             )
         print(message)
         player.shutdown()
+        shutdown_debug_logging()
         sys.exit(0)
 
     if not player.songs and player.youtube.available:
@@ -5597,8 +5784,15 @@ def main():
 
     try:
         curses.wrapper(player.run)
+    except Exception:
+        LOGGER.exception("Unhandled exception escaped the curses TUI")
+        raise
     finally:
-        player.shutdown()
+        try:
+            player.shutdown()
+        finally:
+            LOGGER.info("MeowPlayer %s exiting", __version__)
+            shutdown_debug_logging()
 
 
 if __name__ == "__main__":

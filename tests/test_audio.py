@@ -443,8 +443,9 @@ class AudioEngineTests(unittest.TestCase):
         self.assertEqual(player.mpv.cleared, 0)
         self.assertEqual(player.mpv.loaded, [])
         self.assertEqual(player.mpv.play_calls, 0)
-        self.assertTrue(player._awaiting_mpv_path)
+        self.assertFalse(player._awaiting_mpv_path)
         self.assertEqual(player.gapless_next_index, 2)
+        self.assertEqual(player.mpv.primed[-1], Path("/music/2.flac"))
 
     def test_stranded_successful_primed_advance_recovers_with_replace(self):
         player = self.make_player(current=0)

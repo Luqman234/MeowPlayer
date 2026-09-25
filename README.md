@@ -2,12 +2,12 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.16.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.16.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.16.1 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -76,6 +76,85 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.16.1 — The Cat Finally Keeps Receipts
+
+MeowPlayer now has a proper **file-based debug mode** designed specifically for a curses TUI, where dumping diagnostics into the terminal would otherwise turn the screen into ANSI soup.
+
+Start normally with debug logging enabled:
+
+```bash
+meowplayer --debug
+```
+
+By default, MeowPlayer writes its own rotating log to:
+
+```text
+$XDG_STATE_HOME/meowplayer/debug.log
+```
+
+or, when `XDG_STATE_HOME` is not set:
+
+```text
+~/.local/state/meowplayer/debug.log
+```
+
+mpv gets a separate verbose log beside it:
+
+```text
+~/.local/state/meowplayer/debug.mpv.log
+```
+
+The MeowPlayer log rotates at roughly **2 MiB**, keeping up to **3 backups**, so turning on debug mode does not create an immortal text monster. The mpv log is refreshed for each debug run and receives verbose mpv/ytdl-hook diagnostics.
+
+For a custom location:
+
+```bash
+meowplayer --log-file /tmp/meowplayer-debug.log
+```
+
+`--log-file` automatically enables debug mode. Its mpv sibling becomes:
+
+```text
+/tmp/meowplayer-debug.mpv.log
+```
+
+A particularly useful command for the experimental Internet Nest is:
+
+```bash
+meowplayer --youtube --debug
+```
+
+Then, in another terminal:
+
+```bash
+tail -f ~/.local/state/meowplayer/debug.log
+```
+
+and for the lower-level playback/extractor side:
+
+```bash
+tail -f ~/.local/state/meowplayer/debug.mpv.log
+```
+
+The main debug log records useful events such as startup/runtime information, enabled modes, player initialization, local and online playback starts, TUI status changes, YouTube searches, yt-dlp search failures, mpv lifecycle events, IPC failures, shutdown, and uncaught TUI exceptions.
+
+Debug output is deliberately **file-only**. MeowPlayer does not attach a noisy console logging handler while curses owns the screen.
+
+Debug logs can contain local music paths, YouTube search terms, selected video URLs, and low-level diagnostics. Read them before posting them publicly if any of that information matters to you.
+
+In short:
+
+```text
+something broke
+     ↓
+meowplayer --debug
+     ↓
+debug.log       ← MeowPlayer / YouTube search / Python side
+debug.mpv.log   ← mpv / ytdl-hook / playback side
+     ↓
+the cat can no longer claim there were no witnesses
+```
 
 ## What's new in 0.16.0 — The Cat Found the Internet Radio
 
@@ -648,6 +727,9 @@ meowplayer --no-online-metadata
 meowplayer --no-visualizer
 meowplayer --no-watch
 meowplayer --youtube
+meowplayer --debug
+meowplayer --youtube --debug
+meowplayer --log-file /tmp/meowplayer-debug.log
 meowplayer --version
 ```
 
@@ -1946,7 +2028,7 @@ The mascot reacts to player state:
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.16.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.16.1 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -2073,8 +2155,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.16.0-py3-none-any.whl
-└── meowplayer_terminal-0.16.0.tar.gz
+├── meowplayer_terminal-0.16.1-py3-none-any.whl
+└── meowplayer_terminal-0.16.1.tar.gz
 ```
 
 The installed CLI is still:
@@ -2095,8 +2177,10 @@ MeowPlayer/
 ├── meow_catalog.py            # SQLite Cat Catalog + migrations
 ├── meow_smart.py              # Smart Mix parser/generator
 ├── meow_persistence.py        # XDG config + runtime state
+├── meow_logging.py            # rotating debug logs + XDG log paths
 ├── mpris_support.py           # Linux MPRIS bridge
 ├── visualizer.py              # CAVA raw spectrum integration
+├── youtube_online.py          # experimental yt-dlp YouTube catalog
 ├── pyproject.toml
 ├── requirements.txt
 ├── README.md
@@ -2107,6 +2191,7 @@ MeowPlayer/
 │   ├── test_album_art.py
 │   ├── test_audio.py
 │   ├── test_catalog.py
+│   ├── test_debug_logging.py
 │   ├── test_goofy.py
 │   ├── test_lyrics.py
 │   ├── test_online_metadata.py
@@ -2114,7 +2199,8 @@ MeowPlayer/
 │   ├── test_shuffle.py
 │   ├── test_smart.py
 │   ├── test_visualizer.py
-│   └── test_watcher.py
+│   ├── test_watcher.py
+│   └── test_youtube_online.py
 └── .github/
     └── workflows/
         ├── comprehensive-test.yml
@@ -2137,8 +2223,10 @@ python -m py_compile \
   meow_catalog.py \
   meow_smart.py \
   meow_persistence.py \
+  meow_logging.py \
   mpris_support.py \
-  visualizer.py
+  visualizer.py \
+  youtube_online.py
 ```
 
 Run the tests:

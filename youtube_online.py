@@ -1,7 +1,11 @@
 import json
+import logging
 import shutil
 import subprocess
 from dataclasses import dataclass
+
+
+LOGGER = logging.getLogger("meowplayer.youtube")
 
 
 class YouTubeUnavailable(RuntimeError):
@@ -60,6 +64,13 @@ class YouTubeCatalog:
         self.executable = executable or shutil.which("yt-dlp")
         self.timeout = max(1.0, float(timeout))
         self.default_limit = max(1, min(50, int(default_limit)))
+        LOGGER.debug(
+            "YouTubeCatalog enabled=%s executable=%s timeout=%s default_limit=%s",
+            self.enabled,
+            self.executable,
+            self.timeout,
+            self.default_limit,
+        )
 
     @property
     def available(self):
@@ -100,6 +111,13 @@ class YouTubeCatalog:
             target,
         ]
 
+        LOGGER.info(
+            "yt-dlp search start query=%r limit=%s executable=%s",
+            query,
+            limit,
+            self.executable,
+        )
+
         try:
             completed = subprocess.run(
                 command,
@@ -109,16 +127,28 @@ class YouTubeCatalog:
                 timeout=self.timeout,
             )
         except subprocess.TimeoutExpired as exc:
+            LOGGER.warning(
+                "yt-dlp search timed out query=%r timeout=%s",
+                query,
+                self.timeout,
+            )
             raise YouTubeSearchError(
                 f"YouTube search timed out after {self.timeout:.0f}s."
             ) from exc
         except OSError as exc:
+            LOGGER.exception("Could not launch yt-dlp executable=%s", self.executable)
             raise YouTubeSearchError(
                 f"Could not launch yt-dlp: {exc}"
             ) from exc
 
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()
+            LOGGER.warning(
+                "yt-dlp search failed query=%r returncode=%s stderr_tail=%r",
+                query,
+                completed.returncode,
+                detail[-500:],
+            )
             if len(detail) > 240:
                 detail = detail[-240:]
             raise YouTubeSearchError(
@@ -129,11 +159,22 @@ class YouTubeCatalog:
         try:
             payload = json.loads(completed.stdout)
         except (TypeError, json.JSONDecodeError) as exc:
+            LOGGER.warning(
+                "yt-dlp returned invalid JSON query=%r stdout_tail=%r",
+                query,
+                (completed.stdout or "")[-500:],
+            )
             raise YouTubeSearchError(
                 "yt-dlp returned invalid search metadata."
             ) from exc
 
-        return self._tracks_from_payload(payload, limit=limit)
+        tracks = self._tracks_from_payload(payload, limit=limit)
+        LOGGER.info(
+            "yt-dlp search complete query=%r results=%s",
+            query,
+            len(tracks),
+        )
+        return tracks
 
     @classmethod
     def _tracks_from_payload(cls, payload, limit=12):
