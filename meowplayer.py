@@ -3529,14 +3529,15 @@ class MeowPlayer:
             self.youtube,
             source_url,
             mode,
+            creator_name=self.creator_name,
         )
 
         if level == "uploads":
             serious = f"Loading uploads from {self.creator_name}..."
             cat = f"Sniffing {self.creator_name}'s singles and uploads..."
         elif level == "playlists":
-            serious = f"Loading playlists from {self.creator_name}..."
-            cat = f"Digging through {self.creator_name}'s playlist basket..."
+            serious = f"Loading playlists / releases from {self.creator_name}..."
+            cat = f"Digging through {self.creator_name}'s release basket..."
         else:
             serious = f"Loading playlist: {playlist.title}..."
             cat = f"Opening playlist: {playlist.title}..."
@@ -5382,7 +5383,7 @@ class MeowPlayer:
         if self.creator_level == "menu":
             items = [
                 self.text("Singles / Uploads", "Singles / Uploads"),
-                self.text("Playlists", "Playlist Basket"),
+                self.text("Playlists / Releases", "Release Basket"),
             ]
         else:
             items = self.creator_items
@@ -6069,8 +6070,8 @@ class MeowPlayer:
                     )
                 elif self.creator_level == "playlists":
                     controls = self.text(
-                        "↑↓ Select  ENTER Open Playlist  Esc Back  Q Library  X Quit",
-                        "↑↓ Choose  ENTER Open Basket  Esc Back  Q Music Nest  X Escape",
+                        "↑↓ Select  ENTER Open Release  Esc Back  Q Library  X Quit",
+                        "↑↓ Choose  ENTER Open Release  Esc Back  Q Music Nest  X Escape",
                     )
                 else:
                     controls = self.text(
