@@ -69,12 +69,16 @@ the maximum observed sample, not a population-level reliability guarantee.
 A separate streaming-search run with that DNS environment and “On My Way”
 returned the first result in **1,586 ms**, all 12 in **1,675 ms**. This comparison
 also changes DNS conditions, so it cannot attribute the entire improvement
-over 6,779 ms to streaming. The first result can now appear independently of
+over 6,779 ms to streaming. A final **default-DNS** run took **10,017 ms** to
+the first result and **10,108 ms** to completion (warm playback 5,327 ms).
+There is no demonstrated default-network search speedup; initial external
+requests still dominate. The first result can now appear independently of
 process completion; both search and extraction run off the TUI thread.
 
 Machine-readable measurements:
 
 - [default DNS, three runs](youtube-benchmark-default-dns.json)
+- [default DNS search, final one-run check](youtube-benchmark-default-search.json)
 - [DNS diagnostic, five runs](youtube-benchmark-single-request-reopen.json)
 - [Final-code check, one run](youtube-benchmark-final-code.json): 2,687 ms cold,
   288 ms warm, 287 ms direct-open; same process-local DNS diagnostic.
