@@ -5052,6 +5052,73 @@ class MeowPlayer:
 
         return scroll
 
+    def draw_settings(
+        self,
+        stdscr,
+        width,
+        list_start,
+        list_height,
+        scroll,
+    ):
+        count = len(SETTINGS_SPECS)
+        if not count:
+            return 0
+
+        self.settings_selected = max(
+            0,
+            min(self.settings_selected, count - 1),
+        )
+        if self.settings_selected < scroll:
+            scroll = self.settings_selected
+        if self.settings_selected >= scroll + list_height:
+            scroll = self.settings_selected - list_height + 1
+
+        for screen_row, setting_index in enumerate(
+            range(scroll, min(count, scroll + list_height))
+        ):
+            spec = SETTINGS_SPECS[setting_index]
+            selected = setting_index == self.settings_selected
+            value = format_setting_value(spec, self.setting_value(spec))
+            label = spec.label if self.serious_mode else spec.cat_label
+            scope = "LIVE" if spec.live else "NEXT LAUNCH"
+            prefix = (
+                "> " if self.serious_mode and selected
+                else ">^.^< " if selected
+                else "  "
+            )
+            text = f"{prefix}{label:<34} [{value:^12}]  {scope}"
+            attr = curses.A_REVERSE if selected else curses.A_NORMAL
+            if not spec.live:
+                attr |= curses.A_DIM
+
+            try:
+                stdscr.addstr(
+                    list_start + screen_row,
+                    2,
+                    text[:max(1, width - 4)],
+                    attr,
+                )
+            except curses.error:
+                pass
+
+        detail_row = list_start + min(count - scroll, list_height)
+        if detail_row < list_start + list_height:
+            spec = SETTINGS_SPECS[self.settings_selected]
+            detail = spec.description
+            if not spec.live:
+                detail += " Saved now; takes effect on the next launch."
+            try:
+                stdscr.addstr(
+                    detail_row,
+                    2,
+                    detail[:max(1, width - 4)],
+                    curses.A_DIM,
+                )
+            except curses.error:
+                pass
+
+        return scroll
+
     def run(self, stdscr):
         curses.curs_set(0)
         stdscr.nodelay(True)
@@ -5073,6 +5140,7 @@ class MeowPlayer:
         library_scroll = 0
         stash_scroll = 0
         youtube_scroll = 0
+        settings_scroll = 0
         self.sync_mpris(force=True)
 
         while True:
@@ -5113,7 +5181,41 @@ class MeowPlayer:
 
                 stdscr.refresh()
                 key = stdscr.getch()
-                if key in (ord("x"), ord("X")):
+                if self.view == "settings":
+                if key == curses.KEY_UP:
+                    self.settings_selected = max(
+                        0,
+                        self.settings_selected - 1,
+                    )
+                    continue
+                if key == curses.KEY_DOWN:
+                    self.settings_selected = min(
+                        len(SETTINGS_SPECS) - 1,
+                        self.settings_selected + 1,
+                    )
+                    continue
+                if key == curses.KEY_LEFT:
+                    self.change_selected_setting(direction=-1)
+                    continue
+                if key == curses.KEY_RIGHT:
+                    self.change_selected_setting(direction=1)
+                    continue
+                if key in (10, 13, curses.KEY_ENTER, ord(" ")):
+                    self.change_selected_setting(direction=1)
+                    continue
+                if key in (ord("r"), ord("R")):
+                    self.change_selected_setting(reset=True)
+                    continue
+                if key in (ord(","), ord("q"), ord("Q"), 27):
+                    self.close_settings_nest()
+                    continue
+
+            if key == ord(","):
+                self.open_settings_nest()
+                settings_scroll = 0
+                continue
+
+            if key in (ord("x"), ord("X")):
                     break
                 continue
 
@@ -5331,6 +5433,18 @@ class MeowPlayer:
                             f"{self.current_lyrics.source} · {follow}"
                         )
                     )
+            elif self.view == "settings":
+                spec = SETTINGS_SPECS[self.settings_selected]
+                mode_line = self.text(
+                    (
+                        f"Settings — {len(SETTINGS_SPECS)} option(s) · "
+                        f"selected: {spec.label}"
+                    ),
+                    (
+                        f"SETTINGS NEST — {len(SETTINGS_SPECS)} household rule(s) · "
+                        f"paw on: {spec.cat_label}"
+                    ),
+                )
             elif self.view == "online":
                 query = self.youtube_query or "none"
                 artist_search = self.youtube_search_mode == "artist"
@@ -5468,6 +5582,14 @@ class MeowPlayer:
                     list_height,
                     library_scroll,
                 )
+            elif self.view == "settings":
+                settings_scroll = self.draw_settings(
+                    stdscr,
+                    width,
+                    list_start,
+                    list_height,
+                    settings_scroll,
+                )
             elif self.view == "online":
                 youtube_scroll = self.draw_youtube(
                     stdscr,
@@ -5511,26 +5633,39 @@ class MeowPlayer:
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Open/Play  1-7 Views  F Favorite  "
-                        "[ ] Rate  L Lyrics  V Viz  M Mixes  Y YouTube  Q Queue  X Quit"
+                        "[ ] Rate  L Lyrics  V Viz  M Mixes  Y YouTube  , Settings  Q Queue  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Open/Purr  1-7 Nests  F Pawmark  "
-                        "[ ] Judge  L Songbook  M Mixes  Y Internet  G Pet  Q Catnip"
+                        "[ ] Judge  L Songbook  M Mixes  Y Internet  , Settings  G Pet  Q Catnip"
+                    )
+                    quote = self.cat_footer_message()
+            elif self.view == "settings":
+                if self.serious_mode:
+                    controls = (
+                        "↑↓ Select  ←→ Change  Enter/Space Toggle  "
+                        "R Reset  ,/Q/Esc Back  X Quit"
+                    )
+                    quote = ""
+                else:
+                    controls = (
+                        "↑↓ Paw  ←→ Nudge  Enter/Space Change  "
+                        "R Factory Meow  ,/Q/Esc Leave Nest  X Escape"
                     )
                     quote = self.cat_footer_message()
             elif self.view == "online":
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Stream  / Search  A Artist  Y Search  "
-                        "Q Library  Space Pause  X Quit"
+                        ", Settings  Q Library  Space Pause  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Stream  / Hunt  A Artist Scent  Y Search  "
-                        "Q Nest  Space Paws  X Escape"
+                        ", Settings  Q Nest  Space Paws  X Escape"
                     )
                     quote = self.cat_footer_message()
             else:
@@ -5573,9 +5708,13 @@ class MeowPlayer:
             stdscr.refresh()
 
             render_art_layout = (
-                lyrics_art_layout
-                if self.view == "lyrics"
-                else art_layout
+                None
+                if self.view == "settings"
+                else (
+                    lyrics_art_layout
+                    if self.view == "lyrics"
+                    else art_layout
+                )
             )
             if render_art_layout is not None:
                 self.album_art.render(
@@ -6308,6 +6447,7 @@ def main():
             youtube_enabled=args.youtube,
             debug_log_path=debug_log_path,
             mpv_log_path=mpv_log_path,
+            app_config=config,
         )
     except FileNotFoundError:
         LOGGER.exception("MPV executable was not found during player startup")
