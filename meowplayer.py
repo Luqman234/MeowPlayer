@@ -865,6 +865,9 @@ class MeowPlayer:
         replaygain_preamp=0.0,
         lyrics_enabled=True,
         lyrics_online_enabled=True,
+        lyrics_lrclib_enabled=True,
+        lyrics_musixmatch_enabled=False,
+        musixmatch_api_key=None,
         online_metadata_enabled=True,
         visualizer_enabled=True,
         filesystem_watch_enabled=True,
@@ -927,6 +930,9 @@ class MeowPlayer:
         self.lyrics = LyricsManager(
             enabled=lyrics_enabled,
             online_enabled=lyrics_online_enabled,
+            lrclib_enabled=lyrics_lrclib_enabled,
+            musixmatch_enabled=lyrics_musixmatch_enabled,
+            musixmatch_api_key=musixmatch_api_key,
         )
         self.visualizer = AudioVisualizer(enabled=visualizer_enabled)
         self.online_metadata = OnlineMetadataManager(
@@ -3862,39 +3868,49 @@ class MeowPlayer:
         state = self.lyrics.online_status(self.songs[self.current])
         status = state.get("status", "idle")
         query = state.get("query", "").strip()
+        provider = state.get("provider", "").strip()
+        providers = tuple(state.get("providers", ()) or ())
+        provider_label = " + ".join(providers) or provider or "online providers"
 
         if status == "searching":
+            active = provider or provider_label
             if query:
                 return self.text(
-                    f"Searching LRCLIB for: {query}",
-                    f"The cat is sniffing LRCLIB for: {query}"
+                    f"Searching {active} for: {query}",
+                    f"The lyric cat is sniffing {active} for: {query}"
                 )
             return self.text(
-                "Searching LRCLIB for lyrics...",
-                "The cat is sniffing LRCLIB for words..."
+                f"Searching {active} for lyrics...",
+                f"The lyric cat is sniffing {active} for words..."
+            )
+
+        if status == "auth-error":
+            return self.text(
+                "Musixmatch rejected the API key. LRCLIB may still be available.",
+                "The licensed lyric cat checked the badge, hissed, and rejected the Musixmatch key."
             )
 
         if status == "network-error":
             return self.text(
-                "LRCLIB lookup failed after retry. Reopen Songbook to retry.",
-                "LRCLIB escaped twice. Close and reopen the Songbook for another pounce."
+                f"{provider_label} lookup failed after retry. Reopen Songbook to retry.",
+                f"{provider_label} escaped the lyric cats. Close and reopen Songbook for another pounce."
             )
 
         if status == "not-found":
             if query:
                 return self.text(
-                    f"No lyrics found on LRCLIB for: {query}",
-                    f"LRCLIB found no lyrics for this scent: {query}"
+                    f"No online lyrics found on {provider_label} for: {query}",
+                    f"{provider_label} returned empty-pawed for this scent: {query}"
                 )
             return self.text(
-                "No lyrics found on LRCLIB.",
-                "LRCLIB found no lyrics for this meow."
+                f"No online lyrics found on {provider_label}.",
+                f"{provider_label} found no words for this meow."
             )
 
         if status == "offline":
             return self.text(
-                "No local lyrics found. Online lyrics are disabled.",
-                "No local words found, and the cat is not allowed onto the internet."
+                "No local lyrics found. Online lyrics are disabled or unconfigured.",
+                "No local words found, and no internet lyric cat is currently on duty."
             )
 
         if status == "disabled":
@@ -5938,7 +5954,12 @@ def parse_args(argv=None):
     parser.add_argument(
         "--no-online-lyrics",
         action="store_true",
-        help="disable automatic LRCLIB lookup while keeping local lyrics enabled"
+        help="disable automatic online lyric providers while keeping local lyrics enabled"
+    )
+    parser.add_argument(
+        "--no-musixmatch",
+        action="store_true",
+        help="disable Musixmatch fallback for this run"
     )
     parser.add_argument(
         "--no-online-metadata",
@@ -6131,6 +6152,17 @@ def main():
         bool(config.get("lyrics_online_enabled", True))
         and not args.no_online_lyrics
     )
+    lyrics_lrclib_enabled = bool(
+        config.get("lyrics_lrclib_enabled", True)
+    )
+    lyrics_musixmatch_enabled = (
+        bool(config.get("lyrics_musixmatch_enabled", True))
+        and not args.no_musixmatch
+    )
+    musixmatch_api_key = (
+        os.environ.get("MUSIXMATCH_API_KEY", "").strip()
+        or str(config.get("musixmatch_api_key") or "").strip()
+    )
     online_metadata_enabled = (
         bool(config.get("online_metadata_enabled", True))
         and not args.no_online_metadata
@@ -6159,6 +6191,9 @@ def main():
             replaygain_preamp=replaygain_preamp,
             lyrics_enabled=lyrics_enabled,
             lyrics_online_enabled=lyrics_online_enabled,
+            lyrics_lrclib_enabled=lyrics_lrclib_enabled,
+            lyrics_musixmatch_enabled=lyrics_musixmatch_enabled,
+            musixmatch_api_key=musixmatch_api_key,
             online_metadata_enabled=online_metadata_enabled,
             visualizer_enabled=visualizer_enabled,
             filesystem_watch_enabled=filesystem_watch_enabled,
