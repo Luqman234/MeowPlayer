@@ -77,6 +77,7 @@ SUPPORTED_EXTENSIONS = {
     ".mp3", ".flac", ".ogg", ".opus",
     ".wav", ".m4a", ".aac", ".wma"
 }
+ONLINE_RETRY_GUARD_SECONDS = 8.0
 
 LIBRARY_VIEWS = (
     "songs",
@@ -820,6 +821,8 @@ class MeowPlayer:
         self.youtube_selected = 0
         self.youtube_query = ""
         self.online_current = None
+        self.online_load_state = "idle"
+        self.online_load_started_at = 0.0
         self.saved_state = saved_state or {}
         self.restore_session_enabled = restore_session
         self.mpris_enabled = mpris_enabled and not _is_termux()
@@ -2918,9 +2921,52 @@ class MeowPlayer:
             )
         return True
 
-    def play_online(self, track):
+    def play_online(self, track, now=None):
         if track is None:
             return False
+
+        timestamp = time.monotonic() if now is None else float(now)
+        same_track = (
+            self.online_current is not None
+            and self.online_current.video_id == track.video_id
+        )
+
+        if same_track:
+            elapsed = max(0.0, timestamp - self.online_load_started_at)
+            idle = bool(self.mpv.get_property("idle-active"))
+
+            if not idle or elapsed < ONLINE_RETRY_GUARD_SECONDS:
+                state = (
+                    "resolving"
+                    if self.online_load_state == "resolving"
+                    else "already active"
+                )
+                LOGGER.info(
+                    "Ignoring duplicate online playback request "
+                    "video_id=%s state=%s elapsed=%.2fs idle=%s",
+                    track.video_id,
+                    self.online_load_state,
+                    elapsed,
+                    idle,
+                )
+                self.set_status(
+                    (
+                        f"YouTube stream {state}: {track.artist_title}. "
+                        "Repeated Enter ignored."
+                    ),
+                    (
+                        f"The internet cat is {state}: {track.artist_title}. "
+                        "More Enter will not make the router go faster."
+                    ),
+                )
+                return False
+
+            LOGGER.info(
+                "Retrying online playback after idle/failed attempt "
+                "video_id=%s elapsed=%.2fs",
+                track.video_id,
+                elapsed,
+            )
 
         LOGGER.info(
             "Starting online playback video_id=%s title=%r artist=%r url=%s",
@@ -2931,6 +2977,8 @@ class MeowPlayer:
         )
 
         self.online_current = track
+        self.online_load_state = "resolving"
+        self.online_load_started_at = timestamp
         self.current = None
         self.current_lyrics = None
         self.lyrics_track_index = None
@@ -2940,11 +2988,71 @@ class MeowPlayer:
         self.mpv.load(track.url)
         self.mpv.play()
         self.set_status(
-            f"Streaming from YouTube: {track.artist_title}",
-            f"The internet cat is streaming: {track.artist_title}",
+            f"Resolving YouTube stream: {track.artist_title}",
+            f"The internet cat is resolving: {track.artist_title}",
         )
         self.sync_mpris(force=True)
         return True
+
+    def refresh_online_playback_state(self, now=None):
+        if self.online_current is None:
+            self.online_load_state = "idle"
+            return False
+
+        if self.online_load_state != "resolving":
+            return False
+
+        timestamp = time.monotonic() if now is None else float(now)
+        elapsed = max(0.0, timestamp - self.online_load_started_at)
+
+        idle = bool(self.mpv.get_property("idle-active"))
+        time_pos = self.mpv.get_property("time-pos")
+        duration = self.mpv.get_property("duration")
+
+        playback_ready = time_pos is not None
+        if not playback_ready:
+            try:
+                playback_ready = float(duration or 0.0) > 0.0
+            except (TypeError, ValueError):
+                playback_ready = False
+
+        if playback_ready and not idle:
+            self.online_load_state = "streaming"
+            LOGGER.info(
+                "YouTube stream ready video_id=%s elapsed=%.2fs",
+                self.online_current.video_id,
+                elapsed,
+            )
+            self.set_status(
+                f"Streaming from YouTube: {self.online_current.artist_title}",
+                (
+                    "The internet cat is streaming: "
+                    f"{self.online_current.artist_title}"
+                ),
+            )
+            return True
+
+        if idle and elapsed >= ONLINE_RETRY_GUARD_SECONDS:
+            self.online_load_state = "failed"
+            LOGGER.warning(
+                "YouTube stream did not become ready video_id=%s "
+                "elapsed=%.2fs; retry is now allowed",
+                self.online_current.video_id,
+                elapsed,
+            )
+            self.set_status(
+                (
+                    "YouTube stream did not start. "
+                    "Press Enter to retry this result."
+                ),
+                (
+                    "The internet cat returned empty-pawed. "
+                    "Press Enter to send it out again."
+                ),
+            )
+            return True
+
+        return False
 
     def play_selected_youtube_result(self):
         if not self.youtube_results:
@@ -2976,6 +3084,8 @@ class MeowPlayer:
             automatic,
         )
         self.online_current = None
+        self.online_load_state = "idle"
+        self.online_load_started_at = 0.0
 
         reset_shuffle_bag = False
         if not preserve_sequence:
@@ -4637,6 +4747,7 @@ class MeowPlayer:
 
         while True:
             self.process_external_actions()
+            self.refresh_online_playback_state()
             self.playback_saboteur.tick(self)
             math_question = self.playback_saboteur.pop_math_question()
             if math_question is not None:
@@ -4695,8 +4806,24 @@ class MeowPlayer:
 
             if self.online_current is not None:
                 paused = self.mpv.get_property("pause")
-                icon = "⏸" if paused else "▶"
-                label = self.text("Now Streaming", "Now Internet-Purring")
+                if self.online_load_state == "resolving":
+                    icon = "…"
+                    label = self.text(
+                        "Resolving Stream",
+                        "Internet Cat Hunting",
+                    )
+                elif self.online_load_state == "failed":
+                    icon = "!"
+                    label = self.text(
+                        "Stream Failed",
+                        "Internet Cat Returned Empty-Pawed",
+                    )
+                else:
+                    icon = "⏸" if paused else "▶"
+                    label = self.text(
+                        "Now Streaming",
+                        "Now Internet-Purring",
+                    )
                 now_playing = (
                     f"{icon}  {label}: {self.online_current.artist_title} "
                     "· YouTube"
