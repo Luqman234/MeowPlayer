@@ -52,9 +52,14 @@ from online_metadata import (
     needs_online_metadata,
 )
 from visualizer import AudioVisualizer
+from youtube_online import (
+    YouTubeCatalog,
+    YouTubeSearchError,
+    YouTubeUnavailable,
+)
 
 
-__version__ = "0.15.1"
+__version__ = "0.16.0"
 
 
 SUPPORTED_EXTENSIONS = {
@@ -418,6 +423,8 @@ def build_mpv_command(
         f"--replaygain={replaygain_mode}",
         f"--replaygain-preamp={replaygain_preamp}",
         "--replaygain-clip=no",
+        "--ytdl=yes",
+        "--ytdl-format=bestaudio/best",
         f"--input-ipc-server={socket_path}",
     ]
 
@@ -626,6 +633,7 @@ class MeowPlayer:
         visualizer_enabled=True,
         filesystem_watch_enabled=True,
         cat_chaos_mode=None,
+        youtube_enabled=False,
     ):
         self.music_dir = Path(music_dir).expanduser().resolve()
         self.serious_mode = serious_mode
@@ -636,6 +644,11 @@ class MeowPlayer:
             else None
         )
         self.playback_saboteur = PlaybackSaboteur(self.cat_chaos_mode)
+        self.youtube = YouTubeCatalog(enabled=youtube_enabled)
+        self.youtube_results = []
+        self.youtube_selected = 0
+        self.youtube_query = ""
+        self.online_current = None
         self.saved_state = saved_state or {}
         self.restore_session_enabled = restore_session
         self.mpris_enabled = mpris_enabled and not _is_termux()
@@ -806,6 +819,18 @@ class MeowPlayer:
                 f" The metadata cat is sniffing the internet for "
                 f"{self.metadata_lookup_queued} incomplete meow(s)."
             )
+        if self.youtube.enabled:
+            if self.youtube.available:
+                initial_serious += " Experimental YouTube playback ready."
+                initial_cat += " The internet cat found yt-dlp."
+            else:
+                initial_serious += (
+                    " YouTube playback requested, but yt-dlp was not found."
+                )
+                initial_cat += (
+                    " The internet cat cannot find yt-dlp and is staring "
+                    "accusingly at PATH."
+                )
 
         self.status_message = self.text(initial_serious, initial_cat)
         self.quote = random.choice(CAT_QUOTES)
@@ -1152,12 +1177,13 @@ class MeowPlayer:
         self.last_state_save = now
 
     def mpris_snapshot(self):
+        active = self.has_active_track()
         idle = True
         paused = False
         position = 0.0
         duration = 0.0
 
-        if self.current is not None:
+        if active:
             idle = bool(self.mpv.get_property("idle-active"))
             paused = bool(self.mpv.get_property("pause"))
 
@@ -1175,10 +1201,10 @@ class MeowPlayer:
             except (TypeError, ValueError):
                 duration = 0.0
 
-            if duration <= 0 and self.current is not None:
-                duration = self.meta(self.current).duration
+            if duration <= 0:
+                duration = self.current_duration_fallback()
 
-        if self.current is None or idle:
+        if not active or idle:
             playback_status = "Stopped"
         elif paused:
             playback_status = "Paused"
@@ -1186,7 +1212,26 @@ class MeowPlayer:
             playback_status = "Playing"
 
         metadata = None
-        if self.current is not None:
+        if self.online_current is not None:
+            track = self.online_current
+            safe_id = "".join(
+                char if char.isalnum() else "_"
+                for char in track.video_id
+            )
+            metadata = {
+                "track_id": (
+                    f"/org/mpris/MediaPlayer2/track/youtube_{safe_id}"
+                ),
+                "title": track.title,
+                "artist": track.artist,
+                "album": "YouTube",
+                "album_artist": track.artist,
+                "genre": "YouTube",
+                "art_url": track.thumbnail_url or None,
+                "url": track.url,
+                "length_us": int(max(0.0, duration) * 1_000_000),
+            }
+        elif self.current is not None:
             meta = self.meta(self.current)
             cover_path = (
                 self.album_art.cover_for(self.songs[self.current])
@@ -1231,8 +1276,10 @@ class MeowPlayer:
             "volume": self.volume / 100.0,
             "position_us": int(max(0.0, position) * 1_000_000),
             "metadata": metadata,
-            "has_track": self.current is not None and not idle,
-            "has_tracks": bool(self.songs),
+            "has_track": active and not idle,
+            "has_tracks": bool(
+                self.songs or self.youtube_results or self.youtube.enabled
+            ),
         }
 
     def sync_mpris(self, force=False):
@@ -1264,10 +1311,15 @@ class MeowPlayer:
             elif action == "previous":
                 self.previous_song()
             elif action == "pause":
-                if self.current is not None:
+                if self.has_active_track():
                     self.mpv.pause()
             elif action == "play":
-                if self.current is None:
+                if self.online_current is not None:
+                    if bool(self.mpv.get_property("idle-active")):
+                        self.play_online(self.online_current)
+                    else:
+                        self.mpv.play()
+                elif self.current is None:
                     self.play_selected_library_song()
                 elif bool(self.mpv.get_property("idle-active")):
                     self.play(
@@ -1279,7 +1331,12 @@ class MeowPlayer:
                 else:
                     self.mpv.play()
             elif action == "play_pause":
-                if self.current is None:
+                if self.online_current is not None:
+                    if bool(self.mpv.get_property("idle-active")):
+                        self.play_online(self.online_current)
+                    else:
+                        self.mpv.toggle_pause()
+                elif self.current is None:
                     self.play_selected_library_song()
                 elif bool(self.mpv.get_property("idle-active")):
                     self.play(
@@ -1291,13 +1348,13 @@ class MeowPlayer:
                 else:
                     self.mpv.toggle_pause()
             elif action == "stop":
-                if self.current is not None:
+                if self.has_active_track():
                     self.mpv.stop()
-            elif action == "seek" and self.current is not None:
+            elif action == "seek" and self.has_active_track():
                 self.mpv.seek(args[0])
                 position = self.mpv.get_property("time-pos") or 0
                 self.mpris.notify_seeked(float(position) * 1_000_000)
-            elif action == "set_position" and self.current is not None:
+            elif action == "set_position" and self.has_active_track():
                 self.mpv.seek_absolute(args[0])
                 self.mpris.notify_seeked(args[0] * 1_000_000)
             elif action == "set_volume":
@@ -1337,6 +1394,30 @@ class MeowPlayer:
     def set_status(self, serious, cat):
         self.status_message = self.text(serious, cat)
 
+    def has_active_track(self):
+        return self.current is not None or self.online_current is not None
+
+    def current_artist_title(self):
+        if self.online_current is not None:
+            return self.online_current.artist_title
+        if self.current is not None:
+            return self.meta(self.current).artist_title
+        return ""
+
+    def current_title(self):
+        if self.online_current is not None:
+            return self.online_current.title
+        if self.current is not None:
+            return self.meta(self.current).title
+        return ""
+
+    def current_duration_fallback(self):
+        if self.online_current is not None:
+            return float(self.online_current.duration or 0.0)
+        if self.current is not None:
+            return float(self.meta(self.current).duration or 0.0)
+        return 0.0
+
     def cat_intercepts(self, action):
         return self.playback_saboteur.handle_user_action(self, action)
 
@@ -1356,7 +1437,7 @@ class MeowPlayer:
         )
 
     def cat_mood(self):
-        if self.current is None:
+        if not self.has_active_track():
             return "Waiting"
 
         paused = bool(self.mpv.get_property("pause"))
@@ -2658,6 +2739,36 @@ class MeowPlayer:
             )
         return True
 
+    def play_online(self, track):
+        if track is None:
+            return False
+
+        self.online_current = track
+        self.current = None
+        self.current_lyrics = None
+        self.lyrics_track_index = None
+        self.gapless_next_index = None
+        self._awaiting_mpv_path = False
+
+        self.mpv.load(track.url)
+        self.mpv.play()
+        self.set_status(
+            f"Streaming from YouTube: {track.artist_title}",
+            f"The internet cat is streaming: {track.artist_title}",
+        )
+        self.sync_mpris(force=True)
+        return True
+
+    def play_selected_youtube_result(self):
+        if not self.youtube_results:
+            return False
+
+        self.youtube_selected = max(
+            0,
+            min(self.youtube_selected, len(self.youtube_results) - 1),
+        )
+        return self.play_online(self.youtube_results[self.youtube_selected])
+
     def play(
         self,
         index,
@@ -2671,6 +2782,7 @@ class MeowPlayer:
             return
 
         index %= len(self.songs)
+        self.online_current = None
 
         reset_shuffle_bag = False
         if not preserve_sequence:
@@ -3832,6 +3944,108 @@ class MeowPlayer:
             "BAD LARRY: I refuse to admit that counted.",
         )
 
+    def prompt_text(self, stdscr, prompt):
+        height, width = stdscr.getmaxyx()
+        label = f"{prompt}: "
+
+        stdscr.nodelay(False)
+        stdscr.timeout(-1)
+        curses.echo()
+
+        try:
+            curses.curs_set(1)
+        except curses.error:
+            pass
+
+        try:
+            stdscr.move(height - 1, 0)
+            stdscr.clrtoeol()
+            stdscr.addstr(height - 1, 0, label[:width - 1])
+            stdscr.refresh()
+
+            max_input = max(1, width - min(len(label), width - 1) - 1)
+            raw = stdscr.getstr(
+                height - 1,
+                min(len(label), width - 2),
+                max_input,
+            )
+            return raw.decode("utf-8", errors="replace").strip()
+        except curses.error:
+            return ""
+        finally:
+            curses.noecho()
+            try:
+                curses.curs_set(0)
+            except curses.error:
+                pass
+            stdscr.nodelay(True)
+            stdscr.timeout(100)
+
+    def open_youtube_search(self, stdscr):
+        if not self.youtube.enabled:
+            self.set_status(
+                "YouTube playback is disabled. Restart with --youtube.",
+                "The internet cat is asleep. Restart with --youtube.",
+            )
+            return False
+
+        if not self.youtube.available:
+            self.set_status(
+                "YouTube unavailable: yt-dlp was not found on PATH.",
+                "The internet cat cannot find yt-dlp.",
+            )
+            return False
+
+        query = self.prompt_text(
+            stdscr,
+            self.text("YouTube search", "Internet Nest search"),
+        )
+        if not query:
+            return False
+
+        try:
+            stdscr.erase()
+            height, width = stdscr.getmaxyx()
+            message = self.text(
+                f"Searching YouTube for: {query}",
+                f"The internet cat is hunting for: {query}",
+            )
+            stdscr.addstr(
+                max(0, height // 2),
+                1,
+                message[:max(1, width - 2)],
+                curses.A_BOLD,
+            )
+            stdscr.refresh()
+        except curses.error:
+            pass
+
+        try:
+            results = self.youtube.search(query)
+        except (YouTubeUnavailable, YouTubeSearchError) as exc:
+            self.set_status(
+                f"YouTube search failed: {exc}",
+                f"The internet cat fell off the router: {exc}",
+            )
+            return False
+
+        self.youtube_query = query
+        self.youtube_results = list(results)
+        self.youtube_selected = 0
+        self.view = "online"
+
+        if self.youtube_results:
+            self.set_status(
+                f"YouTube search: {len(self.youtube_results)} result(s).",
+                f"The internet cat returned with {len(self.youtube_results)} meow(s).",
+            )
+        else:
+            self.set_status(
+                "YouTube search returned no results.",
+                "The internet cat returned empty-pawed.",
+            )
+        return True
+
     def prompt_path(self, stdscr, prompt, default):
         height, width = stdscr.getmaxyx()
         label = f"{prompt} [{default}]: "
@@ -4116,6 +4330,81 @@ class MeowPlayer:
 
         return scroll
 
+    def draw_youtube(
+        self,
+        stdscr,
+        width,
+        list_start,
+        list_height,
+        scroll,
+    ):
+        results = self.youtube_results
+
+        if results:
+            self.youtube_selected = max(
+                0,
+                min(self.youtube_selected, len(results) - 1),
+            )
+        else:
+            self.youtube_selected = 0
+
+        if self.youtube_selected < scroll:
+            scroll = self.youtube_selected
+        if self.youtube_selected >= scroll + list_height:
+            scroll = self.youtube_selected - list_height + 1
+
+        if not results:
+            message = self.text(
+                "No YouTube results. Press / or Y to search.",
+                "The Internet Nest is empty. Press / or Y and send the cat out.",
+            )
+            try:
+                stdscr.addstr(
+                    list_start,
+                    2,
+                    message[:max(1, width - 4)],
+                    curses.A_DIM,
+                )
+            except curses.error:
+                pass
+            return scroll
+
+        for screen_row, result_index in enumerate(
+            range(scroll, min(len(results), scroll + list_height))
+        ):
+            track = results[result_index]
+            selected = result_index == self.youtube_selected
+            playing = (
+                self.online_current is not None
+                and track.video_id == self.online_current.video_id
+            )
+
+            if playing:
+                prefix = "▶  " if self.serious_mode else "🌐 "
+            elif selected and not self.serious_mode:
+                prefix = ">^.^< "
+            else:
+                prefix = "   "
+
+            label = (
+                f"{track.artist_title} · {track.duration_label} · YouTube"
+            )
+            attr = curses.A_REVERSE if selected else curses.A_NORMAL
+            if playing:
+                attr |= curses.color_pair(2)
+
+            try:
+                stdscr.addstr(
+                    list_start + screen_row,
+                    2,
+                    (prefix + label)[:max(1, width - 4)],
+                    attr,
+                )
+            except curses.error:
+                pass
+
+        return scroll
+
     def run(self, stdscr):
         curses.curs_set(0)
         stdscr.nodelay(True)
@@ -4136,6 +4425,7 @@ class MeowPlayer:
         self.splash(stdscr)
         library_scroll = 0
         stash_scroll = 0
+        youtube_scroll = 0
         self.sync_mpris(force=True)
 
         while True:
@@ -4196,7 +4486,15 @@ class MeowPlayer:
 
             content_start = self.draw_header(stdscr, top_width)
 
-            if self.current is not None:
+            if self.online_current is not None:
+                paused = self.mpv.get_property("pause")
+                icon = "⏸" if paused else "▶"
+                label = self.text("Now Streaming", "Now Internet-Purring")
+                now_playing = (
+                    f"{icon}  {label}: {self.online_current.artist_title} "
+                    "· YouTube"
+                )
+            elif self.current is not None:
                 meta = self.meta(self.current)
                 paused = self.mpv.get_property("pause")
                 icon = "⏸" if paused else "▶"
@@ -4368,6 +4666,18 @@ class MeowPlayer:
                             f"{self.current_lyrics.source} · {follow}"
                         )
                     )
+            elif self.view == "online":
+                query = self.youtube_query or "none"
+                mode_line = self.text(
+                    (
+                        f"YouTube Online — query: {query} · "
+                        f"{len(self.youtube_results)} result(s)"
+                    ),
+                    (
+                        f"Internet Nest — scent: {query} · "
+                        f"{len(self.youtube_results)} meow(s)"
+                    ),
+                )
             elif self.view == "library":
                 current_view = self.library_breadcrumb()
 
@@ -4490,6 +4800,14 @@ class MeowPlayer:
                     list_height,
                     library_scroll,
                 )
+            elif self.view == "online":
+                youtube_scroll = self.draw_youtube(
+                    stdscr,
+                    width,
+                    list_start,
+                    list_height,
+                    youtube_scroll,
+                )
             else:
                 stash_scroll = self.draw_stash(
                     stdscr,
@@ -4525,13 +4843,26 @@ class MeowPlayer:
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Open/Play  1-7 Views  F Favorite  "
-                        "[ ] Rate  L Lyrics  V Viz  M Mixes  Q Queue  X Quit"
+                        "[ ] Rate  L Lyrics  V Viz  M Mixes  Y YouTube  Q Queue  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Open/Purr  1-7 Nests  F Pawmark  "
-                        "[ ] Judge  L Songbook  M Mixes  G Pet  Q Catnip  X Escape"
+                        "[ ] Judge  L Songbook  M Mixes  Y Internet  G Pet  Q Catnip"
+                    )
+                    quote = self.cat_footer_message()
+            elif self.view == "online":
+                if self.serious_mode:
+                    controls = (
+                        "↑↓ Select  ENTER Stream  / Search  Y Search  "
+                        "Q Library  Space Pause  X Quit"
+                    )
+                    quote = ""
+                else:
+                    controls = (
+                        "↑↓ Choose  ENTER Stream  / Search  Y Search  "
+                        "Q Nest  Space Paws  X Escape"
                     )
                     quote = self.cat_footer_message()
             else:
@@ -4662,6 +4993,11 @@ class MeowPlayer:
                 self.reload_custom_smart_mixes()
                 continue
 
+            if key in (ord("y"), ord("Y")):
+                if self.open_youtube_search(stdscr):
+                    youtube_scroll = 0
+                continue
+
             if key in (ord("g"), ord("G")):
                 self.pet_cat()
                 continue
@@ -4698,6 +5034,14 @@ class MeowPlayer:
                     self.set_status(
                         "Returned from lyrics.",
                         "The cat closed the songbook."
+                    )
+                    continue
+
+                if self.view == "online":
+                    self.view = "library"
+                    self.set_status(
+                        "Returned to local library.",
+                        "The internet cat came back to the Music Nest.",
                     )
                     continue
 
@@ -4893,6 +5237,29 @@ class MeowPlayer:
                     )
                     library_scroll = 0
 
+            elif self.view == "online":
+                if key == curses.KEY_UP and self.youtube_results:
+                    self.youtube_selected = max(
+                        0,
+                        self.youtube_selected - 1,
+                    )
+                elif key == curses.KEY_DOWN and self.youtube_results:
+                    self.youtube_selected = min(
+                        len(self.youtube_results) - 1,
+                        self.youtube_selected + 1,
+                    )
+                elif key in (10, 13, curses.KEY_ENTER):
+                    self.play_selected_youtube_result()
+                elif key == ord("/"):
+                    if self.open_youtube_search(stdscr):
+                        youtube_scroll = 0
+                elif key == 27:
+                    self.view = "library"
+                    self.set_status(
+                        "Returned to local library.",
+                        "The cat left the Internet Nest.",
+                    )
+
             elif self.view == "stash":
                 if key == curses.KEY_UP and self.catnip_stash:
                     self.stash_selected = max(
@@ -5062,6 +5429,14 @@ def parse_args(argv=None):
         action="store_true",
         help="disable live filesystem watching for the music library"
     )
+    parser.add_argument(
+        "--youtube",
+        action="store_true",
+        help=(
+            "enable experimental YouTube search and audio streaming "
+            "through yt-dlp + mpv"
+        )
+    )
 
     return parser.parse_args(argv)
 
@@ -5191,6 +5566,7 @@ def main():
             visualizer_enabled=visualizer_enabled,
             filesystem_watch_enabled=filesystem_watch_enabled,
             cat_chaos_mode=cat_chaos_mode,
+            youtube_enabled=args.youtube,
         )
     except FileNotFoundError:
         print(
@@ -5199,8 +5575,12 @@ def main():
         )
         sys.exit(1)
 
-    if not player.songs:
+    if not player.songs and not player.youtube.available:
         message = f"No supported music files found in:\n{music_dir}"
+        if args.youtube:
+            message += (
+                "\n\nYouTube mode was requested, but yt-dlp is unavailable."
+            )
         if not args.serious_mode:
             message += (
                 "\n\nThe cat searched the entire nest. No tunes. :<"
@@ -5208,6 +5588,12 @@ def main():
         print(message)
         player.shutdown()
         sys.exit(0)
+
+    if not player.songs and player.youtube.available:
+        player.set_status(
+            "No local tracks found; YouTube search is available with Y.",
+            "The local nest is empty, but Y opens the Internet Nest.",
+        )
 
     try:
         curses.wrapper(player.run)
