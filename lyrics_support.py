@@ -824,6 +824,23 @@ class LyricsManager:
                 return None
             self._save_cached_plain(state["metadata"], lyric_text)
 
+            # Never replace user-provided or embedded plain lyrics with a
+            # plain online copy. A synchronized LRCLIB result may still
+            # upgrade those local lyrics on a later lookup.
+            existing = self._cache.get(identity)
+            if (
+                existing is not None
+                and not existing.synced
+                and not existing.source.startswith("LRCLIB")
+            ):
+                with self._pending_lock:
+                    self._online_status[identity] = {
+                        "status": "found",
+                        "query": state.get("query", ""),
+                        "attempts": state.get("attempts", 1),
+                    }
+                return None
+
         self._cache[identity] = document
         with self._pending_lock:
             self._online_status[identity] = {
@@ -873,7 +890,12 @@ class LyricsManager:
                 return embedded_synced
             embedded_plain = _embedded_plain(tags)
 
-        # 4. Local plain lyrics still beat anything downloaded.
+        # 4. Ask LRCLIB in the background. A synchronized result may
+        # upgrade plain local lyrics later; an unsynchronized result is only
+        # used when there is no better local lyric document.
+        self._start_online_fetch(identity, metadata)
+
+        # 5. Plain sidecar / embedded lyrics remain useful while fetching.
         text_path = track_path.with_suffix(".txt")
         if text_path.is_file():
             document = parse_plain_lyrics(
@@ -888,13 +910,11 @@ class LyricsManager:
             self._cache[identity] = embedded_plain
             return embedded_plain
 
-        # 5. Reuse a previously downloaded plain lyric offline.
+        # 6. A previously downloaded plain LRCLIB lyric is instant/offline
+        # while a fresh online lookup, when enabled, can still upgrade it.
         document = self._load_cached_plain(metadata)
         if document is not None:
             self._cache[identity] = document
             return document
 
-        # 6. Ask LRCLIB in the background. poll() promotes either timed or
-        # plain lyrics later.
-        self._start_online_fetch(identity, metadata)
         return None
