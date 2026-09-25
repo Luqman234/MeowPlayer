@@ -5181,41 +5181,7 @@ class MeowPlayer:
 
                 stdscr.refresh()
                 key = stdscr.getch()
-                if self.view == "settings":
-                if key == curses.KEY_UP:
-                    self.settings_selected = max(
-                        0,
-                        self.settings_selected - 1,
-                    )
-                    continue
-                if key == curses.KEY_DOWN:
-                    self.settings_selected = min(
-                        len(SETTINGS_SPECS) - 1,
-                        self.settings_selected + 1,
-                    )
-                    continue
-                if key == curses.KEY_LEFT:
-                    self.change_selected_setting(direction=-1)
-                    continue
-                if key == curses.KEY_RIGHT:
-                    self.change_selected_setting(direction=1)
-                    continue
-                if key in (10, 13, curses.KEY_ENTER, ord(" ")):
-                    self.change_selected_setting(direction=1)
-                    continue
-                if key in (ord("r"), ord("R")):
-                    self.change_selected_setting(reset=True)
-                    continue
-                if key in (ord(","), ord("q"), ord("Q"), 27):
-                    self.close_settings_nest()
-                    continue
-
-            if key == ord(","):
-                self.open_settings_nest()
-                settings_scroll = 0
-                continue
-
-            if key in (ord("x"), ord("X")):
+                if key in (ord("x"), ord("X")):
                     break
                 continue
 
@@ -5781,6 +5747,40 @@ class MeowPlayer:
                         "BAD LARRY: FORMAL APOLOGY REJECTED.",
                         duration=6.0,
                     )
+                continue
+
+            if self.view == "settings":
+                if key == curses.KEY_UP:
+                    self.settings_selected = max(
+                        0,
+                        self.settings_selected - 1,
+                    )
+                    continue
+                if key == curses.KEY_DOWN:
+                    self.settings_selected = min(
+                        len(SETTINGS_SPECS) - 1,
+                        self.settings_selected + 1,
+                    )
+                    continue
+                if key == curses.KEY_LEFT:
+                    self.change_selected_setting(direction=-1)
+                    continue
+                if key == curses.KEY_RIGHT:
+                    self.change_selected_setting(direction=1)
+                    continue
+                if key in (10, 13, curses.KEY_ENTER, ord(" ")):
+                    self.change_selected_setting(direction=1)
+                    continue
+                if key in (ord("r"), ord("R")):
+                    self.change_selected_setting(reset=True)
+                    continue
+                if key in (ord(","), ord("q"), ord("Q"), 27):
+                    self.close_settings_nest()
+                    continue
+
+            if key == ord(","):
+                self.open_settings_nest()
+                settings_scroll = 0
                 continue
 
             if key in (ord("x"), ord("X")):
