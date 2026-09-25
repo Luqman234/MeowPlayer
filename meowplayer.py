@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import random
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -4503,6 +4504,42 @@ class MeowPlayer:
         self.sync_mpris(force=True)
 
 
+def _meowplayer_cache_root():
+    root = os.environ.get("XDG_CACHE_HOME")
+    if root:
+        base = Path(root).expanduser()
+        if not base.is_absolute():
+            base = Path.home() / ".cache"
+    else:
+        base = Path.home() / ".cache"
+    return base / "meowplayer"
+
+
+def _remove_cache_path(path):
+    path = Path(path).expanduser()
+    try:
+        if path.is_symlink():
+            path.unlink()
+            return True
+        if path.is_dir():
+            shutil.rmtree(path)
+            return True
+        if path.exists():
+            path.unlink()
+            return True
+    except OSError:
+        return False
+    return True
+
+
+def clear_lyrics_cache():
+    return _remove_cache_path(_meowplayer_cache_root() / "lyrics")
+
+
+def clear_all_disposable_cache():
+    return _remove_cache_path(_meowplayer_cache_root())
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -4534,6 +4571,28 @@ def parse_args():
         "--maximum-meow",
         action="store_true",
         help="enable maximum feline energy"
+    )
+
+    cleanup = parser.add_mutually_exclusive_group()
+    cleanup.add_argument(
+        "--bad-bad-cat",
+        "--clear-lyrics-cache",
+        dest="clear_lyrics_cache",
+        action="store_true",
+        help=(
+            "delete downloaded LRCLIB lyric cache and exit "
+            "(the cat regrets its lyric choices)"
+        ),
+    )
+    cleanup.add_argument(
+        "--very-bad-cat",
+        "--clear-cache",
+        dest="clear_cache",
+        action="store_true",
+        help=(
+            "delete all disposable MeowPlayer cache and exit "
+            "(lyrics + album art; config/state/Cat Catalog are preserved)"
+        ),
     )
 
     parser.add_argument(
@@ -4611,6 +4670,26 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.clear_lyrics_cache:
+        ok = clear_lyrics_cache()
+        if ok:
+            print("🐈 bad bad cat: downloaded lyric cache has been bapped.")
+            return
+        print("MeowPlayer could not clear the lyric cache.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.clear_cache:
+        ok = clear_all_disposable_cache()
+        if ok:
+            print(
+                "🐈‍⬛ VERY BAD CAT: disposable cache has been launched "
+                "off the desk."
+            )
+            return
+        print("MeowPlayer could not clear the cache.", file=sys.stderr)
+        sys.exit(1)
+
     config = load_config()
 
     configured_music_dir = config.get("music_dir")
