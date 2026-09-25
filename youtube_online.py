@@ -950,6 +950,10 @@ def youtube_creator_section_url(channel_url, section):
 def youtube_music_album_search_url(creator_name):
     """Build yt-dlp's supported YouTube Music albums-section search URL."""
     creator = " ".join(str(creator_name or "").split())
+    for suffix in (" - Topic", " – Topic", " — Topic"):
+        if creator.casefold().endswith(suffix.casefold()):
+            creator = creator[:-len(suffix)].rstrip()
+            break
     if not creator:
         return ""
     return (
