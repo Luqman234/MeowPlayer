@@ -168,6 +168,48 @@ YES, I APOLOGIZE FOR DISTURBING BAD LARRY
 
 Normal OS termination still works. Bad Larry does not trap the process, delete music, alter ratings, rewrite playlists, corrupt the Cat Catalog, or receive permission to vandalize the rest of the system. His jurisdiction is playback.
 
+#### Bad Larry Mathematics Incidents
+
+Dangerous Cat now performs one mathematics roll every **60 seconds**. Each roll has a **1-in-5 chance** of interrupting the listener with a question while the music keeps playing.
+
+When a math incident fires, the difficulty distribution is:
+
+| Difficulty | Chance among math incidents |
+| --- | ---: |
+| Easy | 50% |
+| Medium | 30% |
+| Hard | 19% |
+| Stochastic Calculus | 0.5% |
+| IMO P6-style boss | 0.5% |
+
+Answers are deliberately machine-checkable so the terminal can grade them without pretending to understand arbitrary handwritten proofs. Type `SKIP` to surrender.
+
+Surrender is legal. Bad Larry simply makes it increasingly regrettable:
+
+| Difficulty | First-surrender punishment |
+| --- | --- |
+| Easy | 5–10 s rewind, +3 Malice |
+| Medium | 10–20 s rewind, temporary 0.95x speed, +6 Malice |
+| Hard | 20–35 s rewind, temporary 0.90x speed, +10 Malice |
+| Stochastic Calculus | restart track, temporary 0.85x speed, +18 Malice |
+| IMO P6-style | restart track, temporary 0.82x speed, delayed track hijack, +25 Malice |
+| Three-Qubit Final Exam | heavy Larry chain, temporary 0.80x speed, +35 Malice |
+
+Repeated surrender multiplies later penalties by **1.00x, 1.15x, 1.30x, then 1.50x**, capped at 1.50x.
+
+And if the listener somehow answers the IMO P6-style boss correctly:
+
+```text
+IMO P6-STYLE: CORRECT
+
+Bad Larry:
+No.
+```
+
+MeowPlayer immediately opens a **five-minute Three-Qubit Dynamics final exam** containing the full 9-part Hamiltonian / reduced-state / partial-transpose / negativity / Cayley-hyperdeterminant / three-tangle / SLOCC / W-to-GHZ problem. The modal is scrollable while playback continues.
+
+The final exam is intentionally theatrical rather than pretending that a curses text box can rigorously grade a multi-page symbolic derivation. `D` declares a completed derivation, `S` surrenders, and `Ctrl+E` still reaches the Bad Larry dismissal ritual. Timeout or surrender applies the heaviest math punishment.
+
 ## What's new in 0.15.0 — The Metadata Cat Goes Online
 
 The cat has finally been granted restricted internet access.
