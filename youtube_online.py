@@ -555,7 +555,7 @@ class YouTubeSearchSession:
             limit = catalog.default_limit if limit is None else max(1, min(50, int(limit)))
             command = [catalog.executable, "--ignore-config", "--flat-playlist",
                        "--skip-download", "--no-warnings", "--lazy-playlist",
-                       "--print", "%(.{id,title,uploader,channel,duration,webpage_url})j",
+                       "--print", "%(.{id,title,artist,artists,creator,uploader,channel,duration,webpage_url})j",
                        youtube_search_target(query, limit, search_mode)]
             process = subprocess.Popen(
                 command,
