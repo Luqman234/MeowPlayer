@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.17.3** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.17.4** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.3 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.17.4 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,97 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.17.4 — The Internet Cat Brought One Home
+
+MeowPlayer 0.17.4 gives the **Internet Nest** a bridge back into the local Music Nest.
+
+A remote search result no longer has to stay temporary forever. Highlight a song you want to keep and press:
+
+```text
+D
+```
+
+MeowPlayer will **download/adopt** that Internet Nest result into your configured local music library.
+
+```text
+Internet Nest result
+        ↓
+      D Adopt
+        ↓
+yt-dlp bestaudio/best
+        ↓
+ffmpeg → Opus + embedded metadata
+        ↓
+<Music Library>/Internet Nest/
+        ↓
+automatic library rescan
+        ↓
+ordinary local MeowPlayer track
+```
+
+The downloaded file uses a stable filename containing the YouTube video ID:
+
+```text
+Song Title [VIDEO_ID].opus
+```
+
+That prevents two uploads with the same title from silently overwriting one another.
+
+The adoption flow is intentionally asynchronous. curses stays responsive, the currently playing track can continue purring, and the selected Internet Nest row shows that it is being downloaded. MeowPlayer allows only **one active adoption at a time**, so repeated `D` presses do not spawn a small army of yt-dlp processes.
+
+Once yt-dlp and ffmpeg finish, MeowPlayer rescans the library automatically. The new file is no longer treated as a remote Internet Nest result; it becomes a normal local track and participates in the ordinary local-library machinery.
+
+The download path is deliberately separate from transient online state:
+
+```text
+STREAM ONLY
+Internet Nest result
+    ↓
+temporary playback
+    ↓
+temporary online lyrics/state
+
+D ADOPT
+Internet Nest result
+    ↓
+downloaded .opus
+    ↓
+persistent local library
+    ↓
+normal local metadata / history / library behavior
+```
+
+Downloads require both:
+
+```text
+yt-dlp
+ffmpeg
+```
+
+to be available on `PATH`. Internet Nest playback itself keeps its existing requirements; ffmpeg is specifically needed for extracting/converting the adopted audio to Opus and embedding metadata.
+
+The downloader also:
+
+- disables playlist downloads
+- uses `--no-overwrites`
+- avoids shell invocation
+- keeps yt-dlp extractor noise out of the TUI
+- cancels cleanly during MeowPlayer shutdown
+- refuses a second concurrent adoption
+- automatically refreshes the library after success
+
+Use the download feature for media you are permitted to save. MeowPlayer does not try to determine the rights or licensing status of a remote upload.
+
+In short:
+
+```text
+0.17.2: the internet cat borrowed the Songbook
+0.17.3: the internet cat discovered result #13
+0.17.4: the internet cat brought a song home
+```
+
+> **MeowPlayer 0.17.4 — browse it online, stream it online, and when you really like it, adopt it.**
 
 ## What's new in 0.17.3 — The Cat Refused to Stop at Twelve
 
@@ -3301,7 +3392,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.3 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.17.4 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -3432,8 +3523,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.17.3-py3-none-any.whl
-└── meowplayer_terminal-0.17.3.tar.gz
+├── meowplayer_terminal-0.17.4-py3-none-any.whl
+└── meowplayer_terminal-0.17.4.tar.gz
 ```
 
 The installed CLI is still:
