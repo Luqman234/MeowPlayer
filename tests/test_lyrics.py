@@ -317,6 +317,79 @@ class LyricsTests(unittest.TestCase):
             calls,
         )
 
+    def test_lrclib_rejects_wildly_wrong_duration(self):
+        metadata = {
+            "title": "Song",
+            "artist": "Artist",
+            "album": "",
+            "duration": 258.0,
+            "filename_stem": "Artist - Song",
+        }
+
+        def fake_request(path, params, timeout):
+            if path == "/api/get":
+                return None, "not-found"
+            return [
+                {
+                    "trackName": "Song",
+                    "artistName": "Artist",
+                    "duration": 62.0,
+                    "syncedLyrics": "[00:01.00]WRONG",
+                },
+                {
+                    "trackName": "Song",
+                    "artistName": "Artist",
+                    "duration": 258.0,
+                    "syncedLyrics": "[00:01.00]CORRECT",
+                },
+            ], "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "found")
+        self.assertIn("CORRECT", result.text)
+        self.assertNotIn("WRONG", result.text)
+
+    def test_lrclib_rejects_conflicting_title_and_artist(self):
+        metadata = {
+            "title": "Wanted Song",
+            "artist": "Wanted Artist",
+            "album": "",
+            "duration": 240.0,
+            "filename_stem": "Wanted Artist - Wanted Song",
+        }
+
+        def fake_request(path, params, timeout):
+            if path == "/api/get":
+                return None, "not-found"
+            return [
+                {
+                    "trackName": "Different Song",
+                    "artistName": "Different Artist",
+                    "duration": 240.0,
+                    "syncedLyrics": "[00:01.00]WRONG",
+                },
+                {
+                    "trackName": "Wanted Song",
+                    "artistName": "Wanted Artist",
+                    "duration": 241.0,
+                    "syncedLyrics": "[00:01.00]CORRECT",
+                },
+            ], "ok"
+
+        with mock.patch(
+            "lyrics_support._lrclib_request",
+            side_effect=fake_request,
+        ):
+            result = _fetch_lrclib_result(metadata, timeout=0.25)
+
+        self.assertEqual(result.status, "found")
+        self.assertIn("CORRECT", result.text)
+
     def test_sidecar_still_beats_downloaded_cache(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
