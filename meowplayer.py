@@ -68,7 +68,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.16.4"
+__version__ = "0.17.0"
 
 
 LOGGER = logging.getLogger("meowplayer")
