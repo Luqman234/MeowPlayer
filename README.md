@@ -194,6 +194,24 @@ Q      return directly to the local Music Nest
 
 Browsing runs asynchronously so curses remains responsive, and creator sessions are cancelled cleanly when MeowPlayer shuts down.
 
+### Narrow terminals can type long searches now
+
+The Internet Nest search prompt no longer treats terminal width as a maximum query length.
+
+Older builds used curses `getstr(..., max_input)` with `max_input` calculated from the remaining columns on the current row. That looked harmless on a laptop, but on Termux a long prompt could leave only a small handful of characters for the actual song title.
+
+0.17.5 now keeps the full query in an independent input buffer and horizontally scrolls only the visible tail:
+
+```text
+wide terminal:
+Internet Nest search: the complete long song title
+
+narrow Termux screen:
+> <...long song title
+```
+
+The screen width controls **what is visible**, not **what you are allowed to type**. Backspace continues to edit the full hidden buffer, resizing the terminal preserves the query, and `Ctrl+U` clears the current prompt.
+
 ### Metadata got harder to assassinate
 
 0.17.5 also hardens Songbook's local metadata lookup.

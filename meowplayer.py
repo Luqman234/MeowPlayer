@@ -355,6 +355,21 @@ def _clean_year(value):
     return text[:12]
 
 
+def _prompt_input_window(value, width):
+    """Return the visible tail of an unbounded prompt buffer.
+
+    Terminal width controls presentation only. It must never become the
+    maximum query length, especially on narrow Termux screens.
+    """
+    value = str(value or "")
+    width = max(1, int(width))
+    if len(value) <= width:
+        return value
+    if width == 1:
+        return value[-1:]
+    return "<" + value[-(width - 1):]
+
+
 def _normalize_search_text(value):
     return unicodedata.normalize("NFKC", str(value)).casefold()
 
@@ -4913,12 +4928,13 @@ class MeowPlayer:
         )
 
     def prompt_text(self, stdscr, prompt):
-        height, width = stdscr.getmaxyx()
-        label = f"{prompt}: "
+        """Read an uncapped line while horizontally scrolling on narrow screens."""
+        value = ""
+        full_label = f"{prompt}: "
 
         stdscr.nodelay(False)
         stdscr.timeout(-1)
-        curses.echo()
+        curses.noecho()
 
         try:
             curses.curs_set(1)
@@ -4926,20 +4942,69 @@ class MeowPlayer:
             pass
 
         try:
-            stdscr.move(height - 1, 0)
-            stdscr.clrtoeol()
-            stdscr.addstr(height - 1, 0, label[:width - 1])
-            stdscr.refresh()
+            while True:
+                height, width = stdscr.getmaxyx()
+                row = max(0, height - 1)
 
-            max_input = max(1, width - min(len(label), width - 1) - 1)
-            raw = stdscr.getstr(
-                height - 1,
-                min(len(label), width - 2),
-                max_input,
-            )
-            return raw.decode("utf-8", errors="replace").strip()
-        except curses.error:
-            return ""
+                # Long descriptive prompts are useful on desktops but can consume
+                # nearly the whole line in Termux. Collapse only the presentation;
+                # the input buffer itself remains completely independent of width.
+                usable_width = max(1, width - 1)
+                if len(full_label) + 8 <= usable_width:
+                    label = full_label
+                elif usable_width >= 3:
+                    label = "> "
+                else:
+                    label = ""
+
+                field_width = max(1, usable_width - len(label))
+                visible = _prompt_input_window(value, field_width)
+
+                try:
+                    stdscr.move(row, 0)
+                    stdscr.clrtoeol()
+                    if label:
+                        stdscr.addstr(row, 0, label[:usable_width])
+                    if visible and len(label) < usable_width:
+                        stdscr.addstr(
+                            row,
+                            len(label),
+                            visible[:field_width],
+                        )
+                    cursor_x = min(
+                        usable_width,
+                        len(label) + len(visible),
+                    )
+                    stdscr.move(row, cursor_x)
+                    stdscr.refresh()
+                except curses.error:
+                    pass
+
+                try:
+                    key = stdscr.get_wch()
+                except curses.error:
+                    continue
+
+                if key in ("\n", "\r", 10, 13, curses.KEY_ENTER):
+                    return value.strip()
+                if key in ("\x1b", 27):
+                    return ""
+                if key in ("\b", "\x7f", curses.KEY_BACKSPACE, 127, 8):
+                    value = value[:-1]
+                    continue
+                if key in ("\x15", 21):  # Ctrl+U
+                    value = ""
+                    continue
+                if key == curses.KEY_RESIZE:
+                    continue
+
+                if isinstance(key, str):
+                    if key.isprintable():
+                        value += key
+                    continue
+
+                if isinstance(key, int) and 32 <= key <= 126:
+                    value += chr(key)
         finally:
             curses.noecho()
             try:

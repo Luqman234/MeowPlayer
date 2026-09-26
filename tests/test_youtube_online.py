@@ -4,7 +4,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from meowplayer import MeowPlayer, build_mpv_command, parse_args
+from meowplayer import (
+    MeowPlayer,
+    _prompt_input_window,
+    build_mpv_command,
+    parse_args,
+)
 from youtube_online import (
     YouTubeCatalog,
     YouTubePlaylist,
@@ -40,6 +45,40 @@ class FakeMPV:
         return self.properties.get(name)
 
 
+class _PromptScreen:
+    def __init__(self, keys, width=24, height=12):
+        self.keys = list(keys)
+        self.width = width
+        self.height = height
+        self.rendered = []
+
+    def getmaxyx(self):
+        return self.height, self.width
+
+    def nodelay(self, value):
+        pass
+
+    def timeout(self, value):
+        pass
+
+    def move(self, y, x):
+        pass
+
+    def clrtoeol(self):
+        pass
+
+    def addstr(self, y, x, value, *args):
+        self.rendered.append((y, x, value))
+
+    def refresh(self):
+        pass
+
+    def get_wch(self):
+        if not self.keys:
+            return "\n"
+        return self.keys.pop(0)
+
+
 class YouTubeOnlineTests(unittest.TestCase):
     def test_catalog_parses_flat_yt_dlp_results(self):
         payload = {
@@ -71,6 +110,45 @@ class YouTubeOnlineTests(unittest.TestCase):
             "https://www.youtube.com/watch?v=abc123",
         )
         self.assertEqual(tracks[1].duration_label, "--:--")
+
+    def test_prompt_input_window_scrolls_without_truncating_buffer(self):
+        query = "a very long song title that cannot fit on a phone screen"
+
+        visible = _prompt_input_window(query, 12)
+
+        self.assertEqual(len(visible), 12)
+        self.assertTrue(visible.startswith("<"))
+        self.assertTrue(query.endswith(visible[1:]))
+
+    def test_prompt_text_accepts_query_longer_than_terminal_width(self):
+        query = "this title is much longer than twenty four columns"
+        screen = _PromptScreen([*query, "\n"], width=24)
+        player = MeowPlayer.__new__(MeowPlayer)
+
+        with (
+            mock.patch("meowplayer.curses.curs_set"),
+            mock.patch("meowplayer.curses.noecho"),
+        ):
+            value = player.prompt_text(screen, "Internet Nest search")
+
+        self.assertEqual(value, query)
+        self.assertGreater(len(value), screen.width)
+
+    def test_prompt_text_backspace_operates_on_full_hidden_buffer(self):
+        query = "abcdefghijklmnopqrstuvwxyz"
+        screen = _PromptScreen(
+            [*query, "\b", "\b", "Y", "Z", "\n"],
+            width=16,
+        )
+        player = MeowPlayer.__new__(MeowPlayer)
+
+        with (
+            mock.patch("meowplayer.curses.curs_set"),
+            mock.patch("meowplayer.curses.noecho"),
+        ):
+            value = player.prompt_text(screen, "YouTube search")
+
+        self.assertEqual(value, "abcdefghijklmnopqrstuvwxYZ")
 
     def test_search_aggregates_background_results(self):
         import queue
