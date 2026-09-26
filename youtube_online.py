@@ -160,7 +160,7 @@ class YouTubeCatalog:
 
     def __init__(
         self,
-        enabled=True,
+        enabled=False,
         executable=None,
         timeout=20.0,
         default_limit=None,
