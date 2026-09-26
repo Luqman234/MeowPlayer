@@ -33,6 +33,19 @@ class _Response:
 
 
 class GoogleAccountTests(unittest.TestCase):
+    def setUp(self):
+        self._temp = tempfile.TemporaryDirectory()
+        self.token_path = Path(self._temp.name) / "google-oauth.json"
+
+    def tearDown(self):
+        self._temp.cleanup()
+
+    def client(self, client_id="client-id"):
+        return GoogleAccountClient(
+            client_id,
+            token_path=self.token_path,
+        )
+
     def test_google_account_flag_is_opt_in(self):
         self.assertFalse(parse_args([]).google_account)
         self.assertTrue(parse_args(["--google-account"]).google_account)
@@ -52,7 +65,7 @@ class GoogleAccountTests(unittest.TestCase):
         )
 
     def test_authorization_url_uses_readonly_scope_and_pkce(self):
-        client = GoogleAccountClient("client-id")
+        client = self.client()
         url = client._authorization_url(
             "http://127.0.0.1:12345/",
             "state-token",
@@ -66,6 +79,17 @@ class GoogleAccountTests(unittest.TestCase):
         self.assertEqual(params["code_challenge"], ["challenge-token"])
         self.assertEqual(params["code_challenge_method"], ["S256"])
         self.assertEqual(params["access_type"], ["offline"])
+
+    def test_expired_access_token_without_refresh_is_not_connected(self):
+        client = self.client()
+        client._token = {
+            "client_id": "client-id",
+            "access_token": "expired",
+            "refresh_token": "",
+            "expires_at": 1,
+        }
+
+        self.assertFalse(client.connected)
 
     def test_saved_token_is_restricted_to_owner(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -87,7 +111,7 @@ class GoogleAccountTests(unittest.TestCase):
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_channel_parser_uses_authenticated_mine_response(self):
-        client = GoogleAccountClient("client-id")
+        client = self.client()
         client._api_get = mock.Mock(
             return_value={
                 "items": [
@@ -120,7 +144,7 @@ class GoogleAccountTests(unittest.TestCase):
         self.assertEqual(params["mine"], "true")
 
     def test_playlist_parser_reads_owned_playlists(self):
-        client = GoogleAccountClient("client-id")
+        client = self.client()
         client._api_get = mock.Mock(
             return_value={
                 "items": [
@@ -149,7 +173,7 @@ class GoogleAccountTests(unittest.TestCase):
         )
 
     def test_playlist_items_become_streamable_track_identifiers(self):
-        client = GoogleAccountClient("client-id")
+        client = self.client()
         client._api_get = mock.Mock(
             return_value={
                 "items": [
@@ -185,7 +209,7 @@ class GoogleAccountTests(unittest.TestCase):
         )
 
     def test_subscriptions_become_creator_nest_targets(self):
-        client = GoogleAccountClient("client-id")
+        client = self.client()
         client._api_get = mock.Mock(
             return_value={
                 "items": [
