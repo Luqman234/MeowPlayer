@@ -563,6 +563,33 @@ class AudioEngineTests(unittest.TestCase):
         self.assertIn("--replaygain=track", command)
         self.assertIn("--replaygain-preamp=0.0", command)
 
+    def test_enter_activation_preserves_visible_order_for_crossfade(self):
+        player = self.make_player(count=4, current=0)
+        player.crossfade_seconds = 5.0
+        player.crossfade_mpv = FakeMPV()
+        player.library_view = "songs"
+        player.selected = 1
+
+        # This is the real ENTER-key path. Raw index 3 is visually followed
+        # by raw index 2, so the preload must target 2 rather than raw index 1
+        # or a wrapped library entry.
+        visible_order = [1, 3, 2, 0]
+        player.ordered_library_indices = lambda: list(visible_order)
+        player.load_current_lyrics = lambda *args, **kwargs: None
+        player.refresh_library_stats = lambda: None
+
+        player.activate_library_selection()
+
+        self.assertEqual(player.current, 3)
+        self.assertEqual(player.playback_sequence, visible_order)
+        self.assertEqual(player.peek_next_index(), 2)
+        self.assertEqual(player.crossfade_next_index, 2)
+        self.assertEqual(
+            player.crossfade_mpv.loaded[-1],
+            Path("/music/2.flac"),
+        )
+
+
     def test_library_playback_sequence_matches_visible_order_for_crossfade(self):
         player = self.make_player(count=4, current=0)
         player.crossfade_seconds = 5.0
