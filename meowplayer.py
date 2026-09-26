@@ -78,7 +78,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.18.3"
+__version__ = "0.18.4"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -3516,7 +3516,15 @@ class MeowPlayer:
             self.play(index, sequence=sequence)
             return
 
-        self.play(index)
+        # ENTER playback must preserve the exact track order the user is
+        # looking at. This is the primary interactive path into playback; if
+        # it drops the sequence, automatic Next/gapless/crossfade fall back to
+        # raw scan indices and can jump to songs[1] instead of the next visible
+        # track.
+        self.play(
+            index,
+            sequence=list(self.ordered_library_indices()),
+        )
 
     def go_back_library(self):
         if self.library_view == "artists" and self.drill_album is not None:
