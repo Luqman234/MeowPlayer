@@ -33,6 +33,7 @@ from bad_larry import (
     confirm_dangerous_cat,
 )
 from bad_larry_math import QUANTUM_EXAM_SECONDS, QUANTUM_FINAL_EXAM
+from cat_presence import CatPresence, CatPresenceSnapshot
 from lyrics_support import LyricsManager
 from library_watcher import LibraryWatcher
 from meow_catalog import LibraryCatalog
@@ -78,7 +79,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.18.4"
+__version__ = "0.19.0"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -930,6 +931,7 @@ class MeowPlayer:
             else None
         )
         self.playback_saboteur = PlaybackSaboteur(self.cat_chaos_mode)
+        self.cat_presence = CatPresence()
         self.youtube = YouTubeCatalog(enabled=youtube_enabled)
         LOGGER.info(
             "Initializing player music_dir=%s youtube=%s serious=%s "
@@ -2334,24 +2336,52 @@ class MeowPlayer:
             f"Sabotages {saboteur.sabotage_count}"
         )
 
-    def cat_mood(self):
-        if not self.has_active_track():
-            return "Waiting"
+    def cat_presence_snapshot(self):
+        active = self.has_active_track()
 
-        paused = bool(self.mpv.get_property("pause"))
-        if paused:
-            return "Loafing"
-        if self.volume >= 90:
-            return "Screaming"
-        if self.volume <= 10:
-            return "Whispering"
-        if self.repeat:
-            return "Tail-Chasing"
-        if self.shuffle:
-            return "Zoomies"
-        if self.catnip_stash:
-            return "Guarding Catnip"
-        return "Purring"
+        paused = False
+        if active:
+            try:
+                paused = bool(self.mpv.get_property("pause"))
+            except (AttributeError, TypeError):
+                paused = False
+
+        rating = 0
+        if self.current is not None:
+            try:
+                rating = int(
+                    self.stats_for(self.current).get("rating", 0) or 0
+                )
+            except (AttributeError, KeyError, TypeError, ValueError):
+                rating = 0
+
+        visualizer = getattr(self, "visualizer", None)
+
+        return CatPresenceSnapshot(
+            active=active,
+            paused=paused,
+            volume=int(getattr(self, "volume", 70) or 0),
+            shuffle=bool(getattr(self, "shuffle", False)),
+            repeat=bool(getattr(self, "repeat", False)),
+            stash_count=len(getattr(self, "catnip_stash", ())),
+            crossfade_active=bool(
+                getattr(self, "_crossfade_active", False)
+            ),
+            online=getattr(self, "online_current", None) is not None,
+            online_state=str(
+                getattr(self, "online_load_state", "idle") or "idle"
+            ),
+            rating=max(0, min(5, rating)),
+            visualizer_visible=bool(
+                getattr(visualizer, "visible", False)
+            ),
+            scritches=int(getattr(self, "scritches", 0) or 0),
+        )
+
+    def cat_mood(self):
+        return self.cat_presence.mood(
+            self.cat_presence_snapshot()
+        )
 
     def trigger_cat_incident(self, message=None, duration=8.0, now=None):
         if self.serious_mode:
@@ -2393,7 +2423,10 @@ class MeowPlayer:
         if self.cat_incident is not None:
             self.cat_incident = None
 
-        return f"🐱 {self.quote}"
+        presence = self.cat_presence.caption(
+            self.cat_presence_snapshot()
+        )
+        return f"🐱 {presence}  ·  {self.quote}"
 
     def pet_cat(self):
         if self.serious_mode:
@@ -2423,7 +2456,7 @@ class MeowPlayer:
         )
         return True
 
-    def live_cat_mascot(self):
+    def live_cat_mascot(self, now=None):
         if self.playback_saboteur.mode == "dangerous":
             return (
                 " /\\_/\\",
@@ -2442,25 +2475,13 @@ class MeowPlayer:
                 r"( -_- )",
                 r" > ~ <",
             )
-        if self.maximum_meow:
-            mood = self.cat_mood()
-            middle = {
-                "Waiting": r" ( =-.-=)   zZ",
-                "Purring": r" ( =^.^=)   ♫",
-                "Loafing": r" ( =-.-=)   ...",
-                "Zoomies": r" ( =>.<=)   !!",
-                "Tail-Chasing": r" ( =@.@=)   ↻",
-                "Guarding Catnip": r" ( =o.o=)   ~",
-                "Screaming": r" ( =O.O=)   !!!",
-                "Whispering": r" ( =o.o=)   pspsps",
-            }[mood]
-            return (
-                "  /\\_/\\      ♪",
-                middle,
-                r'  (")_(")   ♪',
-            )
 
-        return CAT_MOOD_MASCOTS[self.cat_mood()]
+        timestamp = time.monotonic() if now is None else float(now)
+        return self.cat_presence.frame(
+            self.cat_presence_snapshot(),
+            now=timestamp,
+            maximum_meow=self.maximum_meow,
+        )
 
     def next_treat_label(self):
         if not self.songs:
