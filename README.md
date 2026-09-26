@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.18.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.18.2** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.18.1 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.18.2 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,170 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.18.2 — The Cat Got an Account Nest
+
+MeowPlayer 0.18.2 introduces **Account Nest**: an optional, read-only Google / YouTube account layer that stays completely dormant unless you explicitly enable it.
+
+Normal MeowPlayer remains account-free:
+
+```bash
+meowplayer
+```
+
+To expose Account Nest for a session:
+
+```bash
+meowplayer --google-account
+```
+
+That flag is intentionally separate from Internet Nest. Anonymous online search and playback still work without signing in.
+
+### Account Nest v1
+
+The first version is deliberately conservative:
+
+```text
+Account Nest
+├── My Playlists
+│    └── tracks → Enter → yt-dlp → mpv
+├── Liked Videos
+│    └── Enter → yt-dlp → mpv
+├── Subscriptions
+│    └── Enter → Creator Nest
+├── My Channel
+└── Disconnect Google Account
+```
+
+Google supplies account-specific metadata and identifiers. MeowPlayer still sends playable video IDs through the same online stack it already uses:
+
+```text
+Google OAuth / YouTube Data API
+              ↓
+playlist / video / channel IDs
+              ↓
+          MeowPlayer
+              ↓
+            yt-dlp
+              ↓
+             mpv
+```
+
+So Account Nest does not replace Internet Nest, yt-dlp, or mpv. It adds a private-account discovery layer above them.
+
+### Explicit opt-in means explicit opt-in
+
+`--google-client-id` by itself does not activate anything.
+
+Only:
+
+```text
+--google-account
+```
+
+causes MeowPlayer to construct the Google Account client, load a saved token if one exists, expose the Account Nest UI, and add the `U Account` shortcut to the Music Nest.
+
+Without the flag:
+
+- no Google token file is loaded;
+- no browser is opened;
+- no YouTube Data API request is made;
+- Account Nest remains unavailable.
+
+Even an existing token from an earlier session is ignored unless the feature is explicitly enabled again.
+
+### OAuth without asking MeowPlayer for your password
+
+Account Nest uses Google's installed-application OAuth flow:
+
+```text
+MeowPlayer
+    ↓
+system browser
+    ↓
+Google sign-in / consent
+    ↓
+temporary 127.0.0.1 callback
+    ↓
+OAuth token
+```
+
+MeowPlayer never asks for or handles the user's Google password.
+
+Authorization uses:
+
+- PKCE with `S256`;
+- random OAuth state;
+- a temporary loopback callback bound to `127.0.0.1`;
+- the read-only YouTube scope:
+
+```text
+https://www.googleapis.com/auth/youtube.readonly
+```
+
+The first Account Nest therefore cannot create playlists, modify subscriptions, upload videos, like/unlike content, or otherwise mutate the YouTube account.
+
+### OAuth client configuration
+
+Account Nest needs a Google **Desktop OAuth client ID** from a Google Cloud project with the **YouTube Data API v3** enabled.
+
+Pass it directly:
+
+```bash
+meowplayer --google-account \
+  --google-client-id 'YOUR_CLIENT_ID.apps.googleusercontent.com'
+```
+
+or through the environment:
+
+```bash
+export MEOWPLAYER_GOOGLE_CLIENT_ID='YOUR_CLIENT_ID.apps.googleusercontent.com'
+meowplayer --google-account
+```
+
+During development, the Google Cloud OAuth consent screen and allowed test users must also be configured. Publicly distributed OAuth clients that request YouTube account data may be subject to Google's verification requirements.
+
+### Token storage and disconnect
+
+Authorized credentials are stored under:
+
+```text
+$XDG_CONFIG_HOME/meowplayer/google-oauth.json
+```
+
+or, by default:
+
+```text
+~/.config/meowplayer/google-oauth.json
+```
+
+On POSIX systems MeowPlayer writes that file with owner-only permissions.
+
+**Disconnect Google Account** asks Google's revocation endpoint to revoke the credential, clears the in-memory token, and removes the local token file.
+
+Expired access tokens without a usable refresh token are not treated as valid connected sessions.
+
+### No new Python dependency
+
+The Account Nest implementation uses Python's standard library for:
+
+- PKCE generation;
+- the loopback HTTP callback;
+- OAuth token exchange and refresh;
+- YouTube Data API requests;
+- token revocation.
+
+`google_account.py` is packaged with MeowPlayer, but ordinary users who never enable `--google-account` do not need a separate Google SDK.
+
+### Release lineage
+
+```text
+0.18.0  Internet Nest became default-available
+0.18.1  Creator Nest learned real release names + session caching
+0.18.2  Account Nest connects optional private YouTube account data
+```
+
+> **MeowPlayer 0.18.2 — the cat can know your playlists now, but only after you explicitly let it in.**
 
 ## What's new in 0.18.1 — The Cat Finally Read the Album Label
 
@@ -4034,7 +4198,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.18.1 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.18.2 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -4165,8 +4329,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.18.1-py3-none-any.whl
-└── meowplayer_terminal-0.18.1.tar.gz
+├── meowplayer_terminal-0.18.2-py3-none-any.whl
+└── meowplayer_terminal-0.18.2.tar.gz
 ```
 
 The installed CLI is still:
