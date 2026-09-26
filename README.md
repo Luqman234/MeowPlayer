@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.18.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.18.2** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.18.1 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.18.2 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -72,7 +72,7 @@ MeowPlayer tries to stay true to a few rules:
 
 | Area | What MeowPlayer actually uses |
 | --- | --- |
-| Playback | `mpv` JSON IPC, gapless priming, ReplayGain, optional yt-dlp online streams |
+| Playback | `mpv` JSON IPC, gapless priming, optional two-deck equal-power crossfade, ReplayGain, optional yt-dlp online streams |
 | Library | SQLite **Cat Catalog**, recursive scanning, Watchdog/inotify |
 | Metadata | Mutagen locally, optional MusicBrainz enrichment for missing fields |
 | Lyrics | sidecar/embedded lyrics + optional LRCLIB synchronized/plain lookup |
@@ -80,6 +80,87 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.18.2 — The Cat Learned to DJ
+
+MeowPlayer 0.18.2 adds **real crossfade for local-library playback**.
+
+This is not a fake fade-out followed by a fade-in. When crossfade is enabled, MeowPlayer runs a second, silent `mpv` deck and preloads the next local track while the current one is still playing.
+
+```text
+current track / Deck A
+██████████████████████▓▒░
+                    ↘
+
+next track / Deck B
+                ░▒▓████████████████████
+                ↗
+```
+
+### Equal-power two-deck mixing
+
+The fade envelopes use sine/cosine equal-power curves rather than two linear volume ramps:
+
+```text
+Deck A = volume × cos(progress × π/2)
+Deck B = volume × sin(progress × π/2)
+```
+
+That keeps the middle of the overlap from sounding artificially hollow when two unrelated tracks are blended.
+
+The outgoing deck is stopped only after the transition completes. The incoming deck then becomes the primary player and the old primary deck is recycled as the silent preload deck for the next transition.
+
+### Crossfade lives in Settings Nest
+
+Crossfade is **off by default** so existing gapless behavior remains unchanged.
+
+```text
+Settings Nest
+Crossfade / DJ cat overlap    OFF
+```
+
+Use Left/Right to choose a duration from `0` to `10` seconds. `0` means off. The setting applies live and is persisted in MeowPlayer's config.
+
+There is also a launch override:
+
+```bash
+meowplayer --crossfade 5
+```
+
+Crossfade takes precedence over mpv's one-track-ahead gapless reservation while it is enabled. Turning it back off restores the existing gapless engine.
+
+### Short tracks do not get eaten
+
+For unusually short songs, MeowPlayer caps the effective fade duration to at most half of either track's known duration.
+
+So asking for a ten-second crossfade does not turn a six-second track into one enormous transition.
+
+### Playback controls remain coherent
+
+During an active fade:
+
+- changing Meow Level scales both fade envelopes;
+- Pause pauses both decks together;
+- seeking cancels the in-progress overlap and returns to one authoritative playback deck;
+- Repeat suppresses the next-track crossfade;
+- queue, shuffle, history, lyrics, Cat Catalog play counts, selection state, and MPRIS ownership move to the incoming track when the transition commits.
+
+The second deck has its own mpv IPC socket and, in debug mode, its own mpv log file.
+
+### Local-first boundary
+
+0.18.2 crossfades **local → local** transitions. Internet Nest streams keep their existing playback path and fail-soft behavior instead of making online playback depend on a second remote stream resolving in time.
+
+That boundary is deliberate: a bad network connection must not destabilize local playback.
+
+In short:
+
+```text
+0.18.1: the cat learned to read album labels
+0.18.2: the cat acquired a second turntable
+```
+
+> **MeowPlayer 0.18.2 — The Cat Learned to DJ.** 🐈‍⬛🎚️
 
 ## What's new in 0.18.1 — The Cat Finally Read the Album Label
 
@@ -3918,7 +3999,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.18.1 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.18.2 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -4049,8 +4130,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.18.1-py3-none-any.whl
-└── meowplayer_terminal-0.18.1.tar.gz
+├── meowplayer_terminal-0.18.2-py3-none-any.whl
+└── meowplayer_terminal-0.18.2.tar.gz
 ```
 
 The installed CLI is still:
