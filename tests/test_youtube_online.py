@@ -578,9 +578,19 @@ class YouTubeOnlineTests(unittest.TestCase):
         self.assertIn("--ytdl-format=bestaudio/best", command)
         self.assertIn("--no-video", command)
 
-    def test_cli_youtube_flag_is_opt_in(self):
-        self.assertFalse(parse_args([]).youtube)
+    def test_internet_nest_is_enabled_by_default(self):
+        self.assertTrue(parse_args([]).youtube)
+
+    def test_legacy_youtube_flag_remains_accepted(self):
         self.assertTrue(parse_args(["--youtube"]).youtube)
+
+    def test_no_youtube_disables_internet_nest_for_run(self):
+        self.assertFalse(parse_args(["--no-youtube"]).youtube)
+
+    def test_catalog_defaults_to_enabled_but_still_requires_executable(self):
+        catalog = YouTubeCatalog(executable="/usr/bin/yt-dlp")
+        self.assertTrue(catalog.enabled)
+        self.assertTrue(catalog.available)
 
     def test_play_online_clears_local_playback_state(self):
         player = MeowPlayer.__new__(MeowPlayer)
