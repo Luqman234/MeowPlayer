@@ -6206,6 +6206,10 @@ class MeowPlayer:
                 else:
                     mood = self.cat_mood()
                     label = {
+                        "DJ": "Now MIXING",
+                        "Dancing": "Now Vibing",
+                        "Judging": "Now Judging",
+                        "Adoring": "Now Worshipping This Track",
                         "Screaming": "Now YOWLING",
                         "Whispering": "Now tiny-purring",
                     }.get(mood, "Now Purring")
