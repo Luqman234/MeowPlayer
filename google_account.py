@@ -142,14 +142,16 @@ class GoogleAccountClient:
 
     @property
     def connected(self):
-        return bool(
-            self._token
-            and self._token.get("client_id") == self.client_id
-            and (
-                self._token.get("refresh_token")
-                or self._token.get("access_token")
-            )
-        )
+        if not self._token or self._token.get("client_id") != self.client_id:
+            return False
+        if self._token.get("refresh_token"):
+            return True
+        access_token = str(self._token.get("access_token") or "").strip()
+        try:
+            expires_at = float(self._token.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires_at = 0
+        return bool(access_token and expires_at - time.time() > 60)
 
     def _load_token(self):
         try:
