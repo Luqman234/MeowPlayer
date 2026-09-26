@@ -11,6 +11,7 @@ DEFAULT_CONFIG = {
     "mpris_enabled": True,
     "album_art_enabled": True,
     "gapless_mode": "weak",
+    "crossfade_seconds": 0.0,
     "replaygain_mode": "track",
     "replaygain_preamp": 0.0,
     "lyrics_enabled": True,

@@ -39,6 +39,35 @@ class SettingsNestTests(unittest.TestCase):
         self.assertEqual(adjust_setting_value(spec, -20.0, -1), -20.0)
         self.assertEqual(format_setting_value(spec, -1.5), "-1.5 dB")
 
+    def test_crossfade_duration_formats_and_clamps(self):
+        spec = setting_spec("crossfade_seconds")
+
+        self.assertEqual(format_setting_value(spec, 0.0), "OFF")
+        self.assertEqual(format_setting_value(spec, 5.0), "5.0 s")
+        self.assertEqual(adjust_setting_value(spec, 9.0, 1), 10.0)
+        self.assertEqual(adjust_setting_value(spec, 10.0, 1), 10.0)
+        self.assertEqual(adjust_setting_value(spec, 0.0, -1), 0.0)
+
+    def test_crossfade_setting_applies_live_and_persists(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        player.serious_mode = True
+        player.app_config = {"crossfade_seconds": 0.0}
+        player.settings_selected = next(
+            i for i, spec in enumerate(SETTINGS_SPECS)
+            if spec.key == "crossfade_seconds"
+        )
+        player.set_crossfade_seconds = mock.Mock()
+        player.status_message = ""
+
+        with mock.patch("meowplayer.save_config", return_value=True) as save:
+            changed = player.change_selected_setting(direction=1)
+
+        self.assertTrue(changed)
+        self.assertEqual(player.app_config["crossfade_seconds"], 1.0)
+        player.set_crossfade_seconds.assert_called_once_with(1.0)
+        save.assert_called_once()
+        self.assertIn("(live)", player.status_message)
+
     def test_gapless_setting_applies_live_and_persists(self):
         player = MeowPlayer.__new__(MeowPlayer)
         player.serious_mode = True
