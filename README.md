@@ -2681,6 +2681,16 @@ meowplayer-google-auth
 
 ### First-time setup
 
+The helper is installed by the same MeowPlayer package, but it is a **separate executable and process boundary**:
+
+```text
+pip / pipx install MeowPlayer
+        ↓
+installs:
+    meowplayer
+    meowplayer-google-auth
+```
+
 Create a Google Desktop OAuth client for a project with YouTube Data API v3 enabled, then make the client ID available to the helper:
 
 ```bash
@@ -2700,6 +2710,41 @@ meowplayer --google-account
 ```
 
 and choose **Connect Google Account** from Account Nest. MeowPlayer will invoke the helper's `login` operation, and the packaged helper opens Google's authorization page in the system browser.
+
+The first login and later launches therefore look different:
+
+```text
+FIRST LOGIN
+
+meowplayer --google-account
+        ↓
+Connect Google Account
+        ↓
+meowplayer-google-auth login
+        ↓
+browser → Google consent
+        ↓
+helper stores refreshable OAuth state
+        ↓
+Account Nest becomes connected
+
+
+LATER LAUNCH
+
+meowplayer --google-account
+        ↓
+helper status
+        ↓
+Account Nest
+        ↓
+helper token
+        ↓
+valid access token
+        ↓
+YouTube Data API
+```
+
+Normal `meowplayer` launches do not invoke the Google helper at all.
 
 ### The helper interface
 
@@ -2722,6 +2767,8 @@ logout
 ```
 
 MeowPlayer never parses the helper's token database and never performs OAuth token refresh itself.
+
+The helper protocol is documented separately in [`docs/AUTH_HELPERS.md`](docs/AUTH_HELPERS.md). That document is the compatibility contract for custom authentication helpers and future credential backends.
 
 ### Account data flow
 
@@ -2786,7 +2833,7 @@ The included helper currently stores its Google OAuth state at:
 
 or the equivalent `$XDG_CONFIG_HOME` path, with owner-only POSIX permissions.
 
-The helper, not MeowPlayer core, owns that file.
+The helper, not MeowPlayer core, owns that file. MeowPlayer core only receives the short-lived access token returned by the helper's `token` command for an immediate YouTube API request.
 
 You can override the helper's token path with:
 
@@ -2809,6 +2856,8 @@ Account Nest therefore does not create/edit playlists, like/unlike videos, chang
 **Not implemented.**
 
 There is no Xiaomi helper and no Mi Account login path in MeowPlayer at this time. The external-helper architecture is intentionally capable of supporting other providers later, but Google is the only account provider implemented now.
+
+In particular, MeowPlayer does **not** use Xiaomi Passport `passToken` sessions, Mi Unlock service identifiers, XiaomiPCSuite impersonation, or embedded unlock signing material. Any future Xiaomi integration must use a separately reviewed, provider-appropriate helper rather than copying those mechanisms.
 
 ## Quick start — summon the cat
 
@@ -4437,6 +4486,8 @@ MeowPlayer/
 ├── requirements.txt
 ├── README.md
 ├── LICENSE                    # the only adult in the room
+├── docs/
+│   └── AUTH_HELPERS.md        # external auth-helper command contract
 ├── examples/
 │   └── smart-mixes.json
 ├── tests/
@@ -4444,6 +4495,8 @@ MeowPlayer/
 │   ├── test_audio.py
 │   ├── test_catalog.py
 │   ├── test_debug_logging.py
+│   ├── test_google_account.py
+│   ├── test_google_auth_helper.py
 │   ├── test_goofy.py
 │   ├── test_lyrics.py
 │   ├── test_online_metadata.py
@@ -4470,6 +4523,8 @@ Compile first-party modules:
 ```bash
 python -m py_compile \
   meowplayer.py \
+  google_account.py \
+  google_auth_helper.py \
   album_art.py \
   lyrics_support.py \
   online_metadata.py \
