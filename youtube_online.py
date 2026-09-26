@@ -176,6 +176,7 @@ class YouTubeCatalog:
         # Session-only Creator Nest cache. It intentionally lives only in
         # memory and is cleared when MeowPlayer shuts down.
         self._release_title_cache = {}
+        self._playlist_tracks_cache = {}
         LOGGER.debug(
             "YouTubeCatalog enabled=%s executable=%s timeout=%s default_limit=%s",
             self.enabled,
@@ -223,15 +224,40 @@ class YouTubeCatalog:
         )
         return True
 
-    def clear_session_cache(self):
-        count = len(self._release_title_cache)
-        self._release_title_cache.clear()
+    @staticmethod
+    def _playlist_tracks_cache_key(source_url):
+        return str(source_url or "").strip()
+
+    def cached_playlist_tracks(self, source_url):
+        key = self._playlist_tracks_cache_key(source_url)
+        if not key:
+            return ()
+        return tuple(self._playlist_tracks_cache.get(key) or ())
+
+    def cache_playlist_tracks(self, source_url, tracks):
+        key = self._playlist_tracks_cache_key(source_url)
+        tracks = tuple(tracks or ())
+        if not key or not tracks:
+            return False
+        self._playlist_tracks_cache[key] = tracks
         LOGGER.debug(
-            "Cleared %s session-only Creator Nest release cache entr%s",
-            count,
-            "y" if count == 1 else "ies",
+            "Cached Creator Nest playlist tracks key=%s count=%s",
+            key,
+            len(tracks),
         )
-        return count
+        return True
+
+    def clear_session_cache(self):
+        release_count = len(self._release_title_cache)
+        playlist_count = len(self._playlist_tracks_cache)
+        self._release_title_cache.clear()
+        self._playlist_tracks_cache.clear()
+        LOGGER.debug(
+            "Cleared session-only Creator Nest cache releases=%s playlists=%s",
+            release_count,
+            playlist_count,
+        )
+        return release_count + playlist_count
 
 
     def search(self, query, limit=None, search_mode="all"):
@@ -1240,6 +1266,23 @@ class YouTubeBrowseSession:
                     self.catalog.unavailable_reason
                 )
 
+            if self.mode == "playlist":
+                cached_tracks = self.catalog.cached_playlist_tracks(
+                    self.source_url
+                )
+                if cached_tracks:
+                    LOGGER.debug(
+                        "Creator Nest playlist cache hit source=%s count=%s",
+                        self.source_url,
+                        len(cached_tracks),
+                    )
+                    for track in cached_tracks:
+                        if self.cancel.is_set():
+                            return
+                        self.results.put(("track", track))
+                    self.results.put(("done", None))
+                    return
+
             targets = self._targets()
             if not targets:
                 raise YouTubeBrowseError(
@@ -1253,6 +1296,7 @@ class YouTubeBrowseSession:
                 "webpage_url,original_url,url})j"
             )
             seen = set()
+            playlist_tracks = []
             succeeded = False
 
             for attempt, target in enumerate(targets, start=1):
@@ -1364,6 +1408,8 @@ class YouTubeBrowseSession:
                                     if track.video_id in seen:
                                         continue
                                     seen.add(track.video_id)
+                                    if self.mode == "playlist":
+                                        playlist_tracks.append(track)
                                     self.results.put(("track", track))
 
                     if self.cancel.is_set():
@@ -1408,6 +1454,16 @@ class YouTubeBrowseSession:
             if not succeeded:
                 raise YouTubeBrowseError(
                     "yt-dlp could not browse this YouTube channel."
+                )
+
+            if (
+                self.mode == "playlist"
+                and playlist_tracks
+                and not self.cancel.is_set()
+            ):
+                self.catalog.cache_playlist_tracks(
+                    self.source_url,
+                    playlist_tracks,
                 )
 
             if not self.cancel.is_set():
