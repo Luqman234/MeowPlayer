@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.17.4** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.17.5** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.4 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.17.5 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,155 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.17.5 — The Cat Found the Artist's House
+
+MeowPlayer 0.17.5 turns the **Internet Nest** from a flat search result list into something much closer to a browsable remote music catalog.
+
+A search result can now lead back to the **actual YouTube creator/channel behind it**. Highlight an Internet Nest result and press:
+
+```text
+C
+```
+
+to enter the new **Creator Nest**.
+
+```text
+Internet Nest result
+        ↓
+      C Creator
+        ↓
+Creator Nest
+├── Singles / Uploads
+└── Playlists / Releases
+        ↓
+   choose a release
+        ↓
+      tracks
+```
+
+This is deliberately different from **Artist Scent**.
+
+```text
+Artist Scent
+artist name
+    ↓
+YouTube search biased toward that artist
+
+Creator Nest
+selected result's channel_id / channel_url
+    ↓
+that concrete uploader / creator channel
+```
+
+When yt-dlp exposes channel identity, MeowPlayer preserves it with the Internet Nest result instead of trying to rediscover the creator from display text.
+
+### Singles / Uploads
+
+Open **Singles / Uploads** to browse the creator's direct uploads.
+
+Normal channels are attempted through their `/videos` tab. Some YouTube layouts — especially auto-generated **`- Topic`** channels — do not expose that tab normally, so MeowPlayer falls back to the channel root and lets yt-dlp resolve the uploads feed.
+
+```text
+channel /videos
+      ↓ unavailable / empty / stalled
+channel root
+      ↓
+uploads
+```
+
+### Playlists / Releases
+
+Creator Nest also has a **Playlists / Releases** section.
+
+For ordinary creator channels, MeowPlayer first follows the concrete channel:
+
+```text
+channel /playlists
+        ↓
+channel /releases
+```
+
+Topic-channel release shelves are less uniform, so 0.17.5 adds one more recovery route:
+
+```text
+channel /playlists
+        ↓
+channel /releases
+        ↓
+YouTube Music search for creator
+        ↓
+#albums
+```
+
+A trailing `- Topic` suffix is removed before that Music search, so:
+
+```text
+Creator Cat - Topic
+        ↓
+Creator Cat
+        ↓
+YouTube Music albums
+```
+
+Release entries with sparse flat metadata are kept as long as a usable playlist URL exists. URLs containing IDs such as `OLAK5uy_...` are therefore no longer discarded just because yt-dlp did not provide a separate pretty playlist ID/title combination.
+
+### Stream it or adopt it
+
+Creator Nest reuses the same Internet Nest playback and adoption machinery:
+
+```text
+Creator upload / release track
+        ├── Enter → stream through mpv
+        └── D     → adopt into local library
+```
+
+Navigation stays keyboard-first:
+
+```text
+Enter  open / stream
+D      adopt selected track
+Esc    go up one Creator Nest level
+Q      return directly to the local Music Nest
+```
+
+Browsing runs asynchronously so curses remains responsive, and creator sessions are cancelled cleanly when MeowPlayer shuts down.
+
+### Metadata got harder to assassinate
+
+0.17.5 also hardens Songbook's local metadata lookup.
+
+Mutagen containers do not all accept the same tag-key syntax. A Vorbis/Opus/FLAC tag reader, for example, may raise `ValueError` when probed with an MP4-style alias such as `©alb`.
+
+Previously that could happen during session restore and crash MeowPlayer before the TUI even appeared.
+
+Now incompatible metadata aliases are treated as ordinary misses:
+
+```text
+album
+ ↓ missing
+TALB
+ ↓ missing
+©alb
+ ↓ invalid for this tag container
+skip it
+ ↓
+ALBUM
+ ↓
+continue normally
+```
+
+One weird metadata key no longer gets veto power over the entire cat.
+
+In short:
+
+```text
+0.17.3: the internet cat discovered result #13
+0.17.4: the internet cat brought a song home
+0.17.5: the internet cat found where the artist lives
+```
+
+> **MeowPlayer 0.17.5 — search the song, enter the Creator Nest, browse the releases, stream what you want, adopt what you love.**
 
 ## What's new in 0.17.4 — The Internet Cat Brought One Home
 
@@ -1376,18 +1525,18 @@ Internet Nest result
         ↓
 Creator Nest
 ├── Singles / Uploads
-└── Playlists
+└── Playlists / Releases
       ↓
-  choose playlist
+  choose release / playlist
       ↓
-  playlist tracks
+  tracks
 ```
 
 Inside a Creator Nest:
 
 - **Singles / Uploads** browses the creator channel's direct video/music uploads.
-- **Playlists** lists playlists exposed on that channel.
-- Press **Enter** on a playlist to browse its tracks.
+- **Playlists / Releases** first uses the creator channel's playlist/release tabs, then falls back to YouTube Music's Albums search when a Topic channel does not expose those shelves to yt-dlp.
+- Press **Enter** on a playlist or release to browse its tracks.
 - Press **Enter** on an upload or playlist track to stream it.
 - Press **D** on an upload or playlist track to adopt it into the local library using the existing download pipeline.
 - Press **Esc** to go up one Creator Nest level; from the top level, **Esc** returns to the previous Internet Nest search.
@@ -1409,7 +1558,21 @@ that exact uploader/channel
 
 YouTube does not expose a perfectly standardized “Singles” shelf through yt-dlp for every kind of channel, so MeowPlayer labels the first section **Singles / Uploads** and treats it as the creator's direct uploads rather than pretending every channel has identical YouTube Music structure. Labels, VEVO channels, Topic channels, ordinary creators, and artist channels can therefore use the same browsing machinery whenever yt-dlp exposes their channel pages.
 
-Creator Nest also understands that some channels — especially auto-generated **`- Topic`** channels — may not have a normal `/videos` tab at all. MeowPlayer first tries the explicit channel tab, then falls back to the channel root so yt-dlp can use the channel's uploads playlist. Playlist browsing similarly falls back from `/playlists` to `/releases` when the ordinary playlist tab is unavailable or empty.
+Creator Nest also understands that some channels — especially auto-generated **`- Topic`** channels — may not have a normal `/videos` tab at all. MeowPlayer first tries the explicit channel tab, then falls back to the channel root so yt-dlp can use the channel's uploads playlist.
+
+Topic-channel albums are a separate yt-dlp limitation: yt-dlp can browse uploads from a Topic channel but currently cannot reliably enumerate the albums/playlists visible on that channel's YouTube Music surface. Creator Nest therefore uses this fallback chain for **Playlists / Releases**:
+
+```text
+exact channel /playlists
+        ↓
+exact channel /releases
+        ↓
+YouTube Music search for that creator
+        ↓
+#albums section
+```
+
+The last step is deliberately artist-name based rather than channel-ID based because the hidden Topic album shelf is not currently exposed by yt-dlp. MeowPlayer strips a trailing `- Topic` suffix before that search. Release entries are also accepted when yt-dlp provides only a playlist URL, so `OLAK5uy_...` album links are not discarded just because their flat metadata is sparse.
 
 While an Internet Nest track is playing, **Songbook can search LRCLIB using the remote track's title, artist, and duration**. These lyrics are intentionally **session-only**: MeowPlayer may display synchronized or plain LRCLIB lyrics for the currently streaming track, but it does **not** write them to the persistent lyric cache.
 
@@ -3438,7 +3601,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.4 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.17.5 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -3569,8 +3732,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.17.4-py3-none-any.whl
-└── meowplayer_terminal-0.17.4.tar.gz
+├── meowplayer_terminal-0.17.5-py3-none-any.whl
+└── meowplayer_terminal-0.17.5.tar.gz
 ```
 
 The installed CLI is still:

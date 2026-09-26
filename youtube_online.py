@@ -12,7 +12,7 @@ from collections import OrderedDict
 from concurrent.futures import CancelledError, Future
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote_plus, urlsplit
 
 
 LOGGER = logging.getLogger("meowplayer.youtube")
@@ -358,10 +358,6 @@ class YouTubeCatalog:
     def _playlist_from_entry(entry):
         if not isinstance(entry, dict):
             return None
-        playlist_id = str(entry.get("id") or "").strip()
-        title = str(entry.get("title") or "").strip()
-        if not playlist_id or not title:
-            return None
 
         url = ""
         for key in ("webpage_url", "original_url", "url"):
@@ -369,6 +365,29 @@ class YouTubeCatalog:
             if value.startswith(("https://", "http://")):
                 url = value
                 break
+
+        playlist_id = str(entry.get("id") or "").strip()
+        if url:
+            try:
+                parsed = urlsplit(url)
+                list_id = parse_qs(parsed.query).get("list", [""])[0]
+                if list_id:
+                    playlist_id = str(list_id).strip()
+            except (TypeError, ValueError):
+                pass
+
+        if not playlist_id:
+            return None
+
+        title = ""
+        for key in ("title", "playlist_title", "album"):
+            value = str(entry.get(key) or "").strip()
+            if value:
+                title = value
+                break
+        if not title:
+            title = f"YouTube release {playlist_id[:12]}"
+
         if not url:
             url = f"https://www.youtube.com/playlist?list={playlist_id}"
 
@@ -928,7 +947,22 @@ def youtube_creator_section_url(channel_url, section):
     return f"{root}/{section}"
 
 
-def youtube_creator_browse_targets(channel_url, mode):
+def youtube_music_album_search_url(creator_name):
+    """Build yt-dlp's supported YouTube Music albums-section search URL."""
+    creator = " ".join(str(creator_name or "").split())
+    for suffix in (" - Topic", " – Topic", " — Topic"):
+        if creator.casefold().endswith(suffix.casefold()):
+            creator = creator[:-len(suffix)].rstrip()
+            break
+    if not creator:
+        return ""
+    return (
+        "https://music.youtube.com/search?q="
+        f"{quote_plus(creator)}#albums"
+    )
+
+
+def youtube_creator_browse_targets(channel_url, mode, creator_name=""):
     """Return ordered yt-dlp targets with fallbacks for uneven channel layouts."""
     root = youtube_creator_root_url(channel_url)
     if not root:
@@ -943,6 +977,7 @@ def youtube_creator_browse_targets(channel_url, mode):
         candidates = (
             youtube_creator_section_url(root, "playlists"),
             youtube_creator_section_url(root, "releases"),
+            youtube_music_album_search_url(creator_name),
         )
     elif mode == "playlist":
         candidates = (str(channel_url or "").strip(),)
@@ -971,6 +1006,7 @@ class YouTubeBrowseSession:
         source_url,
         mode,
         *,
+        creator_name="",
         timeout=None,
     ):
         if mode not in self.MODES:
@@ -980,6 +1016,7 @@ class YouTubeBrowseSession:
         self.catalog = catalog
         self.source_url = str(source_url or "").strip()
         self.mode = mode
+        self.creator_name = str(creator_name or "").strip()
         self.timeout = (
             catalog.timeout
             if timeout is None
@@ -996,6 +1033,7 @@ class YouTubeBrowseSession:
         return youtube_creator_browse_targets(
             self.source_url,
             self.mode,
+            self.creator_name,
         )
 
     def _run(self):
@@ -1015,7 +1053,8 @@ class YouTubeBrowseSession:
             fields = (
                 "%(.{id,title,artist,artists,creator,uploader,channel,"
                 "channel_id,channel_url,uploader_id,uploader_url,duration,"
-                "playlist_count,n_entries,webpage_url,original_url,url})j"
+                "playlist_count,n_entries,playlist_title,album,"
+                "webpage_url,original_url,url})j"
             )
             seen = set()
             succeeded = False
