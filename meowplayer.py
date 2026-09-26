@@ -4,6 +4,7 @@ import argparse
 import curses
 import json
 import logging
+import math
 import os
 import queue
 import random
@@ -77,7 +78,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.18.1"
+__version__ = "0.18.2"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -484,10 +485,21 @@ class MPVController:
         replaygain_preamp=0.0,
         debug_log_path=None,
         network_resolver_workaround=False,
+        socket_label=None,
     ):
+        safe_socket_label = "".join(
+            char
+            for char in str(socket_label or "")
+            if char.isalnum() or char in "-_"
+        )
+        socket_suffix = (
+            f"-{safe_socket_label}"
+            if safe_socket_label
+            else ""
+        )
         self.socket_path = os.path.join(
             tempfile.gettempdir(),
-            f"meowplayer-{os.getpid()}.sock"
+            f"meowplayer-{os.getpid()}{socket_suffix}.sock"
         )
 
         try:
@@ -885,6 +897,7 @@ class MeowPlayer:
         rebuild_catalog=False,
         album_art_enabled=True,
         gapless_mode="weak",
+        crossfade_seconds=0.0,
         replaygain_mode="track",
         replaygain_preamp=0.0,
         lyrics_enabled=True,
@@ -981,6 +994,19 @@ class MeowPlayer:
             if gapless_mode in {"no", "weak", "yes"}
             else "weak"
         )
+        try:
+            crossfade_seconds = float(crossfade_seconds)
+        except (TypeError, ValueError):
+            crossfade_seconds = 0.0
+        self.crossfade_seconds = max(
+            0.0,
+            min(10.0, crossfade_seconds),
+        )
+        self.crossfade_mpv = None
+        self.crossfade_next_index = None
+        self._crossfade_active = False
+        self._crossfade_started_at = 0.0
+        self._crossfade_duration = 0.0
         self.replaygain_mode = (
             replaygain_mode
             if replaygain_mode in {"no", "track", "album"}
@@ -1104,12 +1130,19 @@ class MeowPlayer:
                     "from filenames."
                 )
 
+        crossfade_label = (
+            "off"
+            if self.crossfade_seconds <= 0
+            else f"{self.crossfade_seconds:.1f}s"
+        )
         initial_serious += (
             f" Audio: gapless={self.gapless_mode}, "
+            f"crossfade={crossfade_label}, "
             f"ReplayGain={self.replaygain_mode}."
         )
         initial_cat += (
             f" Audio paws: gapless={self.gapless_mode}, "
+            f"DJ overlap={crossfade_label}, "
             f"ReplayGain={self.replaygain_mode}."
         )
         if self.playback_saboteur.enabled:
@@ -1170,6 +1203,9 @@ class MeowPlayer:
         )
         self.mpv.set_property("volume", self.volume)
         self.mpv.set_repeat(self.repeat)
+
+        if self.crossfade_seconds > 0:
+            self._ensure_crossfade_deck()
 
         if self.restore_session_enabled:
             self.restore_session(self.saved_state)
@@ -1298,7 +1334,366 @@ class MeowPlayer:
 
         return (self.current + 1) % len(self.songs)
 
+    def _crossfade_enabled(self):
+        try:
+            return float(getattr(self, "crossfade_seconds", 0.0)) > 0.0
+        except (TypeError, ValueError):
+            return False
+
+    def _crossfade_log_path(self):
+        path = getattr(self, "mpv_log_path", None)
+        if path is None:
+            return None
+        path = Path(path).expanduser()
+        return path.with_name(
+            f"{path.stem}.crossfade{path.suffix}"
+        )
+
+    def _ensure_crossfade_deck(self):
+        if not self._crossfade_enabled():
+            return None
+
+        existing = getattr(self, "crossfade_mpv", None)
+        if existing is not None:
+            return existing
+
+        deck = MPVController(
+            gapless_mode="no",
+            replaygain_mode=self.replaygain_mode,
+            replaygain_preamp=self.replaygain_preamp,
+            debug_log_path=self._crossfade_log_path(),
+            network_resolver_workaround=bool(
+                getattr(getattr(self, "youtube", None), "enabled", False)
+            ),
+            socket_label="crossfade",
+        )
+        deck.set_repeat(False)
+        deck.set_property("volume", 0)
+        deck.pause()
+        self.crossfade_mpv = deck
+        return deck
+
+    def cancel_crossfade(self, *, discard_primed=True):
+        active = bool(getattr(self, "_crossfade_active", False))
+        deck = getattr(self, "crossfade_mpv", None)
+
+        if active:
+            try:
+                self.mpv.set_property("volume", self.volume)
+            except AttributeError:
+                pass
+
+        if deck is not None:
+            try:
+                deck.stop()
+                deck.set_property("volume", 0)
+                deck.pause()
+            except AttributeError:
+                pass
+
+        self._crossfade_active = False
+        self._crossfade_started_at = 0.0
+        self._crossfade_duration = 0.0
+        if discard_primed:
+            self.crossfade_next_index = None
+        return active
+
+    def set_crossfade_seconds(self, seconds):
+        try:
+            seconds = float(seconds)
+        except (TypeError, ValueError):
+            seconds = 0.0
+        seconds = max(0.0, min(10.0, seconds))
+
+        if seconds <= 0:
+            self.crossfade_seconds = 0.0
+            self.cancel_crossfade()
+            deck = getattr(self, "crossfade_mpv", None)
+            if deck is not None:
+                deck.quit()
+                self.crossfade_mpv = None
+            self.prime_gapless_next()
+            return
+
+        self.crossfade_seconds = seconds
+        self.gapless_next_index = None
+        try:
+            self.mpv.clear_future_playlist()
+        except AttributeError:
+            pass
+        self._ensure_crossfade_deck()
+        self.prime_crossfade_next()
+
+    def prime_crossfade_next(self):
+        if (
+            not self._crossfade_enabled()
+            or self.current is None
+            or self.repeat
+            or getattr(self, "online_current", None) is not None
+        ):
+            self.crossfade_next_index = None
+            deck = getattr(self, "crossfade_mpv", None)
+            if deck is not None and not getattr(
+                self,
+                "_crossfade_active",
+                False,
+            ):
+                try:
+                    deck.stop()
+                    deck.set_property("volume", 0)
+                    deck.pause()
+                except AttributeError:
+                    pass
+            return False
+
+        next_index = self.peek_next_index()
+        if next_index is None or next_index == self.current:
+            self.crossfade_next_index = None
+            return False
+
+        if (
+            self.crossfade_next_index == next_index
+            and getattr(self, "crossfade_mpv", None) is not None
+        ):
+            return True
+
+        deck = self._ensure_crossfade_deck()
+        if deck is None:
+            return False
+
+        deck.stop()
+        deck.set_repeat(False)
+        deck.set_property("volume", 0)
+        deck.pause()
+        deck.load(self.songs[next_index])
+        deck.pause()
+        self.crossfade_next_index = next_index
+        MPV_LOGGER.debug(
+            "Crossfade primed index=%s path=%s duration=%.2fs",
+            next_index,
+            self.songs[next_index],
+            self.crossfade_seconds,
+        )
+        return True
+
+    def _effective_crossfade_duration(self, next_index, current_duration):
+        configured = max(
+            0.0,
+            float(getattr(self, "crossfade_seconds", 0.0) or 0.0),
+        )
+        if configured <= 0:
+            return 0.0
+
+        limits = [configured]
+        if current_duration > 0:
+            limits.append(current_duration / 2.0)
+
+        try:
+            next_duration = float(
+                getattr(self.meta(next_index), "duration", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            next_duration = 0.0
+        if next_duration > 0:
+            limits.append(next_duration / 2.0)
+
+        return max(0.05, min(limits))
+
+    def _crossfade_progress(self, now=None):
+        if not getattr(self, "_crossfade_active", False):
+            return 0.0
+        duration = max(
+            0.05,
+            float(getattr(self, "_crossfade_duration", 0.0) or 0.0),
+        )
+        timestamp = time.monotonic() if now is None else float(now)
+        return max(
+            0.0,
+            min(
+                1.0,
+                (timestamp - self._crossfade_started_at) / duration,
+            ),
+        )
+
+    def _apply_crossfade_volumes(self, progress):
+        deck = getattr(self, "crossfade_mpv", None)
+        if deck is None:
+            return
+
+        progress = max(0.0, min(1.0, float(progress)))
+        angle = progress * math.pi / 2.0
+        outgoing = self.volume * math.cos(angle)
+        incoming = self.volume * math.sin(angle)
+        self.mpv.set_property("volume", outgoing)
+        deck.set_property("volume", incoming)
+
+    def _begin_crossfade(self, duration, now=None):
+        target = getattr(self, "crossfade_next_index", None)
+        deck = getattr(self, "crossfade_mpv", None)
+        if (
+            deck is None
+            or target is None
+            or self.current is None
+            or target == self.current
+        ):
+            return False
+
+        if not deck.wait_for_path(
+            self.songs[target],
+            timeout=0.05,
+        ):
+            return False
+
+        duration = max(0.05, float(duration))
+        timestamp = time.monotonic() if now is None else float(now)
+        deck.set_property("volume", 0)
+        deck.play()
+        self._crossfade_active = True
+        self._crossfade_started_at = timestamp
+        self._crossfade_duration = duration
+        self._apply_crossfade_volumes(0.0)
+
+        meta = self.meta(target)
+        self.set_status(
+            f"Crossfading into: {meta.artist_title}",
+            f"DJ cat is blending into: {meta.artist_title}",
+        )
+        MPV_LOGGER.info(
+            "Crossfade started from=%s to=%s duration=%.3fs",
+            self.current,
+            target,
+            duration,
+        )
+        return True
+
+    def _finish_crossfade(self):
+        target = getattr(self, "crossfade_next_index", None)
+        incoming = getattr(self, "crossfade_mpv", None)
+        departed = self.current
+        if (
+            target is None
+            or incoming is None
+            or target < 0
+            or target >= len(self.songs)
+        ):
+            self.cancel_crossfade()
+            return False
+
+        outgoing = self.mpv
+        incoming.set_property("volume", self.volume)
+        outgoing.set_property("volume", 0)
+        outgoing.stop()
+
+        self.mpv = incoming
+        self.crossfade_mpv = outgoing
+        self.crossfade_mpv.set_property("volume", 0)
+        self.crossfade_mpv.pause()
+
+        self._consume_gapless_reservation(target)
+        if departed is not None and departed != target:
+            self.history.append(departed)
+            if len(self.history) > 200:
+                self.history.pop(0)
+
+        self.current = target
+        self.gapless_next_index = None
+        self.crossfade_next_index = None
+        self._crossfade_active = False
+        self._crossfade_started_at = 0.0
+        self._crossfade_duration = 0.0
+        self.load_current_lyrics(target)
+
+        if self.catalog is not None:
+            self.catalog.record_play(self.songs[target])
+            self.refresh_library_stats()
+
+        ordered = self.ordered_library_indices()
+        if target in ordered:
+            self.selected = ordered.index(target)
+
+        meta = self.meta(target)
+        self.set_status(
+            f"Crossfade complete: {meta.artist_title}",
+            f"The DJ cat landed the blend: {meta.artist_title}",
+        )
+        MPV_LOGGER.info(
+            "Crossfade completed from=%s to=%s",
+            departed,
+            target,
+        )
+        self.prime_crossfade_next()
+        self.sync_mpris(force=True)
+        return True
+
+    def process_crossfade_transition(self, now=None):
+        if (
+            not self._crossfade_enabled()
+            or self.current is None
+            or self.repeat
+            or getattr(self, "online_current", None) is not None
+        ):
+            return False
+
+        timestamp = time.monotonic() if now is None else float(now)
+
+        if getattr(self, "_crossfade_active", False):
+            progress = self._crossfade_progress(timestamp)
+            if bool(self.mpv.get_property("eof-reached")):
+                progress = 1.0
+            self._apply_crossfade_volumes(progress)
+            if progress >= 1.0:
+                return self._finish_crossfade()
+            return False
+
+        expected = self.peek_next_index()
+        if expected != getattr(self, "crossfade_next_index", None):
+            self.prime_crossfade_next()
+
+        target = getattr(self, "crossfade_next_index", None)
+        if target is None:
+            return False
+
+        try:
+            duration = float(
+                self.mpv.get_property("duration")
+                or self.current_duration_fallback()
+                or 0.0
+            )
+            position = float(
+                self.mpv.get_property("time-pos") or 0.0
+            )
+        except (TypeError, ValueError):
+            return False
+
+        if duration <= 0 or position < 0:
+            return False
+
+        fade_duration = self._effective_crossfade_duration(
+            target,
+            duration,
+        )
+        if fade_duration <= 0:
+            return False
+
+        remaining = max(0.0, duration - position)
+        if remaining > fade_duration + 0.05:
+            return False
+
+        return self._begin_crossfade(
+            fade_duration,
+            now=timestamp,
+        )
+
     def prime_gapless_next(self):
+        if self._crossfade_enabled():
+            self.gapless_next_index = None
+            try:
+                self.mpv.clear_future_playlist()
+            except AttributeError:
+                pass
+            self.prime_crossfade_next()
+            return
+
         # A manual loadfile replace is asynchronous inside mpv. Until mpv
         # reports the requested file as current, playlist-current-pos may be
         # -1. Mutating the playlist in that window can delete the song that is
@@ -1348,6 +1743,9 @@ class MeowPlayer:
             self.shuffle_bag.remove(index)
 
     def sync_gapless_transition(self):
+        if self._crossfade_enabled():
+            return False
+
         if (
             self.gapless_mode == "no"
             or self.current is None
@@ -1633,7 +2031,7 @@ class MeowPlayer:
                 self.previous_song()
             elif action == "pause":
                 if self.has_active_track():
-                    self.mpv.pause()
+                    self.set_playback_paused(True)
             elif action == "play":
                 if self.online_current is not None:
                     if bool(self.mpv.get_property("idle-active")):
@@ -1650,7 +2048,7 @@ class MeowPlayer:
                         preserve_sequence=True,
                     )
                 else:
-                    self.mpv.play()
+                    self.set_playback_paused(False)
             elif action == "play_pause":
                 if self.online_current is not None:
                     if bool(self.mpv.get_property("idle-active")):
@@ -1667,7 +2065,7 @@ class MeowPlayer:
                         preserve_sequence=True,
                     )
                 else:
-                    self.mpv.toggle_pause()
+                    self.toggle_playback_pause()
             elif action == "stop":
                 if self.has_active_track():
                     self.mpv.stop()
@@ -1675,10 +2073,16 @@ class MeowPlayer:
                         self._online_future = None
                         self.online_load_state = "idle"
             elif action == "seek" and self.has_active_track():
+                if getattr(self, "_crossfade_active", False):
+                    self.cancel_crossfade()
+                    self.prime_gapless_next()
                 self.mpv.seek(args[0])
                 position = self.mpv.get_property("time-pos") or 0
                 self.mpris.notify_seeked(float(position) * 1_000_000)
             elif action == "set_position" and self.has_active_track():
+                if getattr(self, "_crossfade_active", False):
+                    self.cancel_crossfade()
+                    self.prime_gapless_next()
                 self.mpv.seek_absolute(args[0])
                 self.mpris.notify_seeked(args[0] * 1_000_000)
             elif action == "set_volume":
@@ -1720,6 +2124,10 @@ class MeowPlayer:
                 pass
             self.catalog = None
 
+        crossfade_deck = getattr(self, "crossfade_mpv", None)
+        if crossfade_deck is not None:
+            crossfade_deck.quit()
+            self.crossfade_mpv = None
         self.mpv.quit()
         LOGGER.info("Player shutdown complete")
 
@@ -1778,13 +2186,24 @@ class MeowPlayer:
         if key == "gapless_mode":
             self.gapless_mode = value
             self.mpv.set_property("gapless-audio", value)
+            deck = getattr(self, "crossfade_mpv", None)
+            if deck is not None:
+                deck.set_property("gapless-audio", "no")
             self.prime_gapless_next()
+        elif key == "crossfade_seconds":
+            self.set_crossfade_seconds(value)
         elif key == "replaygain_mode":
             self.replaygain_mode = value
             self.mpv.set_property("replaygain", value)
+            deck = getattr(self, "crossfade_mpv", None)
+            if deck is not None:
+                deck.set_property("replaygain", value)
         elif key == "replaygain_preamp":
             self.replaygain_preamp = float(value)
             self.mpv.set_property("replaygain-preamp", float(value))
+            deck = getattr(self, "crossfade_mpv", None)
+            if deck is not None:
+                deck.set_property("replaygain-preamp", float(value))
         elif key == "lyrics_enabled":
             self.lyrics.enabled = bool(value)
             if not value:
@@ -3211,6 +3630,7 @@ class MeowPlayer:
         if track is None:
             return False
 
+        self.cancel_crossfade()
         timestamp = time.monotonic() if now is None else float(now)
         same_track = (
             self.online_current is not None
@@ -3709,6 +4129,7 @@ class MeowPlayer:
         if not self.songs:
             return
 
+        self.cancel_crossfade()
         index %= len(self.songs)
         LOGGER.info(
             "Starting local playback index=%s path=%s automatic=%s",
@@ -4116,7 +4537,28 @@ class MeowPlayer:
             return
 
         self.volume = int(round(max(0.0, min(100.0, value))))
-        self.mpv.set_property("volume", self.volume)
+        if getattr(self, "_crossfade_active", False):
+            self._apply_crossfade_volumes(
+                self._crossfade_progress()
+            )
+        else:
+            self.mpv.set_property("volume", self.volume)
+            deck = getattr(self, "crossfade_mpv", None)
+            if deck is not None:
+                deck.set_property("volume", 0)
+
+    def set_playback_paused(self, paused):
+        paused = bool(paused)
+        self.mpv.set_property("pause", paused)
+        if getattr(self, "_crossfade_active", False):
+            deck = getattr(self, "crossfade_mpv", None)
+            if deck is not None:
+                deck.set_property("pause", paused)
+        return paused
+
+    def toggle_playback_pause(self):
+        paused = bool(self.mpv.get_property("pause"))
+        return self.set_playback_paused(not paused)
 
     def update_volume(self, amount):
         self.set_volume_absolute(self.volume + amount)
@@ -6218,7 +6660,9 @@ class MeowPlayer:
                 self.album_art.clear(free_data=False)
 
             self.refresh_current_lyrics()
-            transitioned = self.sync_gapless_transition()
+            transitioned = self.process_crossfade_transition()
+            if not transitioned:
+                transitioned = self.sync_gapless_transition()
 
             if (
                 self.current is not None
@@ -6396,7 +6840,7 @@ class MeowPlayer:
             if key == ord(" "):
                 if self.cat_intercepts("pause"):
                     continue
-                paused = self.mpv.toggle_pause()
+                paused = self.toggle_playback_pause()
                 if paused:
                     self.set_status(
                         "Paused.",
@@ -6412,6 +6856,9 @@ class MeowPlayer:
             if key == curses.KEY_RIGHT:
                 if self.cat_intercepts("seek_forward"):
                     continue
+                if getattr(self, "_crossfade_active", False):
+                    self.cancel_crossfade()
+                    self.prime_gapless_next()
                 self.mpv.seek(5)
                 self.set_status(
                     "Seeked forward 5 seconds.",
@@ -6422,6 +6869,9 @@ class MeowPlayer:
             if key == curses.KEY_LEFT:
                 if self.cat_intercepts("seek_backward"):
                     continue
+                if getattr(self, "_crossfade_active", False):
+                    self.cancel_crossfade()
+                    self.prime_gapless_next()
                 self.mpv.seek(-5)
                 self.set_status(
                     "Seeked backward 5 seconds.",
@@ -6756,6 +7206,16 @@ def parse_args(argv=None):
         )
     )
     parser.add_argument(
+        "--crossfade",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "equal-power local-track crossfade duration (0-10 seconds); "
+            "0 disables crossfade and keeps normal gapless playback"
+        ),
+    )
+    parser.add_argument(
         "--replaygain",
         choices=("no", "track", "album"),
         default=None,
@@ -6870,7 +7330,7 @@ def main():
     )
     LOGGER.debug(
         "launch options music_dir=%r youtube=%s serious=%s maximum_meow=%s "
-        "bad_bad=%s very_bad=%s dangerous=%s gapless=%r replaygain=%r",
+        "bad_bad=%s very_bad=%s dangerous=%s gapless=%r crossfade=%r replaygain=%r",
         args.music_dir,
         args.youtube,
         args.serious_mode,
@@ -6879,6 +7339,7 @@ def main():
         args.very_bad_cat,
         args.dangerous_cat,
         args.gapless_mode,
+        args.crossfade,
         args.replaygain,
     )
     if debug_log_path is not None:
@@ -6945,6 +7406,22 @@ def main():
         )
     )
 
+    try:
+        configured_crossfade = float(
+            config.get("crossfade_seconds", 0.0)
+        )
+    except (TypeError, ValueError):
+        configured_crossfade = 0.0
+    crossfade_seconds = (
+        args.crossfade
+        if args.crossfade is not None
+        else configured_crossfade
+    )
+    crossfade_seconds = max(
+        0.0,
+        min(10.0, float(crossfade_seconds)),
+    )
+
     configured_replaygain = str(
         config.get("replaygain_mode", "track")
     ).lower()
@@ -7001,6 +7478,7 @@ def main():
             rebuild_catalog=args.rebuild_catalog,
             album_art_enabled=album_art_enabled,
             gapless_mode=gapless_mode,
+            crossfade_seconds=crossfade_seconds,
             replaygain_mode=replaygain_mode,
             replaygain_preamp=replaygain_preamp,
             lyrics_enabled=lyrics_enabled,
