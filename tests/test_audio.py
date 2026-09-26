@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from cat_presence import CatPresence
 from meowplayer import (
     MPVController,
     MeowPlayer,
@@ -429,6 +430,34 @@ class AudioEngineTests(unittest.TestCase):
         parameters = inspect.signature(MeowPlayer.__init__).parameters
 
         self.assertIn("crossfade_seconds", parameters)
+
+    def test_meowplayer_cat_presence_observes_live_crossfade_state(self):
+        player = self.make_player(current=0)
+        player.cat_presence = CatPresence()
+        player._crossfade_active = True
+        player.crossfade_next_index = 1
+
+        snapshot = player.cat_presence_snapshot()
+
+        self.assertTrue(snapshot.active)
+        self.assertTrue(snapshot.crossfade_active)
+        self.assertEqual(player.cat_mood(), "DJ")
+        self.assertIn("[DJ]", player.live_cat_mascot(now=0.0)[0])
+
+    def test_meowplayer_cat_presence_tracks_failed_online_stream(self):
+        player = self.make_player(current=None)
+        player.cat_presence = CatPresence()
+        player.online_current = SimpleNamespace(
+            title="Remote",
+            artist_title="Remote — Internet",
+        )
+        player.online_load_state = "failed"
+
+        snapshot = player.cat_presence_snapshot()
+
+        self.assertTrue(snapshot.online)
+        self.assertEqual(snapshot.online_state, "failed")
+        self.assertEqual(player.cat_mood(), "Empty-Pawed")
 
     def test_mpv_controller_does_not_own_ui_feature_flags(self):
         parameters = inspect.signature(MPVController.__init__).parameters
