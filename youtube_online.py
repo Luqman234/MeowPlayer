@@ -151,7 +151,7 @@ class YouTubePlaylist:
 
 
 class YouTubeCatalog:
-    """Experimental keyless YouTube search through an external yt-dlp binary.
+    """Keyless YouTube search through an external yt-dlp binary.
 
     Search metadata is intentionally ephemeral. MeowPlayer does not merge these
     results into the local Cat Catalog or pretend that remote media is a local
@@ -160,7 +160,7 @@ class YouTubeCatalog:
 
     def __init__(
         self,
-        enabled=False,
+        enabled=True,
         executable=None,
         timeout=20.0,
         default_limit=None,
@@ -196,7 +196,7 @@ class YouTubeCatalog:
     def search(self, query, limit=None, search_mode="all"):
         if not self.enabled:
             raise YouTubeUnavailable(
-                "YouTube playback is disabled. Start MeowPlayer with --youtube."
+                "Internet Nest is disabled for this run."
             )
         if not self.executable:
             raise YouTubeUnavailable(
