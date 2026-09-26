@@ -2504,6 +2504,8 @@ Account Nest
 
 Account Nest needs a Google **Desktop OAuth client ID** from a Google Cloud project with the **YouTube Data API v3** enabled.
 
+During development, configure the OAuth consent screen and add the accounts that should be allowed to test the app. A broadly distributed public OAuth client that requests YouTube account data may also need to complete Google's OAuth verification process; that requirement belongs to the Google Cloud project, not to yt-dlp or mpv.
+
 Pass it for one run:
 
 ```bash
@@ -4179,6 +4181,7 @@ meowplayer
 MeowPlayer/
 ├── meowplayer.py              # TUI, playback state, orchestration, cat
 ├── album_art.py               # artwork resolution/cache/Kitty rendering
+├── google_account.py             # opt-in Google OAuth + read-only YouTube account data
 ├── lyrics_support.py          # LRC/plain lyrics + LRCLIB
 ├── online_metadata.py         # MusicBrainz enrichment worker/client
 ├── library_watcher.py         # Watchdog event collection/debounce
