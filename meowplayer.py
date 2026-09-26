@@ -7030,7 +7030,7 @@ def main():
         message = f"No supported music files found in:\n{music_dir}"
         if args.youtube:
             message += (
-                "\n\nYouTube mode was requested, but yt-dlp is unavailable."
+                "\n\nInternet Nest is enabled by default, but yt-dlp is unavailable."
             )
         if not args.serious_mode:
             message += (
