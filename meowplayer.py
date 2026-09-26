@@ -32,6 +32,10 @@ from bad_larry import (
     confirm_dangerous_cat,
 )
 from bad_larry_math import QUANTUM_EXAM_SECONDS, QUANTUM_FINAL_EXAM
+from google_account import (
+    GoogleAccountClient,
+    GoogleAccountSession,
+)
 from lyrics_support import LyricsManager
 from library_watcher import LibraryWatcher
 from meow_catalog import LibraryCatalog
@@ -72,12 +76,13 @@ from youtube_online import (
     YouTubePlaylist,
     YouTubeStreamResolver,
     YouTubeSearchSession,
+    YouTubeTrack,
     network_subprocess_env,
     normalize_youtube_search,
 )
 
 
-__version__ = "0.18.1"
+__version__ = "0.18.2"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -894,6 +899,8 @@ class MeowPlayer:
         filesystem_watch_enabled=True,
         cat_chaos_mode=None,
         youtube_enabled=False,
+        google_account_enabled=False,
+        google_client_id="",
         debug_log_path=None,
         mpv_log_path=None,
         app_config=None,
@@ -918,11 +925,26 @@ class MeowPlayer:
         )
         self.playback_saboteur = PlaybackSaboteur(self.cat_chaos_mode)
         self.youtube = YouTubeCatalog(enabled=youtube_enabled)
+        self.google_account_enabled = bool(google_account_enabled)
+        self.google_account = (
+            GoogleAccountClient(google_client_id)
+            if self.google_account_enabled
+            else None
+        )
+        self.account_session = None
+        self.account_level = "menu"
+        self.account_items = []
+        self.account_selected = 0
+        self.account_playlist = None
+        self.account_channel = None
+        self.account_parent_items = []
+        self.account_parent_selected = 0
         LOGGER.info(
-            "Initializing player music_dir=%s youtube=%s serious=%s "
+            "Initializing player music_dir=%s youtube=%s google_account=%s serious=%s "
             "maximum_meow=%s cat_chaos=%s",
             self.music_dir,
             youtube_enabled,
+            self.google_account_enabled,
             serious_mode,
             maximum_meow,
             self.cat_chaos_mode,
@@ -1137,6 +1159,17 @@ class MeowPlayer:
                     " The internet cat cannot find yt-dlp and is staring "
                     "accusingly at PATH."
                 )
+        if self.google_account_enabled:
+            if self.google_account and self.google_account.configured:
+                if self.google_account.connected:
+                    initial_serious += " Account Nest enabled; Google token found."
+                    initial_cat += " Account Nest found a remembered Google pawprint."
+                else:
+                    initial_serious += " Account Nest enabled; Google login available."
+                    initial_cat += " Account Nest is open for optional Google login."
+            else:
+                initial_serious += " Account Nest enabled; OAuth client ID is not configured."
+                initial_cat += " Account Nest needs a Google OAuth client ID before it can purr."
         if self.debug_log_path is not None:
             initial_serious += f" Debug log: {self.debug_log_path}."
             initial_cat += f" Debug paws: {self.debug_log_path}."
@@ -1701,6 +1734,8 @@ class MeowPlayer:
             self.youtube_search_session.close()
         if self.youtube_download_session:
             self.youtube_download_session.close()
+        if self.account_session:
+            self.account_session.close()
         if self.creator_session:
             self.creator_session.close()
         self.youtube.clear_session_cache()
@@ -3666,6 +3701,253 @@ class MeowPlayer:
         )
         return True
 
+    def account_menu_items(self):
+        client = self.google_account
+        if not self.google_account_enabled or client is None:
+            return []
+        if not client.configured:
+            return [("setup", "Google OAuth client ID not configured")]
+        if not client.connected:
+            return [("connect", "Connect Google Account")]
+        return [
+            ("playlists", "My Playlists"),
+            ("likes", "Liked Videos"),
+            ("subscriptions", "Subscriptions"),
+            ("channel", "My Channel"),
+            ("disconnect", "Disconnect Google Account"),
+        ]
+
+    def open_account_nest(self):
+        if not self.google_account_enabled:
+            self.set_status(
+                "Account Nest is disabled. Restart with --google-account.",
+                "Account Nest is sleeping. Restart with --google-account.",
+            )
+            return False
+
+        self.view = "account"
+        self.account_level = "menu"
+        self.account_items = []
+        self.account_selected = 0
+        self.account_playlist = None
+        self.account_parent_items = []
+        self.account_parent_selected = 0
+
+        if self.google_account is None or not self.google_account.configured:
+            self.set_status(
+                "Account Nest needs a Google OAuth client ID.",
+                "The account cat needs a Google OAuth client ID first.",
+            )
+        elif self.google_account.connected:
+            self.set_status(
+                "Account Nest opened. Google Account is connected.",
+                "Account Nest opened. The Google pawprint is connected.",
+            )
+        else:
+            self.set_status(
+                "Account Nest opened. Press Enter to connect Google.",
+                "Account Nest opened. Press Enter to let Google identify the human.",
+            )
+        return True
+
+    def start_account_session(self, mode, playlist=None):
+        if self.google_account is None:
+            return False
+        if self.account_session is not None:
+            self.set_status(
+                "A Google Account operation is already running.",
+                "The account cat is already carrying paperwork.",
+            )
+            return False
+
+        playlist_id = ""
+        if mode == "playlist":
+            if playlist is None:
+                return False
+            playlist_id = playlist.playlist_id
+            self.account_parent_items = list(self.account_items)
+            self.account_parent_selected = self.account_selected
+            self.account_playlist = playlist
+
+        if mode in {"playlists", "likes", "subscriptions", "channel", "playlist"}:
+            self.account_level = mode
+            self.account_items = []
+            self.account_selected = 0
+            if mode != "playlist":
+                self.account_playlist = None
+
+        self.account_session = GoogleAccountSession(
+            self.google_account,
+            mode,
+            playlist_id=playlist_id,
+        )
+
+        labels = {
+            "authorize": ("Waiting for Google authorization...", "Waiting for Google to inspect the pawprint..."),
+            "playlists": ("Loading Google playlists...", "Digging through Google playlist boxes..."),
+            "playlist": (f"Loading playlist: {playlist.title}...", f"Opening Google playlist: {playlist.title}..."),
+            "likes": ("Loading Liked Videos...", "Opening the human's liked-video basket..."),
+            "subscriptions": ("Loading YouTube subscriptions...", "Sniffing subscribed creator nests..."),
+            "channel": ("Loading YouTube channel...", "Reading the human's YouTube name tag..."),
+            "disconnect": ("Disconnecting Google Account...", "Erasing the Google pawprint..."),
+        }
+        serious, cat = labels[mode]
+        self.set_status(serious, cat)
+        return True
+
+    def process_google_account(self):
+        session = self.account_session
+        if session is None:
+            return False
+
+        changed = False
+        while True:
+            try:
+                kind, value = session.results.get_nowait()
+            except queue.Empty:
+                break
+
+            changed = True
+            if kind in {"playlist", "track", "subscription"}:
+                self.account_items.append(value)
+                continue
+            if kind == "channel":
+                self.account_channel = value
+                self.account_items = [value]
+                continue
+
+            self.account_session = None
+            session.close()
+
+            if kind == "authorized":
+                self.account_level = "menu"
+                self.account_items = []
+                self.account_selected = 0
+                self.set_status(
+                    "Google Account connected with read-only YouTube access.",
+                    "Google Account connected. The cat promises to only look.",
+                )
+            elif kind == "disconnected":
+                self.account_level = "menu"
+                self.account_items = []
+                self.account_selected = 0
+                self.account_channel = None
+                self.set_status(
+                    "Google Account disconnected and local token removed.",
+                    "Google pawprint disconnected and swept out of the nest.",
+                )
+            elif kind == "error":
+                self.set_status(
+                    f"Google Account error: {value}",
+                    f"Account Nest tripped over paperwork: {value}",
+                )
+            elif kind == "done":
+                self.set_status(
+                    f"Account Nest loaded {len(self.account_items)} item(s).",
+                    f"Account Nest found {len(self.account_items)} thing(s).",
+                )
+            break
+        return changed
+
+    def activate_account_selection(self):
+        if not self.google_account_enabled or self.google_account is None:
+            return False
+
+        if self.account_level == "menu":
+            menu = self.account_menu_items()
+            if not menu:
+                return False
+            self.account_selected = max(0, min(self.account_selected, len(menu) - 1))
+            action = menu[self.account_selected][0]
+            if action == "setup":
+                self.set_status(
+                    "Set --google-client-id or MEOWPLAYER_GOOGLE_CLIENT_ID.",
+                    "Give Account Nest a Google OAuth client ID first.",
+                )
+                return False
+            if action == "connect":
+                return self.start_account_session("authorize")
+            if action == "disconnect":
+                return self.start_account_session("disconnect")
+            return self.start_account_session(action)
+
+        if not self.account_items:
+            return False
+
+        self.account_selected = max(
+            0,
+            min(self.account_selected, len(self.account_items) - 1),
+        )
+        item = self.account_items[self.account_selected]
+
+        if self.account_level == "playlists":
+            return self.start_account_session("playlist", item)
+
+        if self.account_level in {"playlist", "likes"}:
+            track = YouTubeTrack(
+                video_id=item.video_id,
+                title=item.title,
+                artist=item.artist,
+                duration=0,
+                url=f"https://www.youtube.com/watch?v={item.video_id}",
+                channel_id=item.channel_id,
+                channel_url=(
+                    f"https://www.youtube.com/channel/{item.channel_id}"
+                    if item.channel_id
+                    else ""
+                ),
+            )
+            return self.play_online(track)
+
+        if self.account_level == "subscriptions":
+            if self.creator_session is not None:
+                self.creator_session.close()
+                self.creator_session = None
+            self.creator_name = item.title
+            self.creator_channel_url = (
+                f"https://www.youtube.com/channel/{item.channel_id}"
+            )
+            self.creator_level = "menu"
+            self.creator_items = []
+            self.creator_selected = 0
+            self.creator_playlist = None
+            self.view = "creator"
+            self.set_status(
+                f"Opened subscribed creator: {item.title}",
+                f"Followed the subscription scent to {item.title}.",
+            )
+            return True
+
+        return False
+
+    def go_back_account(self):
+        if self.account_session is not None:
+            self.set_status(
+                "Wait for the current Google Account operation to finish.",
+                "The account cat is still carrying paperwork.",
+            )
+            return False
+
+        if self.account_level == "playlist":
+            self.account_level = "playlists"
+            self.account_items = list(self.account_parent_items)
+            self.account_selected = min(
+                self.account_parent_selected,
+                max(0, len(self.account_items) - 1),
+            )
+            self.account_playlist = None
+            return True
+
+        if self.account_level != "menu":
+            self.account_level = "menu"
+            self.account_items = []
+            self.account_selected = 0
+            self.account_playlist = None
+            return True
+
+        self.view = "library"
+        return True
+
     def process_youtube_download(self):
         session = self.youtube_download_session
         if session is None:
@@ -5527,6 +5809,79 @@ class MeowPlayer:
 
         return scroll
 
+    def draw_account(
+        self,
+        stdscr,
+        width,
+        list_start,
+        list_height,
+        scroll,
+    ):
+        if self.account_level == "menu":
+            items = self.account_menu_items()
+        else:
+            items = self.account_items
+
+        if items:
+            self.account_selected = max(
+                0,
+                min(self.account_selected, len(items) - 1),
+            )
+        else:
+            self.account_selected = 0
+
+        if self.account_selected < scroll:
+            scroll = self.account_selected
+        if self.account_selected >= scroll + list_height:
+            scroll = self.account_selected - list_height + 1
+
+        if not items:
+            message = (
+                "Loading Google Account data..."
+                if self.account_session is not None
+                else "No account items found."
+            )
+            try:
+                stdscr.addstr(list_start, 2, message[:max(1, width - 4)], curses.A_DIM)
+            except curses.error:
+                pass
+            return scroll
+
+        for screen_row, item_index in enumerate(
+            range(scroll, min(len(items), scroll + list_height))
+        ):
+            item = items[item_index]
+            selected = item_index == self.account_selected
+            prefix = "> " if self.serious_mode and selected else ">^.^< " if selected else "  "
+
+            if self.account_level == "menu":
+                label = item[1]
+            elif self.account_level == "playlists":
+                count = f"{item.item_count} track(s)" if item.item_count else "playlist"
+                privacy = f" · {item.privacy_status}" if item.privacy_status else ""
+                label = f"{item.title} · {count}{privacy}"
+            elif self.account_level in {"playlist", "likes"}:
+                label = f"{item.title} — {item.artist}"
+            elif self.account_level == "subscriptions":
+                label = item.title
+            elif self.account_level == "channel":
+                label = f"{item.title} · {item.channel_id}"
+            else:
+                label = str(item)
+
+            attr = curses.A_REVERSE if selected else curses.A_NORMAL
+            try:
+                stdscr.addstr(
+                    list_start + screen_row,
+                    2,
+                    (prefix + label)[:max(1, width - 4)],
+                    attr,
+                )
+            except curses.error:
+                pass
+
+        return scroll
+
     def draw_settings(
         self,
         stdscr,
@@ -5616,6 +5971,7 @@ class MeowPlayer:
         stash_scroll = 0
         youtube_scroll = 0
         creator_scroll = 0
+        account_scroll = 0
         settings_scroll = 0
         self.sync_mpris(force=True)
 
@@ -5623,6 +5979,7 @@ class MeowPlayer:
             self.process_external_actions()
             self.process_youtube()
             self.process_creator_browse()
+            self.process_google_account()
             self.process_youtube_download()
             self.refresh_online_playback_state()
             self.playback_saboteur.tick(self)
@@ -5889,6 +6246,29 @@ class MeowPlayer:
                         f"paw on: {spec.cat_label}"
                     ),
                 )
+            elif self.view == "account":
+                if self.account_level == "menu":
+                    state = (
+                        "connected"
+                        if self.google_account and self.google_account.connected
+                        else "not connected"
+                    )
+                    section = f"home · {state}"
+                    count = len(self.account_menu_items())
+                elif self.account_level == "playlist":
+                    section = (
+                        self.account_playlist.title
+                        if self.account_playlist is not None
+                        else "playlist"
+                    )
+                    count = len(self.account_items)
+                else:
+                    section = self.account_level
+                    count = len(self.account_items)
+                mode_line = self.text(
+                    f"Google Account — {section} · {count} item(s)",
+                    f"Account Nest — {section} · {count} thing(s)",
+                )
             elif self.view == "creator":
                 if self.creator_level == "menu":
                     section = "channel"
@@ -6055,6 +6435,14 @@ class MeowPlayer:
                     list_height,
                     settings_scroll,
                 )
+            elif self.view == "account":
+                account_scroll = self.draw_account(
+                    stdscr,
+                    width,
+                    list_start,
+                    list_height,
+                    account_scroll,
+                )
             elif self.view == "creator":
                 creator_scroll = self.draw_creator(
                     stdscr,
@@ -6128,6 +6516,23 @@ class MeowPlayer:
                         "R Factory Meow  ,/Q/Esc Leave Nest  X Escape"
                     )
                     quote = self.cat_footer_message()
+            elif self.view == "account":
+                if self.account_level == "menu":
+                    controls = self.text(
+                        "↑↓ Select  ENTER Open/Connect  Esc/Q Library  X Quit",
+                        "↑↓ Choose  ENTER Open/Connect  Esc/Q Nest  X Escape",
+                    )
+                elif self.account_level in {"playlist", "likes"}:
+                    controls = self.text(
+                        "↑↓ Select  ENTER Stream  Esc Back  Q Library  X Quit",
+                        "↑↓ Choose  ENTER Stream  Esc Back  Q Nest  X Escape",
+                    )
+                else:
+                    controls = self.text(
+                        "↑↓ Select  ENTER Open  Esc Back  Q Library  X Quit",
+                        "↑↓ Choose  ENTER Open  Esc Back  Q Nest  X Escape",
+                    )
+                quote = "" if self.serious_mode else self.cat_footer_message()
             elif self.view == "creator":
                 if self.creator_level == "menu":
                     controls = self.text(
@@ -6172,6 +6577,9 @@ class MeowPlayer:
                     )
                     quote = self.cat_footer_message()
 
+            if self.google_account_enabled and self.view == "library":
+                controls += "  U Account"
+
             if self.maximum_meow and quote:
                 quote = f"🐱 MAXIMUM MEOW: {self.quote} 🐾♫🐾"
 
@@ -6199,7 +6607,7 @@ class MeowPlayer:
 
             render_art_layout = (
                 None
-                if self.view == "settings"
+                if self.view in {"settings", "account"}
                 else (
                     lyrics_art_layout
                     if self.view == "lyrics"
@@ -6331,6 +6739,17 @@ class MeowPlayer:
                     youtube_scroll = 0
                 continue
 
+            if key in (ord("u"), ord("U")):
+                if self.google_account_enabled:
+                    if self.open_account_nest():
+                        account_scroll = 0
+                else:
+                    self.set_status(
+                        "Account Nest is disabled. Restart with --google-account.",
+                        "Account Nest is sleeping. Restart with --google-account.",
+                    )
+                continue
+
             if key in (ord("g"), ord("G")):
                 self.pet_cat()
                 continue
@@ -6370,7 +6789,7 @@ class MeowPlayer:
                     )
                     continue
 
-                if self.view in {"online", "creator"}:
+                if self.view in {"online", "creator", "account"}:
                     self.view = "library"
                     self.set_status(
                         "Returned to local library.",
@@ -6601,6 +7020,26 @@ class MeowPlayer:
                         "The cat left the Internet Nest.",
                     )
 
+            elif self.view == "account":
+                item_count = (
+                    len(self.account_menu_items())
+                    if self.account_level == "menu"
+                    else len(self.account_items)
+                )
+                if key == curses.KEY_UP and item_count:
+                    self.account_selected = max(0, self.account_selected - 1)
+                elif key == curses.KEY_DOWN and item_count:
+                    self.account_selected = min(
+                        item_count - 1,
+                        self.account_selected + 1,
+                    )
+                elif key in (10, 13, curses.KEY_ENTER):
+                    if self.activate_account_selection():
+                        account_scroll = 0
+                elif key == 27:
+                    if self.go_back_account():
+                        account_scroll = 0
+
             elif self.view == "creator":
                 item_count = (
                     2
@@ -6813,6 +7252,23 @@ def parse_args(argv=None):
     )
     parser.set_defaults(youtube=True)
     parser.add_argument(
+        "--google-account",
+        action="store_true",
+        help=(
+            "enable the opt-in read-only Google/YouTube Account Nest "
+            "for this run"
+        ),
+    )
+    parser.add_argument(
+        "--google-client-id",
+        metavar="CLIENT_ID",
+        default=None,
+        help=(
+            "Google Desktop OAuth client ID for --google-account; "
+            "defaults to MEOWPLAYER_GOOGLE_CLIENT_ID"
+        ),
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help=(
@@ -6869,10 +7325,11 @@ def main():
         Path.cwd(),
     )
     LOGGER.debug(
-        "launch options music_dir=%r youtube=%s serious=%s maximum_meow=%s "
+        "launch options music_dir=%r youtube=%s google_account=%s serious=%s maximum_meow=%s "
         "bad_bad=%s very_bad=%s dangerous=%s gapless=%r replaygain=%r",
         args.music_dir,
         args.youtube,
+        args.google_account,
         args.serious_mode,
         args.maximum_meow,
         args.bad_bad_cat,
@@ -6990,6 +7447,11 @@ def main():
         and not args.no_watch
     )
 
+    google_client_id = (
+        args.google_client_id
+        or os.environ.get("MEOWPLAYER_GOOGLE_CLIENT_ID", "")
+    ).strip()
+
     try:
         player = MeowPlayer(
             music_dir,
@@ -7010,6 +7472,8 @@ def main():
             filesystem_watch_enabled=filesystem_watch_enabled,
             cat_chaos_mode=cat_chaos_mode,
             youtube_enabled=args.youtube,
+            google_account_enabled=args.google_account,
+            google_client_id=google_client_id,
             debug_log_path=debug_log_path,
             mpv_log_path=mpv_log_path,
             app_config=config,
