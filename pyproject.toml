@@ -63,6 +63,7 @@ py-modules = [
     "album_art",
     "bad_larry",
     "bad_larry_math",
+    "google_account",
     "lyrics_support",
     "library_watcher",
     "meow_catalog",
