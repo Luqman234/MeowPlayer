@@ -563,6 +563,33 @@ class AudioEngineTests(unittest.TestCase):
         self.assertIn("--replaygain=track", command)
         self.assertIn("--replaygain-preamp=0.0", command)
 
+    def test_library_playback_sequence_matches_visible_order_for_crossfade(self):
+        player = self.make_player(count=4, current=0)
+        player.crossfade_seconds = 5.0
+        player.crossfade_mpv = FakeMPV()
+        player.library_view = "songs"
+        player.selected = 1
+
+        # Raw index 3 is visually followed by raw index 2. The old behavior
+        # discarded this ordering and wrapped 3 -> 0 during crossfade.
+        visible_order = [1, 3, 2, 0]
+        player.ordered_library_indices = lambda: list(visible_order)
+        player.selected_library_song = lambda: 3
+        player.load_current_lyrics = lambda *args, **kwargs: None
+        player.refresh_library_stats = lambda: None
+
+        player.play_selected_library_song()
+
+        self.assertEqual(player.current, 3)
+        self.assertEqual(player.playback_sequence, visible_order)
+        self.assertEqual(player.peek_next_index(), 2)
+        self.assertEqual(player.crossfade_next_index, 2)
+        self.assertEqual(
+            player.crossfade_mpv.loaded[-1],
+            Path("/music/2.flac"),
+        )
+
+
     def test_crossfade_preloads_next_track_in_second_deck(self):
         player = self.make_player(current=0)
         player.crossfade_seconds = 5.0

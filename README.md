@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.18.2** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.18.3** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.18.2 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.18.3 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,27 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.18.3 — The Cat Stopped Teleporting to Track One
+
+MeowPlayer 0.18.3 fixes a playback-order bug in the new crossfade engine.
+
+Normal library views such as Songs, Albums, Artists, and Pawmarks can display tracks in an order that differs from the raw filesystem scan order. 0.18.2 did not always preserve that visible order when playback started, so crossfade could calculate the next raw index instead of the next track the user actually saw.
+
+The most obvious failure looked like this:
+
+```text
+visible order:   ... → track(raw 57) → track(raw 12) → ...
+raw order:       ... → track(raw 57) → end
+                                    ↓
+                              wrapped to raw 0
+```
+
+0.18.3 snapshots the visible library order into the same `playback_sequence` used by Smart Mixes. Manual Next, gapless playback, and crossfade therefore resolve the same next track.
+
+A regression test covers the exact edge case where the currently playing track has the final raw index while sitting in the middle of the visible list.
+
+> **MeowPlayer 0.18.3 — no more DJ-cat teleportation to song one.** 🐈‍⬛🎚️
 
 ## What's new in 0.18.2 — The Cat Learned to DJ
 
