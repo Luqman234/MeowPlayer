@@ -125,7 +125,10 @@ class YouTubeOnlineTests(unittest.TestCase):
         screen = _PromptScreen([*query, "\n"], width=24)
         player = MeowPlayer.__new__(MeowPlayer)
 
-        with mock.patch("meowplayer.curses.curs_set"):
+        with (
+            mock.patch("meowplayer.curses.curs_set"),
+            mock.patch("meowplayer.curses.noecho"),
+        ):
             value = player.prompt_text(screen, "Internet Nest search")
 
         self.assertEqual(value, query)
@@ -139,7 +142,10 @@ class YouTubeOnlineTests(unittest.TestCase):
         )
         player = MeowPlayer.__new__(MeowPlayer)
 
-        with mock.patch("meowplayer.curses.curs_set"):
+        with (
+            mock.patch("meowplayer.curses.curs_set"),
+            mock.patch("meowplayer.curses.noecho"),
+        ):
             value = player.prompt_text(screen, "YouTube search")
 
         self.assertEqual(value, "abcdefghijklmnopqrstuvwxYZ")
