@@ -1,19 +1,16 @@
 import json
-import os
-import tempfile
+import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from urllib.parse import parse_qs, urlsplit
 
 from google_account import (
     GoogleAccountClient,
+    GoogleAuthHelper,
     GoogleChannel,
     GooglePlaylist,
     GooglePlaylistTrack,
     GoogleSubscription,
-    YOUTUBE_READONLY_SCOPE,
 )
 from meowplayer import MeowPlayer, parse_args
 
@@ -33,82 +30,121 @@ class _Response:
 
 
 class GoogleAccountTests(unittest.TestCase):
-    def setUp(self):
-        self._temp = tempfile.TemporaryDirectory()
-        self.token_path = Path(self._temp.name) / "google-oauth.json"
+    def auth(self, **overrides):
+        values = {
+            "configured": True,
+            "connected": True,
+            "login": mock.Mock(return_value=True),
+            "token": mock.Mock(return_value="access-token"),
+            "logout": mock.Mock(return_value=True),
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
 
-    def tearDown(self):
-        self._temp.cleanup()
-
-    def client(self, client_id="client-id"):
+    def client(self, **auth_overrides):
         return GoogleAccountClient(
-            client_id,
-            token_path=self.token_path,
+            auth_helper=self.auth(**auth_overrides)
         )
 
     def test_google_account_flag_is_opt_in(self):
         self.assertFalse(parse_args([]).google_account)
         self.assertTrue(parse_args(["--google-account"]).google_account)
 
-    def test_google_client_id_is_separate_from_enable_flag(self):
+    def test_google_auth_command_is_configurable(self):
         args = parse_args(
             [
                 "--google-account",
-                "--google-client-id",
-                "desktop-client.apps.googleusercontent.com",
+                "--google-auth-command",
+                "/tmp/custom-google-helper",
             ]
         )
         self.assertTrue(args.google_account)
         self.assertEqual(
-            args.google_client_id,
-            "desktop-client.apps.googleusercontent.com",
+            args.google_auth_command,
+            "/tmp/custom-google-helper",
         )
 
-    def test_authorization_url_uses_readonly_scope_and_pkce(self):
-        client = self.client()
-        url = client._authorization_url(
-            "http://127.0.0.1:12345/",
-            "state-token",
-            "challenge-token",
-        )
-        params = parse_qs(urlsplit(url).query)
-
-        self.assertEqual(params["scope"], [YOUTUBE_READONLY_SCOPE])
-        self.assertEqual(params["response_type"], ["code"])
-        self.assertEqual(params["state"], ["state-token"])
-        self.assertEqual(params["code_challenge"], ["challenge-token"])
-        self.assertEqual(params["code_challenge_method"], ["S256"])
-        self.assertEqual(params["access_type"], ["offline"])
-
-    def test_expired_access_token_without_refresh_is_not_connected(self):
-        client = self.client()
-        client._token = {
-            "client_id": "client-id",
-            "access_token": "expired",
-            "refresh_token": "",
-            "expires_at": 1,
-        }
-
-        self.assertFalse(client.connected)
-
-    def test_saved_token_is_restricted_to_owner(self):
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "google-oauth.json"
-            client = GoogleAccountClient(
-                "client-id",
-                token_path=path,
+    def test_helper_status_defines_connected_state(self):
+        runner = mock.Mock(
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout="connected\n",
+                stderr="",
             )
-            client._token = {
-                "client_id": "client-id",
-                "access_token": "access",
-                "refresh_token": "refresh",
-                "expires_at": 9999999999,
-            }
-            client._save_token()
+        )
+        helper = GoogleAuthHelper(sys.executable, runner=runner)
 
-            self.assertTrue(path.exists())
-            if os.name == "posix":
-                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertTrue(helper.connected)
+        runner.assert_called_once()
+        self.assertEqual(
+            runner.call_args.args[0],
+            [sys.executable, "status"],
+        )
+
+    def test_helper_status_exit_one_means_disconnected(self):
+        runner = mock.Mock(
+            return_value=SimpleNamespace(
+                returncode=1,
+                stdout="disconnected\n",
+                stderr="",
+            )
+        )
+        helper = GoogleAuthHelper(sys.executable, runner=runner)
+
+        self.assertFalse(helper.connected)
+
+    def test_helper_token_is_machine_readable_contract(self):
+        runner = mock.Mock(
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout="token-value\n",
+                stderr="",
+            )
+        )
+        helper = GoogleAuthHelper(sys.executable, runner=runner)
+
+        self.assertEqual(helper.token(), "token-value")
+        self.assertEqual(
+            runner.call_args.args[0],
+            [sys.executable, "token"],
+        )
+
+    def test_client_authorization_is_delegated_to_helper(self):
+        auth = self.auth(connected=False)
+        client = GoogleAccountClient(auth_helper=auth)
+
+        self.assertTrue(client.authorize())
+        auth.login.assert_called_once_with()
+
+    def test_client_disconnect_is_delegated_to_helper(self):
+        auth = self.auth()
+        client = GoogleAccountClient(auth_helper=auth)
+
+        self.assertTrue(client.disconnect())
+        auth.logout.assert_called_once_with()
+
+    def test_api_request_gets_bearer_token_from_helper(self):
+        seen = {}
+
+        def opener(request, timeout):
+            seen["authorization"] = request.headers.get("Authorization")
+            seen["timeout"] = timeout
+            return _Response({"items": []})
+
+        client = GoogleAccountClient(
+            auth_helper=self.auth(),
+            request_opener=opener,
+        )
+        client._api_get(
+            "playlists",
+            {"part": "snippet", "mine": "true"},
+        )
+
+        self.assertEqual(
+            seen["authorization"],
+            "Bearer access-token",
+        )
+        self.assertEqual(seen["timeout"], 30)
 
     def test_channel_parser_uses_authenticated_mine_response(self):
         client = self.client()
@@ -234,8 +270,14 @@ class GoogleAccountTests(unittest.TestCase):
         session.results = _queue.SimpleQueue()
         session._run()
 
-        self.assertEqual(session.results.get_nowait(), ("track", track))
-        self.assertEqual(session.results.get_nowait(), ("done", None))
+        self.assertEqual(
+            session.results.get_nowait(),
+            ("track", track),
+        )
+        self.assertEqual(
+            session.results.get_nowait(),
+            ("done", None),
+        )
         client.playlist_items.assert_called_once_with("LLIKES")
 
     def test_subscriptions_become_creator_nest_targets(self):
@@ -273,7 +315,9 @@ class GoogleAccountTests(unittest.TestCase):
         player.google_account_enabled = False
         player.google_account = None
         statuses = []
-        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+        player.set_status = (
+            lambda serious, cat: statuses.append((serious, cat))
+        )
 
         self.assertFalse(player.open_account_nest())
         self.assertIn("--google-account", statuses[-1][0])
