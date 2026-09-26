@@ -947,6 +947,16 @@ def youtube_creator_section_url(channel_url, section):
     return f"{root}/{section}"
 
 
+def youtube_music_creator_name(creator_name):
+    """Normalize a YouTube Music creator label for artist-based lookups."""
+    creator = " ".join(str(creator_name or "").split()).strip()
+    for suffix in (" - Topic", " – Topic", " — Topic"):
+        if creator.casefold().endswith(suffix.casefold()):
+            creator = creator[:-len(suffix)].rstrip()
+            break
+    return creator
+
+
 def youtube_release_title_is_container(title, creator_name=""):
     """Return True for yt-dlp's parent YouTube Music albums-search label."""
     title = " ".join(str(title or "").split()).strip()
@@ -954,14 +964,14 @@ def youtube_release_title_is_container(title, creator_name=""):
         return True
 
     folded = title.casefold()
-    creator = " ".join(str(creator_name or "").split()).strip().casefold()
+    creator = youtube_music_creator_name(creator_name).casefold()
     suffixes = (" - albums", " – albums", " — albums")
 
-    if creator:
-        return any(
-            folded == f"{creator}{suffix}"
-            for suffix in suffixes
-        )
+    if creator and any(
+        folded == f"{creator}{suffix}"
+        for suffix in suffixes
+    ):
+        return True
     return any(folded.endswith(suffix) for suffix in suffixes)
 
 
@@ -1010,11 +1020,7 @@ def youtube_playlist_metadata_command(executable, playlist_url):
 
 def youtube_music_album_search_url(creator_name):
     """Build yt-dlp's supported YouTube Music albums-section search URL."""
-    creator = " ".join(str(creator_name or "").split())
-    for suffix in (" - Topic", " – Topic", " — Topic"):
-        if creator.casefold().endswith(suffix.casefold()):
-            creator = creator[:-len(suffix)].rstrip()
-            break
+    creator = youtube_music_creator_name(creator_name)
     if not creator:
         return ""
     return (
