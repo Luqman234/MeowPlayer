@@ -226,7 +226,22 @@ class YouTubeCatalog:
 
     @staticmethod
     def _playlist_tracks_cache_key(source_url):
-        return str(source_url or "").strip()
+        raw = str(source_url or "").strip()
+        if not raw:
+            return ""
+        try:
+            parsed = urlsplit(raw)
+            list_id = parse_qs(parsed.query).get("list", [""])[0]
+            if list_id:
+                return f"id:{list_id}"
+            path_parts = [
+                part for part in parsed.path.split("/") if part
+            ]
+            if len(path_parts) >= 2 and path_parts[-2] == "browse":
+                return f"id:{path_parts[-1]}"
+        except (TypeError, ValueError):
+            pass
+        return f"url:{raw}"
 
     def cached_playlist_tracks(self, source_url):
         key = self._playlist_tracks_cache_key(source_url)
