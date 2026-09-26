@@ -310,6 +310,35 @@ class GoogleAccountTests(unittest.TestCase):
             ],
         )
 
+    def test_authorize_session_does_not_require_playlist(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        player.google_account = object()
+        player.account_session = None
+        player.account_level = "menu"
+        player.account_items = []
+        player.account_selected = 0
+        player.account_playlist = None
+        player.account_parent_items = []
+        player.account_parent_selected = 0
+        player.set_status = mock.Mock()
+
+        with mock.patch("meowplayer.GoogleAccountSession") as session_type:
+            session_type.return_value = SimpleNamespace()
+
+            self.assertTrue(
+                player.start_account_session("authorize")
+            )
+
+        session_type.assert_called_once_with(
+            player.google_account,
+            "authorize",
+            playlist_id="",
+        )
+        player.set_status.assert_called_once_with(
+            "Waiting for Google authorization...",
+            "Waiting for Google to inspect the pawprint...",
+        )
+
     def test_account_nest_remains_hidden_without_flag(self):
         player = MeowPlayer.__new__(MeowPlayer)
         player.google_account_enabled = False

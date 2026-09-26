@@ -3782,16 +3782,37 @@ class MeowPlayer:
             playlist_id=playlist_id,
         )
 
-        labels = {
-            "authorize": ("Waiting for Google authorization...", "Waiting for Google to inspect the pawprint..."),
-            "playlists": ("Loading Google playlists...", "Digging through Google playlist boxes..."),
-            "playlist": (f"Loading playlist: {playlist.title}...", f"Opening Google playlist: {playlist.title}..."),
-            "likes": ("Loading Liked Videos...", "Opening the human's liked-video basket..."),
-            "subscriptions": ("Loading YouTube subscriptions...", "Sniffing subscribed creator nests..."),
-            "channel": ("Loading YouTube channel...", "Reading the human's YouTube name tag..."),
-            "disconnect": ("Disconnecting Google Account...", "Erasing the Google pawprint..."),
-        }
-        serious, cat = labels[mode]
+        if mode == "playlist":
+            serious = f"Loading playlist: {playlist.title}..."
+            cat = f"Opening Google playlist: {playlist.title}..."
+        else:
+            labels = {
+                "authorize": (
+                    "Waiting for Google authorization...",
+                    "Waiting for Google to inspect the pawprint...",
+                ),
+                "playlists": (
+                    "Loading Google playlists...",
+                    "Digging through Google playlist boxes...",
+                ),
+                "likes": (
+                    "Loading Liked Videos...",
+                    "Opening the human's liked-video basket...",
+                ),
+                "subscriptions": (
+                    "Loading YouTube subscriptions...",
+                    "Sniffing subscribed creator nests...",
+                ),
+                "channel": (
+                    "Loading YouTube channel...",
+                    "Reading the human's YouTube name tag...",
+                ),
+                "disconnect": (
+                    "Disconnecting Google Account...",
+                    "Erasing the Google pawprint...",
+                ),
+            }
+            serious, cat = labels[mode]
         self.set_status(serious, cat)
         return True
 
