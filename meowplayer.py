@@ -2379,7 +2379,8 @@ class MeowPlayer:
         )
 
     def cat_mood(self):
-        return self.cat_presence.mood(
+        presence = getattr(self, "cat_presence", None) or CatPresence()
+        return presence.mood(
             self.cat_presence_snapshot()
         )
 
@@ -2423,7 +2424,8 @@ class MeowPlayer:
         if self.cat_incident is not None:
             self.cat_incident = None
 
-        presence = self.cat_presence.caption(
+        engine = getattr(self, "cat_presence", None) or CatPresence()
+        presence = engine.caption(
             self.cat_presence_snapshot()
         )
         return f"🐱 {presence}  ·  {self.quote}"
@@ -2457,19 +2459,22 @@ class MeowPlayer:
         return True
 
     def live_cat_mascot(self, now=None):
-        if self.playback_saboteur.mode == "dangerous":
+        saboteur = getattr(self, "playback_saboteur", None)
+        saboteur_mode = getattr(saboteur, "mode", None)
+
+        if saboteur_mode == "dangerous":
             return (
                 " /\\_/\\",
                 r"( O_O )",
                 r" > ^ <  !!",
             )
-        if self.playback_saboteur.mode == "very-bad":
+        if saboteur_mode == "very-bad":
             return (
                 " /\\_/\\",
                 r"( >.< )",
                 r" > ~ <  ...",
             )
-        if self.playback_saboteur.mode == "bad-bad":
+        if saboteur_mode == "bad-bad":
             return (
                 " /\\_/\\",
                 r"( -_- )",
@@ -2477,10 +2482,11 @@ class MeowPlayer:
             )
 
         timestamp = time.monotonic() if now is None else float(now)
-        return self.cat_presence.frame(
+        presence = getattr(self, "cat_presence", None) or CatPresence()
+        return presence.frame(
             self.cat_presence_snapshot(),
             now=timestamp,
-            maximum_meow=self.maximum_meow,
+            maximum_meow=bool(getattr(self, "maximum_meow", False)),
         )
 
     def next_treat_label(self):
