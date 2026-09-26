@@ -967,12 +967,15 @@ def youtube_release_title_is_container(title, creator_name=""):
     creator = youtube_music_creator_name(creator_name).casefold()
     suffixes = (" - albums", " – albums", " — albums")
 
-    if creator and any(
-        folded == f"{creator}{suffix}"
+    if creator:
+        return any(
+            folded == f"{creator}{suffix}"
+            for suffix in suffixes
+        )
+    return folded == "albums" or any(
+        folded.endswith(suffix)
         for suffix in suffixes
-    ):
-        return True
-    return any(folded.endswith(suffix) for suffix in suffixes)
+    )
 
 
 def youtube_release_title_from_payload(payload, creator_name=""):
