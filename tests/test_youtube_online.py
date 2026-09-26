@@ -317,7 +317,8 @@ class YouTubeOnlineTests(unittest.TestCase):
         )
         self.assertEqual(
             catalog.cached_playlist_tracks(
-                "https://music.youtube.com/browse/MPREb_cached_album"
+                "https://www.youtube.com/playlist"
+                "?list=MPREb_cached_album"
             ),
             (track,),
         )
@@ -376,7 +377,8 @@ class YouTubeOnlineTests(unittest.TestCase):
 
     def test_release_hydration_replaces_container_title(self):
         player = YouTubeBrowseSession.__new__(YouTubeBrowseSession)
-        player.catalog = SimpleNamespace(
+        player.catalog = YouTubeCatalog(
+            enabled=True,
             executable="/usr/bin/yt-dlp",
         )
         player.creator_name = "siinamota - Topic"
