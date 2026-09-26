@@ -173,6 +173,9 @@ class YouTubeCatalog:
             if default_limit is None
             else max(1, min(50, int(default_limit)))
         )
+        # Session-only Creator Nest cache. It intentionally lives only in
+        # memory and is cleared when MeowPlayer shuts down.
+        self._release_title_cache = {}
         LOGGER.debug(
             "YouTubeCatalog enabled=%s executable=%s timeout=%s default_limit=%s",
             self.enabled,
@@ -192,6 +195,44 @@ class YouTubeCatalog:
         if not self.executable:
             return "yt-dlp was not found on PATH."
         return ""
+
+    @staticmethod
+    def _release_cache_key(item):
+        playlist_id = str(getattr(item, "playlist_id", "") or "").strip()
+        if playlist_id:
+            return f"id:{playlist_id}"
+        url = str(getattr(item, "url", "") or "").strip()
+        return f"url:{url}" if url else ""
+
+    def cached_release_title(self, item):
+        key = self._release_cache_key(item)
+        if not key:
+            return ""
+        return str(self._release_title_cache.get(key) or "")
+
+    def cache_release_title(self, item, title):
+        key = self._release_cache_key(item)
+        title = str(title or "").strip()
+        if not key or not title:
+            return False
+        self._release_title_cache[key] = title
+        LOGGER.debug(
+            "Cached Creator Nest release title key=%s title=%r",
+            key,
+            title,
+        )
+        return True
+
+    def clear_session_cache(self):
+        count = len(self._release_title_cache)
+        self._release_title_cache.clear()
+        LOGGER.debug(
+            "Cleared %s session-only Creator Nest release cache entr%s",
+            count,
+            "y" if count == 1 else "ies",
+        )
+        return count
+
 
     def search(self, query, limit=None, search_mode="all"):
         if not self.enabled:
@@ -1108,6 +1149,15 @@ class YouTubeBrowseSession:
 
     def _hydrate_release_title(self, item):
         """Resolve the actual title of one sparse YouTube Music album result."""
+        cached = self.catalog.cached_release_title(item)
+        if cached:
+            LOGGER.debug(
+                "Creator Nest release title cache hit playlist_id=%s title=%r",
+                item.playlist_id,
+                cached,
+            )
+            return replace(item, title=cached)
+
         if not item.url or not self.catalog.executable:
             return item
 
@@ -1169,6 +1219,7 @@ class YouTubeBrowseSession:
                 item.playlist_id,
                 title,
             )
+            self.catalog.cache_release_title(item, title)
             return replace(item, title=title)
         except OSError:
             LOGGER.exception(
@@ -1279,24 +1330,27 @@ class YouTubeBrowseSession:
                                     ):
                                         continue
 
-                                    if (
-                                        "#albums" in target
-                                        and youtube_release_title_is_container(
-                                            item.title,
-                                            self.creator_name,
-                                        )
-                                    ):
-                                        item = self._hydrate_release_title(item)
+                                    if "#albums" in target:
                                         if youtube_release_title_is_container(
                                             item.title,
                                             self.creator_name,
                                         ):
-                                            item = replace(
+                                            item = self._hydrate_release_title(item)
+                                            if youtube_release_title_is_container(
+                                                item.title,
+                                                self.creator_name,
+                                            ):
+                                                item = replace(
+                                                    item,
+                                                    title=(
+                                                        "YouTube release "
+                                                        f"{item.playlist_id[:12]}"
+                                                    ),
+                                                )
+                                        else:
+                                            self.catalog.cache_release_title(
                                                 item,
-                                                title=(
-                                                    "YouTube release "
-                                                    f"{item.playlist_id[:12]}"
-                                                ),
+                                                item.title,
                                             )
 
                                     seen.add(item.playlist_id)
