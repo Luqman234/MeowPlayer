@@ -208,6 +208,36 @@ class GoogleAccountTests(unittest.TestCase):
             ],
         )
 
+    def test_liked_videos_uses_authenticated_likes_playlist(self):
+        client = self.client()
+        client.channel = mock.Mock(
+            return_value=GoogleChannel(
+                channel_id="UCmine",
+                title="My Channel",
+                likes_playlist_id="LLIKES",
+            )
+        )
+        track = GooglePlaylistTrack(
+            video_id="liked123",
+            title="Liked Song",
+            artist="Artist",
+        )
+        client.playlist_items = mock.Mock(return_value=[track])
+
+        from google_account import GoogleAccountSession
+
+        session = GoogleAccountSession.__new__(GoogleAccountSession)
+        session.client = client
+        session.mode = "likes"
+        session.playlist_id = ""
+        import queue as _queue
+        session.results = _queue.SimpleQueue()
+        session._run()
+
+        self.assertEqual(session.results.get_nowait(), ("track", track))
+        self.assertEqual(session.results.get_nowait(), ("done", None))
+        client.playlist_items.assert_called_once_with("LLIKES")
+
     def test_subscriptions_become_creator_nest_targets(self):
         client = self.client()
         client._api_get = mock.Mock(
