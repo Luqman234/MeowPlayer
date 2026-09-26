@@ -11,6 +11,7 @@ from meowplayer import (
     parse_args,
 )
 from youtube_online import (
+    YouTubeBrowseSession,
     YouTubeCatalog,
     YouTubePlaylist,
     YouTubeTrack,
@@ -19,6 +20,9 @@ from youtube_online import (
     youtube_creator_browse_targets,
     youtube_creator_section_url,
     youtube_music_album_search_url,
+    youtube_playlist_metadata_command,
+    youtube_release_title_from_payload,
+    youtube_release_title_is_container,
     youtube_download_command,
     youtube_search_target,
 )
@@ -198,6 +202,94 @@ class YouTubeOnlineTests(unittest.TestCase):
                 "https://www.youtube.com/channel/UCtopic",
             ),
         )
+
+    def test_topic_album_container_label_is_not_a_release_title(self):
+        self.assertTrue(
+            youtube_release_title_is_container(
+                "siinamota - albums",
+                "siinamota - Topic",
+            )
+        )
+        self.assertFalse(
+            youtube_release_title_is_container(
+                "Goodbye Everyone",
+                "siinamota - Topic",
+            )
+        )
+
+    def test_release_title_hydration_prefers_real_top_level_title(self):
+        title = youtube_release_title_from_payload(
+            {
+                "title": "Goodbye Everyone",
+                "playlist_title": "siinamota - albums",
+            },
+            "siinamota - Topic",
+        )
+
+        self.assertEqual(title, "Goodbye Everyone")
+
+    def test_release_title_hydration_uses_nested_album_metadata(self):
+        title = youtube_release_title_from_payload(
+            {
+                "title": "siinamota - albums",
+                "entries": [
+                    {
+                        "album": "Strobe Last.EP",
+                        "playlist_title": "Strobe Last.EP",
+                    }
+                ],
+            },
+            "siinamota - Topic",
+        )
+
+        self.assertEqual(title, "Strobe Last.EP")
+
+    def test_release_metadata_lookup_is_bounded_and_download_free(self):
+        command = youtube_playlist_metadata_command(
+            "/usr/bin/yt-dlp",
+            "https://music.youtube.com/browse/MPREb_release",
+        )
+
+        self.assertEqual(command[0], "/usr/bin/yt-dlp")
+        self.assertIn("--flat-playlist", command)
+        self.assertIn("--skip-download", command)
+        self.assertIn("--dump-single-json", command)
+        self.assertIn("--playlist-items", command)
+        self.assertEqual(
+            command[-1],
+            "https://music.youtube.com/browse/MPREb_release",
+        )
+
+    def test_release_hydration_replaces_container_title(self):
+        player = YouTubeBrowseSession.__new__(YouTubeBrowseSession)
+        player.catalog = SimpleNamespace(
+            executable="/usr/bin/yt-dlp",
+        )
+        player.creator_name = "siinamota - Topic"
+        player.timeout = 2.0
+        player.cancel = SimpleNamespace(is_set=lambda: False)
+
+        item = YouTubePlaylist(
+            playlist_id="MPREb_release",
+            title="siinamota - albums",
+            channel="siinamota - Topic",
+            url="https://music.youtube.com/browse/MPREb_release",
+        )
+        process = mock.Mock()
+        process.returncode = 0
+        process.poll.return_value = 0
+        process.communicate.return_value = (
+            '{"title":"Goodbye Everyone","entries":[]}',
+            "",
+        )
+
+        with mock.patch(
+            "youtube_online.subprocess.Popen",
+            return_value=process,
+        ):
+            hydrated = player._hydrate_release_title(item)
+
+        self.assertEqual(hydrated.title, "Goodbye Everyone")
 
     def test_youtube_music_album_search_targets_album_section(self):
         self.assertEqual(
