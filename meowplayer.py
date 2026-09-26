@@ -1703,6 +1703,7 @@ class MeowPlayer:
             self.youtube_download_session.close()
         if self.creator_session:
             self.creator_session.close()
+        self.youtube.clear_session_cache()
         if self.stream_resolver:
             self.stream_resolver.close()
         self.online_metadata.stop()
