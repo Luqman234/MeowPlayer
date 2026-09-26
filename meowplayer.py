@@ -77,7 +77,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.17.5"
+__version__ = "0.18.0"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -1127,11 +1127,11 @@ class MeowPlayer:
             )
         if self.youtube.enabled:
             if self.youtube.available:
-                initial_serious += " Experimental YouTube playback ready."
-                initial_cat += " The internet cat found yt-dlp."
+                initial_serious += " Internet Nest ready."
+                initial_cat += " The internet cat found yt-dlp and opened the hatch."
             else:
                 initial_serious += (
-                    " YouTube playback requested, but yt-dlp was not found."
+                    " Internet Nest unavailable: yt-dlp was not found."
                 )
                 initial_cat += (
                     " The internet cat cannot find yt-dlp and is staring "
@@ -5017,8 +5017,8 @@ class MeowPlayer:
     def open_youtube_search(self, stdscr, search_mode="all"):
         if not self.youtube.enabled:
             self.set_status(
-                "YouTube playback is disabled. Restart with --youtube.",
-                "The internet cat is asleep. Restart with --youtube.",
+                "Internet Nest is disabled for this run. Restart without --no-youtube.",
+                "The internet cat was told to stay home. Restart without --no-youtube.",
             )
             return False
 
@@ -6794,14 +6794,23 @@ def parse_args(argv=None):
         action="store_true",
         help="disable live filesystem watching for the music library"
     )
-    parser.add_argument(
+    youtube_mode = parser.add_mutually_exclusive_group()
+    youtube_mode.add_argument(
         "--youtube",
+        dest="youtube",
         action="store_true",
         help=(
-            "enable experimental YouTube search and audio streaming "
-            "through yt-dlp + mpv"
-        )
+            "enable Internet Nest (accepted for compatibility; "
+            "enabled by default since 0.18.0)"
+        ),
     )
+    youtube_mode.add_argument(
+        "--no-youtube",
+        dest="youtube",
+        action="store_false",
+        help="disable Internet Nest / YouTube search and streaming for this run",
+    )
+    parser.set_defaults(youtube=True)
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -7021,7 +7030,7 @@ def main():
         message = f"No supported music files found in:\n{music_dir}"
         if args.youtube:
             message += (
-                "\n\nYouTube mode was requested, but yt-dlp is unavailable."
+                "\n\nInternet Nest is enabled by default, but yt-dlp is unavailable."
             )
         if not args.serious_mode:
             message += (

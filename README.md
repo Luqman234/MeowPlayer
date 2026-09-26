@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.17.5** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.18.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.5 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.18.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,125 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.18.0 — The Internet Cat No Longer Needs Permission
+
+MeowPlayer 0.18.0 graduates the **Internet Nest** from an experimental command-line opt-in into a standard MeowPlayer capability.
+
+You no longer need:
+
+```bash
+meowplayer --youtube
+```
+
+The normal command is enough:
+
+```bash
+meowplayer
+```
+
+When `yt-dlp` is installed, Internet Nest is available automatically:
+
+```text
+meowplayer
+    │
+    ├── Local Music Nest ───────────── always available
+    │
+    └── Internet Nest
+             │
+             ├── yt-dlp found  → ready
+             └── yt-dlp absent → unavailable, local playback unaffected
+```
+
+This does **not** make yt-dlp a mandatory dependency. It changes the default feature policy, not the local-first architecture.
+
+No yt-dlp? MeowPlayer still starts.
+
+No internet? Local files still play.
+
+YouTube breaks upstream? The Music Nest remains yours.
+
+### Local-only mode is now explicit
+
+If you deliberately want a session with Internet Nest disabled:
+
+```bash
+meowplayer --no-youtube
+```
+
+That prevents the online search/resolver machinery from being enabled for the run.
+
+The old flag remains accepted for compatibility:
+
+```bash
+meowplayer --youtube
+```
+
+but since 0.18.0 it simply asks for the default behavior. Existing scripts do not have to break just because the cat got promoted.
+
+### Default available does not mean automatic network traffic
+
+Starting MeowPlayer does not immediately perform a YouTube search.
+
+```text
+launch MeowPlayer
+      ↓
+initialize local player
+      ↓
+detect whether yt-dlp exists
+      ↓
+wait
+
+human presses Y / opens Internet Nest
+      ↓
+online search actually begins
+```
+
+The stream resolver worker may be ready in memory, but YouTube-facing work still begins when the user actually uses Internet Nest.
+
+### Why the major-minor bump?
+
+0.16.0 introduced online playback.
+
+0.17.x spent several releases making that subsystem behave like a real part of the application:
+
+```text
+0.17.0  Artist Scent
+0.17.2  session-only online Songbook
+0.17.3  all-results search
+0.17.4  D Adopt → local library
+0.17.5  Creator Nest / uploads / releases / Topic handling
+```
+
+0.18.0 changes the product contract:
+
+```text
+before:
+Internet Nest = experimental mode you explicitly enable
+
+now:
+Internet Nest = standard MeowPlayer feature
+internet      = optional
+yt-dlp        = optional
+local library = still the foundation
+```
+
+The distinction matters. MeowPlayer is **not** becoming cloud-first. It is becoming a local-first player that also has a first-class remote catalog when the optional tooling is present.
+
+### CLI contract
+
+```text
+meowplayer
+    Internet Nest enabled when available
+
+meowplayer --youtube
+    same behavior; retained for compatibility
+
+meowplayer --no-youtube
+    force a local-only session
+```
+
+> **MeowPlayer 0.18.0 — the Internet Nest is part of the house now, but the Music Nest still owns the land.**
 
 ## What's new in 0.17.5 — The Cat Found the Artist's House
 
@@ -965,7 +1084,7 @@ The affected children are:
 
 - the yt-dlp search worker;
 - the yt-dlp direct-stream resolver;
-- mpv when MeowPlayer was started with `--youtube`.
+- mpv when Internet Nest was enabled (in 0.16.x this meant starting MeowPlayer with `--youtube`).
 
 Local-only playback does not get dragged into this DNS drama.
 
@@ -1142,7 +1261,7 @@ If that direct stream gets rejected, MeowPlayer throws away the stale entry, tri
 
 And repeatedly punching `Enter` while the same track is already resolving/loading still does not make the internet more motivated.
 
-Without `--youtube`, none of these online workers start.
+In 0.16.x, omitting `--youtube` meant none of these online workers started. Since 0.18.0, use `--no-youtube` for the equivalent local-only session.
 
 ### mpv is no longer questioned like a suspicious witness 77 times per second
 
@@ -1434,10 +1553,10 @@ meowplayer --log-file /tmp/meowplayer-debug.log
 /tmp/meowplayer-debug.mpv.log
 ```
 
-A particularly useful command for the experimental Internet Nest is:
+A particularly useful command for debugging Internet Nest is:
 
 ```bash
-meowplayer --youtube --debug
+meowplayer --debug
 ```
 
 Then, in another terminal:
@@ -1475,13 +1594,15 @@ the cat can no longer claim there were no witnesses
 
 The cat discovered the Internet Nest. Supervision became necessary almost immediately.
 
-MeowPlayer can now opt into **experimental YouTube search and online audio playback** through the same mpv backend used for local music.
+When 0.16.0 shipped, MeowPlayer could opt into **experimental YouTube search and online audio playback** through the same mpv backend used for local music. Internet Nest became default-available later in 0.18.0.
 
-Start it with:
+At the time, it was started with:
 
 ```bash
 meowplayer --youtube
 ```
+
+Since 0.18.0, plain `meowplayer` enables Internet Nest when yt-dlp is available.
 
 Then press `Y` from the TUI to open the **Internet Nest**. Type a song/title search, choose a result with the arrow keys, and press `Enter` to stream it.
 
@@ -1650,7 +1771,7 @@ Online search results are **ephemeral**. They are not inserted into the SQLite C
 
 The online track still participates in ordinary playback controls such as pause, seek, volume, repeat, and MPRIS metadata. Bad Larry can also interfere with an active online stream because apparently the cat has jurisdiction over the internet now.
 
-This feature is intentionally **opt-in and experimental**. It requires a working `yt-dlp` executable on `PATH`, and YouTube-side changes can temporarily break extraction until `yt-dlp` catches up. Local playback remains completely independent.
+Internet Nest is a **standard but optional-dependency feature**. It uses a working `yt-dlp` executable on `PATH`, and YouTube-side changes can temporarily break extraction until `yt-dlp` catches up. Local playback remains completely independent. Use `--no-youtube` for a deliberately local-only session.
 
 MeowPlayer never saves online audio files or adds remote tracks to Cat Catalog. The cat now stalks the stream before you press Enter: the first search result is prefetched immediately, and selection changes are debounced for 150 ms. Search and resolution run in background workers; you can navigate results as they arrive.
 
@@ -1658,7 +1779,7 @@ One resolver runs at a time, with at most one queued selection. Enter shares any
 
 If resolution fails, mpv's watch-URL ytdl hook remains the fallback. A rejected direct stream invalidates its cache entry, gets one fresh resolve, then falls back if necessary. Repeated Enter while resolving/loading remains ignored. Playback is only reported as streaming after mpv reports file-loaded, playback-restart, and a nonzero playback position.
 
-Without `--youtube`, no search or resolver worker starts. Local playback, ReplayGain, MPRIS, lyrics, Pawmarks, and Bad Larry keep their existing jobs.
+With `--no-youtube`, no search or resolver worker starts. If yt-dlp is missing, Internet Nest simply remains unavailable. Local playback, ReplayGain, MPRIS, lyrics, Pawmarks, and Bad Larry keep their existing jobs.
 
 This is an unofficial integration built around mpv + yt-dlp, not an official YouTube Music API client.
 
@@ -1700,7 +1821,7 @@ Space      pause / resume
 ← / →      seek
 ```
 
-If `--youtube` is enabled but `yt-dlp` is missing, MeowPlayer fails soft and tells you what is unavailable. Your local library continues to work normally.
+If yt-dlp is missing, MeowPlayer fails soft when Internet Nest is requested and tells you what is unavailable. Your local library continues to work normally.
 
 ## What's new in 0.15.1 — The Lyrics Cat Learned Suspicion
 
@@ -2172,7 +2293,7 @@ Install the system runtime dependency and `pipx`:
 sudo pacman -S mpv python-pipx
 pipx ensurepath
 
-# Optional: online YouTube playback
+# Optional dependency: enables Internet Nest automatically
 sudo pacman -S yt-dlp
 
 # Optional: make the bars wiggle
@@ -2220,9 +2341,8 @@ meowplayer --no-online-lyrics
 meowplayer --no-online-metadata
 meowplayer --no-visualizer
 meowplayer --no-watch
-meowplayer --youtube
+meowplayer --no-youtube
 meowplayer --debug
-meowplayer --youtube --debug
 meowplayer --log-file /tmp/meowplayer-debug.log
 meowplayer --version
 ```
@@ -2239,7 +2359,7 @@ pipx reinstall meowplayer-terminal
 
 ```bash
 sudo apt install python3 mpv
-# Optional online playback:
+# Optional dependency; enables Internet Nest automatically:
 sudo apt install yt-dlp
 
 git clone https://github.com/Luqman234/MeowPlayer.git
@@ -2253,7 +2373,7 @@ meowplayer
 ```bash
 pkg update
 pkg install python python-pip mpv git
-# Optional online playback:
+# Optional dependency; enables Internet Nest automatically:
 pkg install yt-dlp
 termux-setup-storage
 
@@ -2285,7 +2405,7 @@ MPRIS is intentionally disabled on Termux because a normal Linux desktop D-Bus s
 - Pillow for album-art normalization/cache
 - Watchdog 6.x for live filesystem events
 - CAVA *(optional)* for the spectrum
-- `yt-dlp` *(optional)* for `--youtube` search and streaming
+- `yt-dlp` *(optional)* for Internet Nest search, Creator Nest browsing, streaming, and adoption
 - Internet access *(optional)* for LRCLIB lyrics, MusicBrainz metadata enrichment, and YouTube playback
 - A terminal with curses support
 - Unix-domain socket support
@@ -3619,7 +3739,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.17.5 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.18.0 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -3750,8 +3870,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.17.5-py3-none-any.whl
-└── meowplayer_terminal-0.17.5.tar.gz
+├── meowplayer_terminal-0.18.0-py3-none-any.whl
+└── meowplayer_terminal-0.18.0.tar.gz
 ```
 
 The installed CLI is still:
