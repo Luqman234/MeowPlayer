@@ -3711,6 +3711,7 @@ class MeowPlayer:
             return [("connect", "Connect Google Account")]
         return [
             ("playlists", "My Playlists"),
+            ("likes", "Liked Videos"),
             ("subscriptions", "Subscriptions"),
             ("channel", "My Channel"),
             ("disconnect", "Disconnect Google Account"),
@@ -3768,7 +3769,7 @@ class MeowPlayer:
             self.account_parent_selected = self.account_selected
             self.account_playlist = playlist
 
-        if mode in {"playlists", "subscriptions", "channel", "playlist"}:
+        if mode in {"playlists", "likes", "subscriptions", "channel", "playlist"}:
             self.account_level = mode
             self.account_items = []
             self.account_selected = 0
@@ -3785,6 +3786,7 @@ class MeowPlayer:
             "authorize": ("Waiting for Google authorization...", "Waiting for Google to inspect the pawprint..."),
             "playlists": ("Loading Google playlists...", "Digging through Google playlist boxes..."),
             "playlist": (f"Loading playlist: {playlist.title}...", f"Opening Google playlist: {playlist.title}..."),
+            "likes": ("Loading Liked Videos...", "Opening the human's liked-video basket..."),
             "subscriptions": ("Loading YouTube subscriptions...", "Sniffing subscribed creator nests..."),
             "channel": ("Loading YouTube channel...", "Reading the human's YouTube name tag..."),
             "disconnect": ("Disconnecting Google Account...", "Erasing the Google pawprint..."),
@@ -3881,7 +3883,7 @@ class MeowPlayer:
         if self.account_level == "playlists":
             return self.start_account_session("playlist", item)
 
-        if self.account_level == "playlist":
+        if self.account_level in {"playlist", "likes"}:
             track = YouTubeTrack(
                 video_id=item.video_id,
                 title=item.title,
@@ -5858,7 +5860,7 @@ class MeowPlayer:
                 count = f"{item.item_count} track(s)" if item.item_count else "playlist"
                 privacy = f" · {item.privacy_status}" if item.privacy_status else ""
                 label = f"{item.title} · {count}{privacy}"
-            elif self.account_level == "playlist":
+            elif self.account_level in {"playlist", "likes"}:
                 label = f"{item.title} — {item.artist}"
             elif self.account_level == "subscriptions":
                 label = item.title
@@ -6520,7 +6522,7 @@ class MeowPlayer:
                         "↑↓ Select  ENTER Open/Connect  Esc/Q Library  X Quit",
                         "↑↓ Choose  ENTER Open/Connect  Esc/Q Nest  X Escape",
                     )
-                elif self.account_level == "playlist":
+                elif self.account_level in {"playlist", "likes"}:
                     controls = self.text(
                         "↑↓ Select  ENTER Stream  Esc Back  Q Library  X Quit",
                         "↑↓ Choose  ENTER Stream  Esc Back  Q Nest  X Escape",
