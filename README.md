@@ -2492,6 +2492,8 @@ The first version can browse:
 Account Nest
 ├── My Playlists
 │    └── playlist tracks → Enter streams through yt-dlp + mpv
+├── Liked Videos
+│    └── Enter streams through yt-dlp + mpv
 ├── Subscriptions
 │    └── Enter → Creator Nest for that channel
 ├── My Channel
