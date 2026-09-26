@@ -78,7 +78,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.18.2"
+__version__ = "0.18.3"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -4265,9 +4265,16 @@ class MeowPlayer:
         if self.library_view == "smart":
             playlist = self.current_smart_playlist()
             sequence = list(playlist.indices) if playlist is not None else []
-            self.play(index, sequence=sequence)
         else:
-            self.play(index)
+            # Preserve the actual visible library order for automatic
+            # transitions. Raw scan indices are an implementation detail and
+            # can differ from Songs/Albums/Artists/Pawmarks display order.
+            # Without this sequence, a crossfade from a track whose raw index
+            # happens to be the final library entry can incorrectly wrap to
+            # songs[0] even when another visible track should follow it.
+            sequence = list(self.ordered_library_indices())
+
+        self.play(index, sequence=sequence)
 
     def add_selected_to_stash(self):
         if not self.library_selection_is_track():
