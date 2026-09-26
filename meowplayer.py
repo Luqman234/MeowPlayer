@@ -900,7 +900,7 @@ class MeowPlayer:
         cat_chaos_mode=None,
         youtube_enabled=False,
         google_account_enabled=False,
-        google_client_id="",
+        google_auth_command="meowplayer-google-auth",
         debug_log_path=None,
         mpv_log_path=None,
         app_config=None,
@@ -927,7 +927,7 @@ class MeowPlayer:
         self.youtube = YouTubeCatalog(enabled=youtube_enabled)
         self.google_account_enabled = bool(google_account_enabled)
         self.google_account = (
-            GoogleAccountClient(google_client_id)
+            GoogleAccountClient(google_auth_command)
             if self.google_account_enabled
             else None
         )
@@ -1168,8 +1168,8 @@ class MeowPlayer:
                     initial_serious += " Account Nest enabled; Google login available."
                     initial_cat += " Account Nest is open for optional Google login."
             else:
-                initial_serious += " Account Nest enabled; OAuth client ID is not configured."
-                initial_cat += " Account Nest needs a Google OAuth client ID before it can purr."
+                initial_serious += " Account Nest enabled; Google auth helper is unavailable."
+                initial_cat += " Account Nest cannot find its Google auth helper."
         if self.debug_log_path is not None:
             initial_serious += f" Debug log: {self.debug_log_path}."
             initial_cat += f" Debug paws: {self.debug_log_path}."
@@ -3706,7 +3706,7 @@ class MeowPlayer:
         if not self.google_account_enabled or client is None:
             return []
         if not client.configured:
-            return [("setup", "Google OAuth client ID not configured")]
+            return [("setup", "Google auth helper unavailable")]
         if not client.connected:
             return [("connect", "Connect Google Account")]
         return [
@@ -3735,8 +3735,8 @@ class MeowPlayer:
 
         if self.google_account is None or not self.google_account.configured:
             self.set_status(
-                "Account Nest needs a Google OAuth client ID.",
-                "The account cat needs a Google OAuth client ID first.",
+                "Account Nest cannot find the Google auth helper.",
+                "The account cat cannot find meowplayer-google-auth.",
             )
         elif self.google_account.connected:
             self.set_status(
@@ -3861,8 +3861,8 @@ class MeowPlayer:
             action = menu[self.account_selected][0]
             if action == "setup":
                 self.set_status(
-                    "Set --google-client-id or MEOWPLAYER_GOOGLE_CLIENT_ID.",
-                    "Give Account Nest a Google OAuth client ID first.",
+                    "Install meowplayer-google-auth or set --google-auth-command.",
+                    "Point Account Nest at a Google auth helper first.",
                 )
                 return False
             if action == "connect":
@@ -7260,12 +7260,13 @@ def parse_args(argv=None):
         ),
     )
     parser.add_argument(
-        "--google-client-id",
-        metavar="CLIENT_ID",
+        "--google-auth-command",
+        metavar="COMMAND",
         default=None,
         help=(
-            "Google Desktop OAuth client ID for --google-account; "
-            "defaults to MEOWPLAYER_GOOGLE_CLIENT_ID"
+            "external Google auth helper command for --google-account; "
+            "defaults to MEOWPLAYER_GOOGLE_AUTH_COMMAND or "
+            "meowplayer-google-auth"
         ),
     )
     parser.add_argument(
@@ -7447,9 +7448,12 @@ def main():
         and not args.no_watch
     )
 
-    google_client_id = (
-        args.google_client_id
-        or os.environ.get("MEOWPLAYER_GOOGLE_CLIENT_ID", "")
+    google_auth_command = (
+        args.google_auth_command
+        or os.environ.get(
+            "MEOWPLAYER_GOOGLE_AUTH_COMMAND",
+            "meowplayer-google-auth",
+        )
     ).strip()
 
     try:
@@ -7473,7 +7477,7 @@ def main():
             cat_chaos_mode=cat_chaos_mode,
             youtube_enabled=args.youtube,
             google_account_enabled=args.google_account,
-            google_client_id=google_client_id,
+            google_auth_command=google_auth_command,
             debug_log_path=debug_log_path,
             mpv_log_path=mpv_log_path,
             app_config=config,

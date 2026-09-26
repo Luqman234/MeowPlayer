@@ -83,25 +83,50 @@ MeowPlayer tries to stay true to a few rules:
 
 ## What's new in 0.18.2 — The Cat Got an Account Nest
 
-MeowPlayer 0.18.2 introduces **Account Nest**: an optional, read-only Google / YouTube account layer that stays completely dormant unless you explicitly enable it.
+MeowPlayer 0.18.2 introduces **Account Nest**: optional, read-only Google / YouTube account data behind an explicit launch flag.
 
-Normal MeowPlayer remains account-free:
+The account feature remains opt-in:
 
 ```bash
 meowplayer
 ```
 
-To expose Account Nest for a session:
+does not expose Account Nest.
 
 ```bash
 meowplayer --google-account
 ```
 
-That flag is intentionally separate from Internet Nest. Anonymous online search and playback still work without signing in.
+does.
+
+### NeoMutt-style authentication boundary
+
+Google OAuth no longer lives inside the music player process.
+
+The architecture is deliberately split:
+
+```text
+MeowPlayer
+    │
+    │ subprocess: status / login / token / logout
+    ▼
+meowplayer-google-auth
+    │
+    ├── browser OAuth
+    ├── PKCE
+    ├── token persistence
+    ├── access-token refresh
+    └── revocation
+    │
+    ▼
+Google
+```
+
+MeowPlayer's Account Nest asks the helper for a usable access token and uses that token with the YouTube Data API. The helper owns the credential lifecycle.
+
+This follows the same broad philosophy as NeoMutt's OAuth helper approach: the application consumes a token-producing command instead of becoming an OAuth framework itself.
 
 ### Account Nest v1
-
-The first version is deliberately conservative:
 
 ```text
 Account Nest
@@ -115,135 +140,141 @@ Account Nest
 └── Disconnect Google Account
 ```
 
-Google supplies account-specific metadata and identifiers. MeowPlayer still sends playable video IDs through the same online stack it already uses:
+The complete path is:
 
 ```text
-Google OAuth / YouTube Data API
-              ↓
-playlist / video / channel IDs
-              ↓
-          MeowPlayer
-              ↓
-            yt-dlp
-              ↓
-             mpv
+Google OAuth
+    ↓
+meowplayer-google-auth
+    ↓
+access token
+    ↓
+MeowPlayer Account Nest
+    ↓
+YouTube Data API
+    ↓
+video / playlist / channel IDs
+    ↓
+yt-dlp
+    ↓
+mpv
 ```
 
-So Account Nest does not replace Internet Nest, yt-dlp, or mpv. It adds a private-account discovery layer above them.
+### Helper command contract
 
-### Explicit opt-in means explicit opt-in
+The packaged helper exposes four machine-facing operations:
 
-`--google-client-id` by itself does not activate anything.
-
-Only:
-
-```text
---google-account
+```bash
+meowplayer-google-auth status
+meowplayer-google-auth login
+meowplayer-google-auth token
+meowplayer-google-auth logout
 ```
 
-causes MeowPlayer to construct the Google Account client, load a saved token if one exists, expose the Account Nest UI, and add the `U Account` shortcut to the Music Nest.
+The most important contract is:
 
-Without the flag:
-
-- no Google token file is loaded;
-- no browser is opened;
-- no YouTube Data API request is made;
-- Account Nest remains unavailable.
-
-Even an existing token from an earlier session is ignored unless the feature is explicitly enabled again.
-
-### OAuth without asking MeowPlayer for your password
-
-Account Nest uses Google's installed-application OAuth flow:
-
-```text
-MeowPlayer
-    ↓
-system browser
-    ↓
-Google sign-in / consent
-    ↓
-temporary 127.0.0.1 callback
-    ↓
-OAuth token
+```bash
+meowplayer-google-auth token
 ```
 
-MeowPlayer never asks for or handles the user's Google password.
+which writes **only the usable access token to stdout**. If the stored access token has expired, the helper refreshes it before returning.
 
-Authorization uses:
+That means MeowPlayer itself does not need to understand refresh-token rotation or browser authorization.
 
-- PKCE with `S256`;
-- random OAuth state;
-- a temporary loopback callback bound to `127.0.0.1`;
-- the read-only YouTube scope:
+Advanced users can replace the helper:
+
+```bash
+meowplayer --google-account \
+  --google-auth-command '/path/to/my-google-helper'
+```
+
+or:
+
+```bash
+export MEOWPLAYER_GOOGLE_AUTH_COMMAND='/path/to/my-google-helper'
+meowplayer --google-account
+```
+
+A replacement helper must implement the same four operations and exit behavior.
+
+### Google OAuth configuration belongs to the helper
+
+The packaged Google helper needs a Google **Desktop OAuth client ID** for the first authorization:
+
+```bash
+export MEOWPLAYER_GOOGLE_CLIENT_ID='YOUR_CLIENT_ID.apps.googleusercontent.com'
+meowplayer-google-auth login
+```
+
+You can also pass it directly to the helper:
+
+```bash
+meowplayer-google-auth \
+  --client-id 'YOUR_CLIENT_ID.apps.googleusercontent.com' \
+  login
+```
+
+Once stored, the helper can reuse the client ID from its token file for later refreshes.
+
+The helper uses the read-only YouTube scope:
 
 ```text
 https://www.googleapis.com/auth/youtube.readonly
 ```
 
-The first Account Nest therefore cannot create playlists, modify subscriptions, upload videos, like/unlike content, or otherwise mutate the YouTube account.
+and the packaged implementation uses browser authorization, PKCE with `S256`, random OAuth state, and a temporary `127.0.0.1` callback.
 
-### OAuth client configuration
+MeowPlayer never handles the Google password.
 
-Account Nest needs a Google **Desktop OAuth client ID** from a Google Cloud project with the **YouTube Data API v3** enabled.
+### Token ownership moved out of MeowPlayer core
 
-Pass it directly:
-
-```bash
-meowplayer --google-account \
-  --google-client-id 'YOUR_CLIENT_ID.apps.googleusercontent.com'
-```
-
-or through the environment:
-
-```bash
-export MEOWPLAYER_GOOGLE_CLIENT_ID='YOUR_CLIENT_ID.apps.googleusercontent.com'
-meowplayer --google-account
-```
-
-During development, the Google Cloud OAuth consent screen and allowed test users must also be configured. Publicly distributed OAuth clients that request YouTube account data may be subject to Google's verification requirements.
-
-### Token storage and disconnect
-
-Authorized credentials are stored under:
+The packaged helper stores its OAuth state under:
 
 ```text
 $XDG_CONFIG_HOME/meowplayer/google-oauth.json
 ```
 
-or, by default:
+or:
 
 ```text
 ~/.config/meowplayer/google-oauth.json
 ```
 
-On POSIX systems MeowPlayer writes that file with owner-only permissions.
+with owner-only permissions on POSIX systems.
 
-**Disconnect Google Account** asks Google's revocation endpoint to revoke the credential, clears the in-memory token, and removes the local token file.
+The distinction matters:
 
-Expired access tokens without a usable refresh token are not treated as valid connected sessions.
+```text
+MeowPlayer core
+    does not read/write refresh tokens
 
-### No new Python dependency
+google auth helper
+    owns token storage and refresh
+```
 
-The Account Nest implementation uses Python's standard library for:
+Choosing **Disconnect Google Account** from Account Nest invokes the helper's `logout` operation. The packaged helper attempts Google revocation and removes its local token file.
 
-- PKCE generation;
-- the loopback HTTP callback;
-- OAuth token exchange and refresh;
-- YouTube Data API requests;
-- token revocation.
+### Still explicitly opt-in
 
-`google_account.py` is packaged with MeowPlayer, but ordinary users who never enable `--google-account` do not need a separate Google SDK.
+Without `--google-account`, MeowPlayer does not construct the Google account adapter or invoke the helper.
+
+Anonymous Internet Nest remains separate and account-free.
+
+### No Xiaomi login in 0.18.2
+
+There is intentionally **no Mi Account / Xiaomi login implementation** in this release.
+
+The helper boundary makes another provider possible later without putting its authentication protocol into MeowPlayer core, but no Xiaomi helper, Passport login, Xiaomi OAuth flow, or Xiaomi credential handling is included now.
 
 ### Release lineage
 
 ```text
 0.18.0  Internet Nest became default-available
 0.18.1  Creator Nest learned real release names + session caching
-0.18.2  Account Nest connects optional private YouTube account data
+0.18.2  Account Nest + external Google auth helper boundary
 ```
 
-> **MeowPlayer 0.18.2 — the cat can know your playlists now, but only after you explicitly let it in.**
+> **MeowPlayer 0.18.2 — the cat may ask another process for the key, but it still needs your permission to open the door.**
 
 ## What's new in 0.18.1 — The Cat Finally Read the Album Label
 
@@ -2626,119 +2657,207 @@ In other words, editing `~/.config/meowplayer/config.json` by hand is still allo
 
 Underneath the jokes, the normal presentation layer remains separated from playback state. Random Cat Incidents do not get permission to reorder playback, mutate ratings, alter music files, or rewrite Smart Mix rules. The only exception is the explicitly requested malicious playback family: `--bad-bad-cat`, `--very-bad-cat`, and `--dangerous-cat`.
 
-## Optional Account Nest — Google login without making MeowPlayer require an account
+## Optional Account Nest — external Google authentication
 
-MeowPlayer can optionally connect to a Google Account for **read-only YouTube account data**, but the feature is deliberately disabled unless you ask for it.
+MeowPlayer can optionally expose read-only YouTube account data, but **OAuth is delegated to an external helper command**.
 
-Normal MeowPlayer:
+Normal launch:
 
 ```bash
 meowplayer
 ```
 
-does **not** load Google OAuth tokens, open a browser, or expose Account Nest.
-
-Enable it explicitly:
+Account Nest launch:
 
 ```bash
 meowplayer --google-account
 ```
 
-Account Nest uses the narrow YouTube read-only scope:
+The packaged helper is installed alongside MeowPlayer:
 
 ```text
-https://www.googleapis.com/auth/youtube.readonly
+meowplayer-google-auth
 ```
 
-The first version can browse:
+### First-time setup
+
+The helper is installed by the same MeowPlayer package, but it is a **separate executable and process boundary**:
 
 ```text
-Account Nest
-├── My Playlists
-│    └── playlist tracks → Enter streams through yt-dlp + mpv
-├── Liked Videos
-│    └── Enter streams through yt-dlp + mpv
-├── Subscriptions
-│    └── Enter → Creator Nest for that channel
-├── My Channel
-└── Disconnect Google Account
+pip / pipx install MeowPlayer
+        ↓
+installs:
+    meowplayer
+    meowplayer-google-auth
 ```
 
-### OAuth client setup
-
-Account Nest needs a Google **Desktop OAuth client ID** from a Google Cloud project with the **YouTube Data API v3** enabled.
-
-During development, configure the OAuth consent screen and add the accounts that should be allowed to test the app. A broadly distributed public OAuth client that requests YouTube account data may also need to complete Google's OAuth verification process; that requirement belongs to the Google Cloud project, not to yt-dlp or mpv.
-
-Pass it for one run:
-
-```bash
-meowplayer --google-account \
-  --google-client-id 'YOUR_CLIENT_ID.apps.googleusercontent.com'
-```
-
-or export it once:
+Create a Google Desktop OAuth client for a project with YouTube Data API v3 enabled, then make the client ID available to the helper:
 
 ```bash
 export MEOWPLAYER_GOOGLE_CLIENT_ID='YOUR_CLIENT_ID.apps.googleusercontent.com'
+```
+
+You may authorize before launching MeowPlayer:
+
+```bash
+meowplayer-google-auth login
+```
+
+or launch:
+
+```bash
 meowplayer --google-account
 ```
 
-MeowPlayer does not ask for or handle your Google password. Authorization happens in the system browser using Google's installed-application OAuth flow with PKCE and a temporary `127.0.0.1` loopback callback.
+and choose **Connect Google Account** from Account Nest. MeowPlayer will invoke the helper's `login` operation, and the packaged helper opens Google's authorization page in the system browser.
+
+The first login and later launches therefore look different:
 
 ```text
-MeowPlayer
-    ↓
-system browser
-    ↓
-Google login / consent
-    ↓
-127.0.0.1 callback
-    ↓
-OAuth token
-    ↓
+FIRST LOGIN
+
+meowplayer --google-account
+        ↓
+Connect Google Account
+        ↓
+meowplayer-google-auth login
+        ↓
+browser → Google consent
+        ↓
+helper stores refreshable OAuth state
+        ↓
+Account Nest becomes connected
+
+
+LATER LAUNCH
+
+meowplayer --google-account
+        ↓
+helper status
+        ↓
+Account Nest
+        ↓
+helper token
+        ↓
+valid access token
+        ↓
 YouTube Data API
 ```
 
-The OAuth token is stored at:
+Normal `meowplayer` launches do not invoke the Google helper at all.
+
+### The helper interface
 
 ```text
-~/.config/meowplayer/google-oauth.json
+status
+    exit 0 → connected
+    exit 1 → disconnected
+
+login
+    perform interactive authorization
+    exit 0 on success
+
+token
+    print only one usable access token to stdout
+    refresh it first when necessary
+
+logout
+    disconnect/revoke according to helper policy
+    exit 0 on success
 ```
 
-(or under `$XDG_CONFIG_HOME/meowplayer/`) with owner-only permissions where the platform supports POSIX file modes. The file can contain a refresh token, so treat it like a credential and do not post it in bug reports.
+MeowPlayer never parses the helper's token database and never performs OAuth token refresh itself.
 
-Choosing **Disconnect Google Account** asks Google to revoke the token and removes the local token file.
+The helper protocol is documented separately in [`docs/AUTH_HELPERS.md`](docs/AUTH_HELPERS.md). That document is the compatibility contract for custom authentication helpers and future credential backends.
 
-### Read-only means read-only
-
-This first Account Nest intentionally does **not** request permissions to:
-
-- create or edit playlists;
-- like or unlike videos;
-- subscribe or unsubscribe from channels;
-- upload videos;
-- delete or modify YouTube account data.
-
-Google account failure also does not affect local playback or anonymous Internet Nest. If OAuth, the YouTube Data API, or the stored token fails, the Music Nest remains independent.
-
-The feature uses official OAuth / YouTube Data API account metadata for discovery, then hands playable YouTube video IDs back to MeowPlayer's existing online stack:
+### Account data flow
 
 ```text
-Google Account
-    ↓
+MeowPlayer Account Nest
+        │
+        │ run: meowplayer-google-auth token
+        ▼
+external helper
+        │
+        │ usable access token
+        ▼
+YouTube Data API
+        │
+        ▼
+My Playlists / Liked Videos / Subscriptions / My Channel
+```
+
+Playable video IDs still go through MeowPlayer's existing online path:
+
+```text
 YouTube Data API
     ↓
-playlist / video / channel IDs
-    ↓
-MeowPlayer
+video ID
     ↓
 yt-dlp
     ↓
 mpv
 ```
 
-The Account Nest flag is intentionally separate from Internet Nest. `--google-account` opts into private account access; ordinary Internet Nest remains usable without signing in.
+### Use a custom helper
+
+The default command is:
+
+```text
+meowplayer-google-auth
+```
+
+Override it per launch:
+
+```bash
+meowplayer --google-account \
+  --google-auth-command '/path/to/helper'
+```
+
+or through the environment:
+
+```bash
+export MEOWPLAYER_GOOGLE_AUTH_COMMAND='/path/to/helper'
+meowplayer --google-account
+```
+
+This makes it possible to build a different credential backend later—for example one using a desktop keyring, GPG-encrypted storage, a local credential daemon, or another provider-specific implementation—without teaching the player core that authentication protocol.
+
+### Packaged Google helper storage
+
+The included helper currently stores its Google OAuth state at:
+
+```text
+~/.config/meowplayer/google-oauth.json
+```
+
+or the equivalent `$XDG_CONFIG_HOME` path, with owner-only POSIX permissions.
+
+The helper, not MeowPlayer core, owns that file. MeowPlayer core only receives the short-lived access token returned by the helper's `token` command for an immediate YouTube API request.
+
+You can override the helper's token path with:
+
+```bash
+export MEOWPLAYER_GOOGLE_TOKEN_FILE='/path/to/google-oauth.json'
+```
+
+### Read-only scope
+
+The packaged helper requests:
+
+```text
+https://www.googleapis.com/auth/youtube.readonly
+```
+
+Account Nest therefore does not create/edit playlists, like/unlike videos, change subscriptions, upload content, or otherwise mutate the YouTube account.
+
+### Xiaomi status
+
+**Not implemented.**
+
+There is no Xiaomi helper and no Mi Account login path in MeowPlayer at this time. The external-helper architecture is intentionally capable of supporting other providers later, but Google is the only account provider implemented now.
+
+In particular, MeowPlayer does **not** use Xiaomi Passport `passToken` sessions, Mi Unlock service identifiers, XiaomiPCSuite impersonation, or embedded unlock signing material. Any future Xiaomi integration must use a separately reviewed, provider-appropriate helper rather than copying those mechanisms.
 
 ## Quick start — summon the cat
 
@@ -2800,7 +2919,11 @@ meowplayer --no-visualizer
 meowplayer --no-watch
 meowplayer --no-youtube
 meowplayer --google-account
-meowplayer --google-account --google-client-id YOUR_CLIENT_ID.apps.googleusercontent.com
+meowplayer --google-account --google-auth-command /path/to/helper
+meowplayer-google-auth status
+meowplayer-google-auth login
+meowplayer-google-auth token
+meowplayer-google-auth logout
 meowplayer --debug
 meowplayer --log-file /tmp/meowplayer-debug.log
 meowplayer --version
@@ -4333,10 +4456,11 @@ dist/
 └── meowplayer_terminal-0.18.2.tar.gz
 ```
 
-The installed CLI is still:
+The installed commands are:
 
 ```text
 meowplayer
+meowplayer-google-auth
 ```
 
 ## Project structure — anatomy of the creature
@@ -4345,7 +4469,8 @@ meowplayer
 MeowPlayer/
 ├── meowplayer.py              # TUI, playback state, orchestration, cat
 ├── album_art.py               # artwork resolution/cache/Kitty rendering
-├── google_account.py             # opt-in Google OAuth + read-only YouTube account data
+├── google_account.py          # Account Nest adapter + YouTube account API
+├── google_auth_helper.py      # standalone Google OAuth/token helper CLI
 ├── lyrics_support.py          # LRC/plain lyrics + LRCLIB
 ├── online_metadata.py         # MusicBrainz enrichment worker/client
 ├── library_watcher.py         # Watchdog event collection/debounce
@@ -4361,6 +4486,8 @@ MeowPlayer/
 ├── requirements.txt
 ├── README.md
 ├── LICENSE                    # the only adult in the room
+├── docs/
+│   └── AUTH_HELPERS.md        # external auth-helper command contract
 ├── examples/
 │   └── smart-mixes.json
 ├── tests/
@@ -4368,6 +4495,8 @@ MeowPlayer/
 │   ├── test_audio.py
 │   ├── test_catalog.py
 │   ├── test_debug_logging.py
+│   ├── test_google_account.py
+│   ├── test_google_auth_helper.py
 │   ├── test_goofy.py
 │   ├── test_lyrics.py
 │   ├── test_online_metadata.py
@@ -4394,6 +4523,8 @@ Compile first-party modules:
 ```bash
 python -m py_compile \
   meowplayer.py \
+  google_account.py \
+  google_auth_helper.py \
   album_art.py \
   lyrics_support.py \
   online_metadata.py \

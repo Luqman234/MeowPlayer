@@ -1,30 +1,21 @@
-import base64
-import hashlib
 import json
 import logging
 import os
 import queue
-import secrets
+import shlex
 import shutil
 import subprocess
 import threading
-import time
-import webbrowser
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
 LOGGER = logging.getLogger("meowplayer.google")
-
-YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
-AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
-REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke"
 YOUTUBE_API_ROOT = "https://www.googleapis.com/youtube/v3"
+DEFAULT_GOOGLE_AUTH_COMMAND = "meowplayer-google-auth"
 
 
 class GoogleAccountError(RuntimeError):
@@ -61,285 +52,150 @@ class GooglePlaylistTrack:
     channel_id: str = ""
 
 
-def google_token_path():
-    root = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(root).expanduser() if root else Path.home() / ".config"
-    return base / "meowplayer" / "google-oauth.json"
+class GoogleAuthHelper:
+    """Thin subprocess adapter for a NeoMutt-style OAuth helper."""
 
-
-def _open_browser(url):
-    termux_open = shutil.which("termux-open-url")
-    if termux_open:
-        try:
-            subprocess.Popen(
-                [termux_open, url],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return True
-        except OSError:
-            pass
-    try:
-        return bool(webbrowser.open(url, new=1))
-    except Exception:
-        return False
-
-
-def _pkce_pair():
-    verifier = secrets.token_urlsafe(64).rstrip("=")
-    verifier = verifier[:128]
-    digest = hashlib.sha256(verifier.encode("ascii")).digest()
-    challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-    return verifier, challenge
-
-
-class _OAuthCallbackHandler(BaseHTTPRequestHandler):
-    result_queue = None
-
-    def do_GET(self):
-        parsed = urlsplit(self.path)
-        params = parse_qs(parsed.query)
-        payload = {
-            "code": (params.get("code") or [""])[0],
-            "state": (params.get("state") or [""])[0],
-            "error": (params.get("error") or [""])[0],
-        }
-        if self.result_queue is not None:
-            self.result_queue.put(payload)
-
-        body = (
-            b"<!doctype html><html><body><h2>MeowPlayer authorization received.</h2>"
-            b"<p>You can close this tab and return to MeowPlayer.</p></body></html>"
-        )
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format, *args):
-        return
-
-
-class GoogleAccountClient:
     def __init__(
         self,
-        client_id="",
+        command=DEFAULT_GOOGLE_AUTH_COMMAND,
         *,
-        token_path=None,
-        request_opener=None,
-        browser_open=None,
+        timeout=35,
+        login_timeout=240,
+        runner=None,
     ):
-        self.client_id = str(client_id or "").strip()
-        self.token_path = Path(token_path or google_token_path()).expanduser()
-        self.request_opener = request_opener or urlopen
-        self.browser_open = browser_open or _open_browser
-        self._token = self._load_token()
+        if isinstance(command, (list, tuple)):
+            argv = [str(part) for part in command if str(part)]
+        else:
+            argv = shlex.split(str(command or "").strip())
+
+        self.argv = argv or [DEFAULT_GOOGLE_AUTH_COMMAND]
+        self.timeout = max(1, int(timeout))
+        self.login_timeout = max(self.timeout, int(login_timeout))
+        self.runner = runner or subprocess.run
 
     @property
     def configured(self):
-        return bool(self.client_id)
+        executable = self.argv[0]
+        if os.sep in executable:
+            path = Path(executable).expanduser()
+            return path.is_file() and os.access(path, os.X_OK)
+        return shutil.which(executable) is not None
+
+    def _invoke(self, action, *, timeout=None):
+        if not self.configured:
+            raise GoogleAccountError(
+                "Google auth helper is unavailable. "
+                "Install meowplayer-google-auth or configure "
+                "--google-auth-command."
+            )
+
+        try:
+            return self.runner(
+                [*self.argv, action],
+                capture_output=True,
+                text=True,
+                timeout=timeout or self.timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise GoogleAccountError(
+                f"Google auth helper timed out during {action}."
+            ) from exc
+        except OSError as exc:
+            raise GoogleAccountError(
+                f"Could not run Google auth helper: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _failure_message(result, action):
+        detail = str(result.stderr or result.stdout or "").strip()
+        if detail:
+            return f"Google auth helper {action} failed: {detail[:220]}"
+        return (
+            f"Google auth helper {action} failed "
+            f"with exit code {result.returncode}."
+        )
 
     @property
     def connected(self):
-        if not self._token or self._token.get("client_id") != self.client_id:
-            return False
-        if self._token.get("refresh_token"):
-            return True
-        access_token = str(self._token.get("access_token") or "").strip()
-        try:
-            expires_at = float(self._token.get("expires_at") or 0)
-        except (TypeError, ValueError):
-            expires_at = 0
-        return bool(access_token and expires_at - time.time() > 60)
-
-    def _load_token(self):
-        try:
-            data = json.loads(self.token_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            return {}
-        return data if isinstance(data, dict) else {}
-
-    def _save_token(self):
-        if not self._token:
-            return
-        self.token_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.token_path.with_name(self.token_path.name + ".tmp")
-        temporary.write_text(
-            json.dumps(self._token, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        try:
-            os.chmod(temporary, 0o600)
-        except OSError:
-            pass
-        temporary.replace(self.token_path)
-        try:
-            os.chmod(self.token_path, 0o600)
-        except OSError:
-            pass
-
-    def _post_form(self, url, payload):
-        encoded = urlencode(payload).encode("utf-8")
-        request = Request(
-            url,
-            data=encoded,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            method="POST",
-        )
-        try:
-            with self.request_opener(request, timeout=30) as response:
-                raw = response.read()
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise GoogleAccountError(
-                f"Google OAuth request failed ({exc.code}): {detail[:180]}"
-            ) from exc
-        except (URLError, OSError) as exc:
-            raise GoogleAccountError(f"Google OAuth network error: {exc}") from exc
-
-        try:
-            data = json.loads(raw.decode("utf-8"))
-        except (ValueError, TypeError) as exc:
-            raise GoogleAccountError("Google OAuth returned invalid JSON.") from exc
-        if not isinstance(data, dict):
-            raise GoogleAccountError("Google OAuth returned an invalid response.")
-        return data
-
-    def _authorization_url(self, redirect_uri, state, challenge):
-        params = {
-            "client_id": self.client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": YOUTUBE_READONLY_SCOPE,
-            "state": state,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "access_type": "offline",
-            "prompt": "consent",
-        }
-        return f"{AUTH_ENDPOINT}?{urlencode(params)}"
-
-    def authorize(self, timeout=180):
         if not self.configured:
-            raise GoogleAccountError(
-                "Google OAuth client ID is not configured. "
-                "Use --google-client-id or MEOWPLAYER_GOOGLE_CLIENT_ID."
-            )
-
-        verifier, challenge = _pkce_pair()
-        state = secrets.token_urlsafe(24)
-        result_queue = queue.SimpleQueue()
-
-        class Handler(_OAuthCallbackHandler):
-            pass
-
-        Handler.result_queue = result_queue
+            return False
         try:
-            server = HTTPServer(("127.0.0.1", 0), Handler)
-        except OSError as exc:
-            raise GoogleAccountError(
-                f"Could not start local OAuth callback server: {exc}"
-            ) from exc
-
-        server.timeout = 0.5
-        redirect_uri = f"http://127.0.0.1:{server.server_port}/"
-        auth_url = self._authorization_url(redirect_uri, state, challenge)
-
-        LOGGER.info("Opening Google OAuth authorization page")
-        if not self.browser_open(auth_url):
-            server.server_close()
-            raise GoogleAccountError(
-                "Could not open the browser for Google authorization."
-            )
-
-        deadline = time.monotonic() + max(30, int(timeout))
-        payload = None
-        try:
-            while time.monotonic() < deadline:
-                server.handle_request()
-                try:
-                    payload = result_queue.get_nowait()
-                    break
-                except queue.Empty:
-                    continue
-        finally:
-            server.server_close()
-
-        if payload is None:
-            raise GoogleAccountError("Google authorization timed out.")
-        if payload.get("error"):
-            raise GoogleAccountError(
-                f"Google authorization was denied: {payload['error']}"
-            )
-        if payload.get("state") != state:
-            raise GoogleAccountError("Google authorization state mismatch.")
-        code = str(payload.get("code") or "").strip()
-        if not code:
-            raise GoogleAccountError("Google authorization returned no code.")
-
-        token = self._post_form(
-            TOKEN_ENDPOINT,
-            {
-                "client_id": self.client_id,
-                "code": code,
-                "code_verifier": verifier,
-                "grant_type": "authorization_code",
-                "redirect_uri": redirect_uri,
-            },
+            result = self._invoke("status")
+        except GoogleAccountError:
+            return False
+        if result.returncode == 0:
+            return True
+        if result.returncode == 1:
+            return False
+        LOGGER.debug(
+            "Google auth helper status failed rc=%s stderr=%r",
+            result.returncode,
+            str(result.stderr or "")[:160],
         )
-        access_token = str(token.get("access_token") or "").strip()
-        if not access_token:
-            raise GoogleAccountError("Google did not return an access token.")
+        return False
 
-        refresh_token = str(token.get("refresh_token") or "").strip()
-        previous_refresh = str(self._token.get("refresh_token") or "").strip()
-        expires_in = int(token.get("expires_in") or 3600)
-        self._token = {
-            "client_id": self.client_id,
-            "access_token": access_token,
-            "refresh_token": refresh_token or previous_refresh,
-            "expires_at": time.time() + max(60, expires_in),
-            "scope": str(token.get("scope") or YOUTUBE_READONLY_SCOPE),
-            "token_type": str(token.get("token_type") or "Bearer"),
-        }
-        self._save_token()
+    def login(self):
+        result = self._invoke("login", timeout=self.login_timeout)
+        if result.returncode != 0:
+            raise GoogleAccountError(
+                self._failure_message(result, "login")
+            )
         return True
 
-    def _refresh(self):
-        refresh_token = str(self._token.get("refresh_token") or "").strip()
-        if not refresh_token:
-            raise GoogleAccountError("Google Account is not connected.")
+    def token(self):
+        result = self._invoke("token")
+        if result.returncode != 0:
+            raise GoogleAccountError(
+                self._failure_message(result, "token")
+            )
+        token = str(result.stdout or "").strip()
+        if not token or any(char.isspace() for char in token):
+            raise GoogleAccountError(
+                "Google auth helper returned an invalid access token."
+            )
+        return token
 
-        token = self._post_form(
-            TOKEN_ENDPOINT,
-            {
-                "client_id": self.client_id,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
-        access_token = str(token.get("access_token") or "").strip()
-        if not access_token:
-            raise GoogleAccountError("Google token refresh returned no access token.")
+    def logout(self):
+        result = self._invoke("logout")
+        if result.returncode != 0:
+            raise GoogleAccountError(
+                self._failure_message(result, "logout")
+            )
+        return True
 
-        expires_in = int(token.get("expires_in") or 3600)
-        self._token["access_token"] = access_token
-        self._token["expires_at"] = time.time() + max(60, expires_in)
-        self._token["scope"] = str(
-            token.get("scope") or self._token.get("scope") or YOUTUBE_READONLY_SCOPE
-        )
-        self._save_token()
-        return access_token
+
+class GoogleAccountClient:
+    """YouTube account API client; authentication comes from an external helper."""
+
+    def __init__(
+        self,
+        auth_command=DEFAULT_GOOGLE_AUTH_COMMAND,
+        *,
+        auth_helper=None,
+        request_opener=None,
+    ):
+        self.auth = auth_helper or GoogleAuthHelper(auth_command)
+        self.request_opener = request_opener or urlopen
+
+    @property
+    def configured(self):
+        return self.auth.configured
+
+    @property
+    def connected(self):
+        return self.auth.connected
+
+    def authorize(self):
+        return self.auth.login()
 
     def access_token(self):
-        if not self.connected:
-            raise GoogleAccountError("Google Account is not connected.")
-        token = str(self._token.get("access_token") or "").strip()
-        expires_at = float(self._token.get("expires_at") or 0)
-        if token and expires_at - time.time() > 60:
-            return token
-        return self._refresh()
+        return self.auth.token()
+
+    def disconnect(self, revoke=True):
+        # Revocation policy belongs to the helper. The argument remains for
+        # compatibility with the Account Nest session API.
+        return self.auth.logout()
 
     def _api_get(self, resource, params):
         query = urlencode(params)
@@ -356,14 +212,20 @@ class GoogleAccountClient:
                 f"YouTube Data API failed ({exc.code}): {detail[:180]}"
             ) from exc
         except (URLError, OSError) as exc:
-            raise GoogleAccountError(f"YouTube Data API network error: {exc}") from exc
+            raise GoogleAccountError(
+                f"YouTube Data API network error: {exc}"
+            ) from exc
 
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (ValueError, TypeError) as exc:
-            raise GoogleAccountError("YouTube Data API returned invalid JSON.") from exc
+            raise GoogleAccountError(
+                "YouTube Data API returned invalid JSON."
+            ) from exc
         if not isinstance(payload, dict):
-            raise GoogleAccountError("YouTube Data API returned an invalid response.")
+            raise GoogleAccountError(
+                "YouTube Data API returned an invalid response."
+            )
         return payload
 
     def channel(self):
@@ -382,7 +244,11 @@ class GoogleAccountClient:
             )
         item = items[0]
         snippet = item.get("snippet") or {}
-        related = (item.get("contentDetails") or {}).get("relatedPlaylists") or {}
+        related = (
+            (item.get("contentDetails") or {})
+            .get("relatedPlaylists")
+            or {}
+        )
         return GoogleChannel(
             channel_id=str(item.get("id") or ""),
             title=str(snippet.get("title") or "YouTube Account"),
@@ -414,7 +280,9 @@ class GoogleAccountClient:
                             playlist_id=playlist_id,
                             title=title,
                             item_count=int(details.get("itemCount") or 0),
-                            privacy_status=str(status.get("privacyStatus") or ""),
+                            privacy_status=str(
+                                status.get("privacyStatus") or ""
+                            ),
                         )
                     )
             page_token = str(payload.get("nextPageToken") or "")
@@ -439,7 +307,9 @@ class GoogleAccountClient:
                 resource = snippet.get("resourceId") or {}
                 details = item.get("contentDetails") or {}
                 video_id = str(
-                    resource.get("videoId") or details.get("videoId") or ""
+                    resource.get("videoId")
+                    or details.get("videoId")
+                    or ""
                 ).strip()
                 title = str(snippet.get("title") or "").strip()
                 artist = str(
@@ -450,7 +320,11 @@ class GoogleAccountClient:
                 channel_id = str(
                     snippet.get("videoOwnerChannelId") or ""
                 ).strip()
-                if video_id and title and title not in {"Deleted video", "Private video"}:
+                if (
+                    video_id
+                    and title
+                    and title not in {"Deleted video", "Private video"}
+                ):
                     results.append(
                         GooglePlaylistTrack(
                             video_id=video_id,
@@ -479,7 +353,9 @@ class GoogleAccountClient:
             for item in payload.get("items") or []:
                 snippet = item.get("snippet") or {}
                 resource = snippet.get("resourceId") or {}
-                channel_id = str(resource.get("channelId") or "").strip()
+                channel_id = str(
+                    resource.get("channelId") or ""
+                ).strip()
                 title = str(snippet.get("title") or "").strip()
                 if channel_id and title:
                     results.append(
@@ -493,37 +369,23 @@ class GoogleAccountClient:
                 break
         return results
 
-    def disconnect(self, revoke=True):
-        token = str(
-            self._token.get("refresh_token")
-            or self._token.get("access_token")
-            or ""
-        ).strip()
-        if revoke and token:
-            try:
-                request = Request(
-                    REVOKE_ENDPOINT,
-                    data=urlencode({"token": token}).encode("utf-8"),
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                    method="POST",
-                )
-                with self.request_opener(request, timeout=15):
-                    pass
-            except Exception:
-                LOGGER.warning("Google token revocation failed; clearing local token anyway")
-        self._token = {}
-        try:
-            self.token_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-
 
 class GoogleAccountSession:
-    MODES = {"authorize", "playlists", "playlist", "likes", "subscriptions", "channel", "disconnect"}
+    MODES = {
+        "authorize",
+        "playlists",
+        "playlist",
+        "likes",
+        "subscriptions",
+        "channel",
+        "disconnect",
+    }
 
     def __init__(self, client, mode, *, playlist_id=""):
         if mode not in self.MODES:
-            raise ValueError(f"Unsupported Google Account session mode: {mode}")
+            raise ValueError(
+                f"Unsupported Google Account session mode: {mode}"
+            )
         self.client = client
         self.mode = mode
         self.playlist_id = str(playlist_id or "")
@@ -552,9 +414,12 @@ class GoogleAccountSession:
                 channel = self.client.channel()
                 if not channel.likes_playlist_id:
                     raise GoogleAccountError(
-                        "YouTube did not expose a Liked Videos playlist for this account."
+                        "YouTube did not expose a Liked Videos playlist "
+                        "for this account."
                     )
-                for item in self.client.playlist_items(channel.likes_playlist_id):
+                for item in self.client.playlist_items(
+                    channel.likes_playlist_id
+                ):
                     self.results.put(("track", item))
                 self.results.put(("done", None))
             elif self.mode == "subscriptions":
@@ -570,8 +435,16 @@ class GoogleAccountSession:
         except GoogleAccountError as exc:
             self.results.put(("error", str(exc)))
         except Exception:
-            LOGGER.exception("Unexpected Google Account session failure mode=%s", self.mode)
-            self.results.put(("error", "Google Account operation failed unexpectedly."))
+            LOGGER.exception(
+                "Unexpected Google Account session failure mode=%s",
+                self.mode,
+            )
+            self.results.put(
+                (
+                    "error",
+                    "Google Account operation failed unexpectedly.",
+                )
+            )
 
     def close(self):
         self.thread.join(timeout=0.2)
