@@ -1292,6 +1292,8 @@ class MeowPlayer:
         random.shuffle(self.shuffle_bag)
 
     def set_shuffle_enabled(self, enabled):
+        if getattr(self, "_crossfade_active", False):
+            self.cancel_crossfade()
         enabled = bool(enabled)
         changed = enabled != self.shuffle
         self.shuffle = enabled
@@ -1425,6 +1427,9 @@ class MeowPlayer:
         self.prime_crossfade_next()
 
     def prime_crossfade_next(self):
+        if getattr(self, "_crossfade_active", False):
+            return True
+
         if (
             not self._crossfade_enabled()
             or self.current is None
@@ -1629,7 +1634,6 @@ class MeowPlayer:
         if (
             not self._crossfade_enabled()
             or self.current is None
-            or self.repeat
             or getattr(self, "online_current", None) is not None
         ):
             return False
@@ -1643,6 +1647,9 @@ class MeowPlayer:
             self._apply_crossfade_volumes(progress)
             if progress >= 1.0:
                 return self._finish_crossfade()
+            return False
+
+        if self.repeat:
             return False
 
         expected = self.peek_next_index()
@@ -2068,6 +2075,8 @@ class MeowPlayer:
                     self.toggle_playback_pause()
             elif action == "stop":
                 if self.has_active_track():
+                    if getattr(self, "_crossfade_active", False):
+                        self.cancel_crossfade()
                     self.mpv.stop()
                     if self.online_current is not None:
                         self._online_future = None
@@ -2090,6 +2099,8 @@ class MeowPlayer:
             elif action == "set_shuffle":
                 self.set_shuffle_enabled(args[0])
             elif action == "set_repeat":
+                if getattr(self, "_crossfade_active", False):
+                    self.cancel_crossfade()
                 self.repeat = bool(args[0])
                 self.mpv.set_repeat(self.repeat)
                 self.prime_gapless_next()
@@ -2512,6 +2523,9 @@ class MeowPlayer:
         return indices
 
     def rescan_library(self, event_summary=None):
+        if getattr(self, "_crossfade_active", False):
+            self.cancel_crossfade()
+
         old_paths = {
             str(song.resolve())
             for song in self.songs
@@ -6923,6 +6937,8 @@ class MeowPlayer:
                 continue
 
             if key in (ord("r"), ord("R")):
+                if getattr(self, "_crossfade_active", False):
+                    self.cancel_crossfade()
                 self.repeat = not self.repeat
                 self.mpv.set_repeat(self.repeat)
                 self.set_status(
