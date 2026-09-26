@@ -28,6 +28,15 @@ class FakeMPV:
         self.waited_for = []
         self.trimmed = 0
         self.cleared = 0
+        self.quit_calls = 0
+        self.properties = {
+            "pause": False,
+            "idle-active": False,
+            "duration": 120.0,
+            "time-pos": 0.0,
+            "eof-reached": False,
+            "volume": 70.0,
+        }
 
     def current_path(self):
         return self.path
@@ -42,8 +51,9 @@ class FakeMPV:
         self.cleared += 1
 
     def load(self, filename):
-        self.loaded.append(Path(filename))
-        self.path = None
+        path = Path(filename)
+        self.loaded.append(path)
+        self.path = str(path)
 
     def advance_playlist(self):
         self.advanced += 1
@@ -55,9 +65,25 @@ class FakeMPV:
 
     def play(self):
         self.play_calls += 1
+        self.properties["pause"] = False
+
+    def pause(self):
+        self.properties["pause"] = True
 
     def stop(self):
         self.stop_calls += 1
+
+    def set_property(self, name, value):
+        self.properties[name] = value
+
+    def get_property(self, name):
+        return self.properties.get(name)
+
+    def set_repeat(self, enabled):
+        self.properties["loop-file"] = "inf" if enabled else "no"
+
+    def quit(self):
+        self.quit_calls += 1
 
 
 class AudioEngineTests(unittest.TestCase):
@@ -79,6 +105,18 @@ class AudioEngineTests(unittest.TestCase):
         player.gapless_mode = "weak"
         player.gapless_next_index = None
         player._awaiting_mpv_path = False
+        player.crossfade_seconds = 0.0
+        player.crossfade_mpv = None
+        player.crossfade_next_index = None
+        player._crossfade_active = False
+        player._crossfade_started_at = 0.0
+        player._crossfade_duration = 0.0
+        player.volume = 70
+        player.online_current = None
+        player.replaygain_mode = "track"
+        player.replaygain_preamp = 0.0
+        player.mpv_log_path = None
+        player.youtube = SimpleNamespace(enabled=False)
         player.catalog = None
         player.lyrics = SimpleNamespace(
             load=lambda path: None,
@@ -103,7 +141,8 @@ class AudioEngineTests(unittest.TestCase):
         player.set_status = lambda *args, **kwargs: None
         player.sync_mpris = lambda *args, **kwargs: None
         player.meta = lambda index: SimpleNamespace(
-            artist_title=f"Track {index}"
+            artist_title=f"Track {index}",
+            duration=120.0,
         )
         return player
 
@@ -386,6 +425,11 @@ class AudioEngineTests(unittest.TestCase):
 
         self.assertIn("lyrics_online_enabled", parameters)
 
+    def test_meowplayer_constructor_accepts_crossfade_duration(self):
+        parameters = inspect.signature(MeowPlayer.__init__).parameters
+
+        self.assertIn("crossfade_seconds", parameters)
+
     def test_mpv_controller_does_not_own_ui_feature_flags(self):
         parameters = inspect.signature(MPVController.__init__).parameters
 
@@ -518,6 +562,88 @@ class AudioEngineTests(unittest.TestCase):
         self.assertIn("--gapless-audio=weak", command)
         self.assertIn("--replaygain=track", command)
         self.assertIn("--replaygain-preamp=0.0", command)
+
+    def test_crossfade_preloads_next_track_in_second_deck(self):
+        player = self.make_player(current=0)
+        player.crossfade_seconds = 5.0
+        player.crossfade_mpv = FakeMPV()
+
+        player.prime_gapless_next()
+
+        self.assertIsNone(player.gapless_next_index)
+        self.assertEqual(player.crossfade_next_index, 1)
+        self.assertEqual(
+            player.crossfade_mpv.loaded,
+            [Path("/music/1.flac")],
+        )
+        self.assertEqual(player.mpv.primed, [])
+
+    def test_crossfade_uses_equal_power_volume_curve(self):
+        player = self.make_player(current=0)
+        player.crossfade_seconds = 4.0
+        player.crossfade_mpv = FakeMPV(str(player.songs[1]))
+        player.crossfade_next_index = 1
+        player.mpv.properties["duration"] = 100.0
+        player.mpv.properties["time-pos"] = 96.0
+
+        started = player.process_crossfade_transition(now=10.0)
+
+        self.assertTrue(started)
+        self.assertTrue(player._crossfade_active)
+        self.assertEqual(player.crossfade_mpv.play_calls, 1)
+
+        player.process_crossfade_transition(now=12.0)
+
+        expected = 70.0 / (2.0 ** 0.5)
+        self.assertAlmostEqual(
+            player.mpv.properties["volume"],
+            expected,
+            places=3,
+        )
+        self.assertAlmostEqual(
+            player.crossfade_mpv.properties["volume"],
+            expected,
+            places=3,
+        )
+
+    def test_crossfade_finish_swaps_decks_and_commits_queue_state(self):
+        player = self.make_player(current=0)
+        player.crossfade_seconds = 4.0
+        outgoing = player.mpv
+        incoming = FakeMPV(str(player.songs[1]))
+        player.crossfade_mpv = incoming
+        player.crossfade_next_index = 1
+        player.catnip_stash = [1, 2]
+        player._crossfade_active = True
+        player._crossfade_started_at = 10.0
+        player._crossfade_duration = 4.0
+
+        changed = player.process_crossfade_transition(now=14.1)
+
+        self.assertTrue(changed)
+        self.assertEqual(player.current, 1)
+        self.assertEqual(player.history, [0])
+        self.assertEqual(player.catnip_stash, [2])
+        self.assertIs(player.mpv, incoming)
+        self.assertIs(player.crossfade_mpv, outgoing)
+        self.assertEqual(player.mpv.properties["volume"], 70)
+        self.assertEqual(player.crossfade_next_index, 2)
+        self.assertEqual(
+            player.crossfade_mpv.loaded[-1],
+            Path("/music/2.flac"),
+        )
+
+    def test_crossfade_short_tracks_are_capped_at_half_duration(self):
+        player = self.make_player(current=0)
+        player.crossfade_seconds = 10.0
+        player.meta = lambda index: SimpleNamespace(
+            artist_title=f"Track {index}",
+            duration=6.0,
+        )
+
+        duration = player._effective_crossfade_duration(1, 8.0)
+
+        self.assertEqual(duration, 3.0)
 
     def test_queue_has_gapless_priority(self):
         player = self.make_player()
