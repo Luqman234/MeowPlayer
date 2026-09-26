@@ -53,6 +53,20 @@ SETTINGS_SPECS = (
         description="mpv gapless-audio mode: no, weak, or yes.",
     ),
     SettingSpec(
+        "crossfade_seconds",
+        "Crossfade",
+        "DJ cat overlap",
+        "duration",
+        0.0,
+        step=1.0,
+        minimum=0.0,
+        maximum=10.0,
+        description=(
+            "Overlap local tracks with an equal-power crossfade. "
+            "0 seconds keeps normal gapless playback."
+        ),
+    ),
+    SettingSpec(
         "replaygain_mode",
         "ReplayGain",
         "Volume diplomacy",
@@ -130,7 +144,7 @@ def normalize_setting_value(spec, value):
         text = str(value).lower()
         return text if text in spec.choices else spec.default
 
-    if spec.kind == "float":
+    if spec.kind in {"float", "duration"}:
         try:
             number = float(value)
         except (TypeError, ValueError):
@@ -154,7 +168,7 @@ def adjust_setting_value(spec, value, direction=1):
         index = spec.choices.index(value)
         return spec.choices[(index + (1 if direction >= 0 else -1)) % len(spec.choices)]
 
-    if spec.kind == "float":
+    if spec.kind in {"float", "duration"}:
         return normalize_setting_value(
             spec,
             float(value) + (spec.step * (1 if direction >= 0 else -1)),
@@ -170,4 +184,7 @@ def format_setting_value(spec, value):
         return "ON" if value else "OFF"
     if spec.kind == "float":
         return f"{float(value):+.1f} dB"
+    if spec.kind == "duration":
+        seconds = float(value)
+        return "OFF" if seconds <= 0 else f"{seconds:.1f} s"
     return str(value)
