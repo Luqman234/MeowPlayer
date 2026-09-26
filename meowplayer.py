@@ -6267,23 +6267,6 @@ class MeowPlayer:
                     f"Google Account — {section} · {count} item(s)",
                     f"Account Nest — {section} · {count} thing(s)",
                 )
-            elif self.view == "account":
-                if self.account_level == "menu":
-                    controls = self.text(
-                        "↑↓ Select  ENTER Open/Connect  Esc/Q Library  X Quit",
-                        "↑↓ Choose  ENTER Open/Connect  Esc/Q Nest  X Escape",
-                    )
-                elif self.account_level == "playlist":
-                    controls = self.text(
-                        "↑↓ Select  ENTER Stream  Esc Back  Q Library  X Quit",
-                        "↑↓ Choose  ENTER Stream  Esc Back  Q Nest  X Escape",
-                    )
-                else:
-                    controls = self.text(
-                        "↑↓ Select  ENTER Open  Esc Back  Q Library  X Quit",
-                        "↑↓ Choose  ENTER Open  Esc Back  Q Nest  X Escape",
-                    )
-                quote = "" if self.serious_mode else self.cat_footer_message()
             elif self.view == "creator":
                 if self.creator_level == "menu":
                     section = "channel"
@@ -6458,26 +6441,6 @@ class MeowPlayer:
                     list_height,
                     account_scroll,
                 )
-            elif self.view == "account":
-                item_count = (
-                    len(self.account_menu_items())
-                    if self.account_level == "menu"
-                    else len(self.account_items)
-                )
-                if key == curses.KEY_UP and item_count:
-                    self.account_selected = max(0, self.account_selected - 1)
-                elif key == curses.KEY_DOWN and item_count:
-                    self.account_selected = min(
-                        item_count - 1,
-                        self.account_selected + 1,
-                    )
-                elif key in (10, 13, curses.KEY_ENTER):
-                    if self.activate_account_selection():
-                        account_scroll = 0
-                elif key == 27:
-                    if self.go_back_account():
-                        account_scroll = 0
-
             elif self.view == "creator":
                 creator_scroll = self.draw_creator(
                     stdscr,
@@ -6551,6 +6514,23 @@ class MeowPlayer:
                         "R Factory Meow  ,/Q/Esc Leave Nest  X Escape"
                     )
                     quote = self.cat_footer_message()
+            elif self.view == "account":
+                if self.account_level == "menu":
+                    controls = self.text(
+                        "↑↓ Select  ENTER Open/Connect  Esc/Q Library  X Quit",
+                        "↑↓ Choose  ENTER Open/Connect  Esc/Q Nest  X Escape",
+                    )
+                elif self.account_level == "playlist":
+                    controls = self.text(
+                        "↑↓ Select  ENTER Stream  Esc Back  Q Library  X Quit",
+                        "↑↓ Choose  ENTER Stream  Esc Back  Q Nest  X Escape",
+                    )
+                else:
+                    controls = self.text(
+                        "↑↓ Select  ENTER Open  Esc Back  Q Library  X Quit",
+                        "↑↓ Choose  ENTER Open  Esc Back  Q Nest  X Escape",
+                    )
+                quote = "" if self.serious_mode else self.cat_footer_message()
             elif self.view == "creator":
                 if self.creator_level == "menu":
                     controls = self.text(
@@ -7037,6 +7017,26 @@ class MeowPlayer:
                         "Returned to local library.",
                         "The cat left the Internet Nest.",
                     )
+
+            elif self.view == "account":
+                item_count = (
+                    len(self.account_menu_items())
+                    if self.account_level == "menu"
+                    else len(self.account_items)
+                )
+                if key == curses.KEY_UP and item_count:
+                    self.account_selected = max(0, self.account_selected - 1)
+                elif key == curses.KEY_DOWN and item_count:
+                    self.account_selected = min(
+                        item_count - 1,
+                        self.account_selected + 1,
+                    )
+                elif key in (10, 13, curses.KEY_ENTER):
+                    if self.activate_account_selection():
+                        account_scroll = 0
+                elif key == 27:
+                    if self.go_back_account():
+                        account_scroll = 0
 
             elif self.view == "creator":
                 item_count = (
