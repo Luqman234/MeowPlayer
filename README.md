@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.18.4** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.19.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.18.4 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.19.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -79,7 +79,103 @@ MeowPlayer tries to stay true to a few rules:
 | Discovery | Artists, Albums, Folders/Nests, Pawmarks, Purr History, Smart Mixes |
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
+| Cat Presence | read-only mascot state engine, animated moods, DJ/headphones/hunting/judgment reactions |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.19.0 — The Cat Became Sentient
+
+The engineering was becoming dangerously competent, so MeowPlayer 0.19.0 invests heavily in the obvious missing subsystem: **more cat**.
+
+This release introduces **Cat Presence**, a presentation-only state engine that observes playback and decides what the mascot is doing without owning any playback controls.
+
+```text
+mpv / queue / library / Internet Nest
+                ↓
+        read-only snapshot
+                ↓
+          Cat Presence
+        mood · frame · caption
+                ↓
+              TUI
+```
+
+That separation is intentional. The mascot is allowed to observe everything and react dramatically. It is not allowed to seek, skip, reorder queues, or become a second source of truth for playback.
+
+### The cat now reacts to what MeowPlayer is actually doing
+
+The header mascot is no longer just one static cat with a handful of labels. It has dedicated states for:
+
+- **DJ** — active two-deck crossfade; tiny headphones and fader included.
+- **Hunting** — Internet Nest is resolving/loading a stream.
+- **Headphones** — online playback is active.
+- **Empty-Pawed** — an online stream failed.
+- **Dancing** — the CAVA visualizer is visible.
+- **Judging** — the current track has a one-star verdict.
+- **Adoring** — the current track has five stars.
+- **Loafing** — playback is paused.
+- **Zoomies** — shuffle is active.
+- **Tail-Chasing** — repeat is active.
+- **Guarding Catnip** — the queue contains treats.
+- **Screaming / Whispering** — Meow Level is extremely high or low.
+- **Waiting / Purring** — the sensible defaults, to the extent anything here is sensible.
+
+Every normal state has multiple frames. The animation phase is derived from monotonic time; it does not mutate playback state or require another worker thread.
+
+### Crossfade finally looks as ridiculous as it sounds
+
+During the v0.18 two-deck crossfade:
+
+```text
+ /\_/\   [DJ]
+( •.• )🎧
+ >🎚<   A ⇆ B
+```
+
+The next frame moves the tiny fader. This is purely visual; the real equal-power envelopes remain in the playback engine.
+
+### Internet Cat acquired headphones
+
+Internet Nest now has distinct visual phases:
+
+```text
+resolving/loading  →  Hunting
+streaming          →  Headphones
+failed             →  Empty-Pawed
+```
+
+So the mascot visibly changes while yt-dlp/mpv is doing remote work instead of pretending every network state is the same kind of purr.
+
+### The footer has opinions now
+
+When there is no Cat Incident, the footer combines the random MeowPlayer quote with a contextual Cat Presence thought, for example:
+
+```text
+🐱 Two decks, four paws, zero formal DJ qualifications. · Nine lives. One excellent queue.
+```
+
+Scritch counts can also appear in the contextual caption.
+
+### Maximum Meow remains irresponsible
+
+Maximum Meow uses the exact same state machine, then adds more musical garnish. It does **not** fork playback behavior.
+
+### Serious Mode remains sacred
+
+Serious Mode still bypasses Cat Presence presentation. The underlying music player remains a perfectly legitimate terminal application if you need to demonstrate MeowPlayer without explaining why the mascot is wearing DJ headphones.
+
+### Tested as a state machine, not vibes
+
+0.19.0 adds dedicated Cat Presence tests covering priority and isolation:
+
+```text
+crossfade + paused + shuffle + online loading
+                    ↓
+                   DJ
+```
+
+It also verifies Internet Cat transitions, visualizer/rating reactions, frame animation, Maximum Meow garnish, and that producing an animation frame does not mutate the input snapshot.
+
+> **MeowPlayer 0.19.0 — The Cat Became Sentient.** 🐈🎧🎚️
 
 ## What's new in 0.18.4 — The Cat Finally Used the Same Door
 

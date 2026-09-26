@@ -109,7 +109,9 @@ class GoofyCatTests(unittest.TestCase):
         self.assertIn(CAT_INCIDENTS[0], player.cat_footer_message(now=6.0))
 
         footer = player.cat_footer_message(now=20.0)
-        self.assertEqual(footer, "🐱 Ordinary cat quote.")
+        self.assertTrue(footer.startswith("🐱 "))
+        self.assertIn("Ordinary cat quote.", footer)
+        self.assertIn("cat", footer.casefold())
         self.assertIsNone(player.cat_incident)
 
     def test_incident_does_not_retrigger_while_active(self):
