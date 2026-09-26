@@ -519,7 +519,7 @@ class GoogleAccountClient:
 
 
 class GoogleAccountSession:
-    MODES = {"authorize", "playlists", "playlist", "subscriptions", "channel", "disconnect"}
+    MODES = {"authorize", "playlists", "playlist", "likes", "subscriptions", "channel", "disconnect"}
 
     def __init__(self, client, mode, *, playlist_id=""):
         if mode not in self.MODES:
@@ -546,6 +546,15 @@ class GoogleAccountSession:
                 self.results.put(("done", None))
             elif self.mode == "playlist":
                 for item in self.client.playlist_items(self.playlist_id):
+                    self.results.put(("track", item))
+                self.results.put(("done", None))
+            elif self.mode == "likes":
+                channel = self.client.channel()
+                if not channel.likes_playlist_id:
+                    raise GoogleAccountError(
+                        "YouTube did not expose a Liked Videos playlist for this account."
+                    )
+                for item in self.client.playlist_items(channel.likes_playlist_id):
                     self.results.put(("track", item))
                 self.results.put(("done", None))
             elif self.mode == "subscriptions":
