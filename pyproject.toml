@@ -51,6 +51,7 @@ Issues = "https://github.com/Luqman234/MeowPlayer/issues"
 
 [project.scripts]
 meowplayer = "meowplayer:main"
+meowplayer-google-auth = "google_auth_helper:main"
 
 [project.optional-dependencies]
 dev = [
@@ -64,6 +65,7 @@ py-modules = [
     "bad_larry",
     "bad_larry_math",
     "google_account",
+    "google_auth_helper",
     "lyrics_support",
     "library_watcher",
     "meow_catalog",
