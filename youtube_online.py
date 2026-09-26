@@ -807,81 +807,6 @@ class YouTubeDownloadSession:
         )
         self.thread.start()
 
-    def _hydrate_release_title(self, item):
-        """Resolve the actual title of one sparse YouTube Music album result."""
-        if not item.url or not self.catalog.executable:
-            return item
-
-        process = None
-        started = time.monotonic()
-        try:
-            process = subprocess.Popen(
-                youtube_playlist_metadata_command(
-                    self.catalog.executable,
-                    item.url,
-                ),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                env=network_subprocess_env(PYTHONUNBUFFERED="1"),
-            )
-
-            while True:
-                if self.cancel.is_set():
-                    process.kill()
-                    process.communicate()
-                    return item
-                if time.monotonic() - started >= self.timeout:
-                    LOGGER.info(
-                        "Release title hydration timed out playlist_id=%s",
-                        item.playlist_id,
-                    )
-                    process.kill()
-                    process.communicate()
-                    return item
-                try:
-                    stdout, _ = process.communicate(timeout=0.1)
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-
-            if process.returncode != 0:
-                LOGGER.info(
-                    "Release title hydration failed playlist_id=%s returncode=%s",
-                    item.playlist_id,
-                    process.returncode,
-                )
-                return item
-
-            try:
-                payload = json.loads(stdout or "{}")
-            except (TypeError, ValueError):
-                return item
-
-            title = youtube_release_title_from_payload(
-                payload,
-                self.creator_name,
-            )
-            if not title:
-                return item
-
-            LOGGER.debug(
-                "Hydrated release title playlist_id=%s title=%r",
-                item.playlist_id,
-                title,
-            )
-            return replace(item, title=title)
-        except OSError:
-            LOGGER.exception(
-                "Could not launch release title hydration playlist_id=%s",
-                item.playlist_id,
-            )
-            return item
-        finally:
-            if process is not None and process.poll() is None:
-                process.kill()
-                process.communicate()
-
     def _run(self):
         process = None
         try:
@@ -1171,6 +1096,81 @@ class YouTubeBrowseSession:
             self.mode,
             self.creator_name,
         )
+
+    def _hydrate_release_title(self, item):
+        """Resolve the actual title of one sparse YouTube Music album result."""
+        if not item.url or not self.catalog.executable:
+            return item
+
+        process = None
+        started = time.monotonic()
+        try:
+            process = subprocess.Popen(
+                youtube_playlist_metadata_command(
+                    self.catalog.executable,
+                    item.url,
+                ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                env=network_subprocess_env(PYTHONUNBUFFERED="1"),
+            )
+
+            while True:
+                if self.cancel.is_set():
+                    process.kill()
+                    process.communicate()
+                    return item
+                if time.monotonic() - started >= self.timeout:
+                    LOGGER.info(
+                        "Release title hydration timed out playlist_id=%s",
+                        item.playlist_id,
+                    )
+                    process.kill()
+                    process.communicate()
+                    return item
+                try:
+                    stdout, _ = process.communicate(timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+
+            if process.returncode != 0:
+                LOGGER.info(
+                    "Release title hydration failed playlist_id=%s returncode=%s",
+                    item.playlist_id,
+                    process.returncode,
+                )
+                return item
+
+            try:
+                payload = json.loads(stdout or "{}")
+            except (TypeError, ValueError):
+                return item
+
+            title = youtube_release_title_from_payload(
+                payload,
+                self.creator_name,
+            )
+            if not title:
+                return item
+
+            LOGGER.debug(
+                "Hydrated release title playlist_id=%s title=%r",
+                item.playlist_id,
+                title,
+            )
+            return replace(item, title=title)
+        except OSError:
+            LOGGER.exception(
+                "Could not launch release title hydration playlist_id=%s",
+                item.playlist_id,
+            )
+            return item
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate()
 
     def _run(self):
         process = None
