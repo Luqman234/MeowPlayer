@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.18.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.18.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.18.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.18.1 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,133 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.18.1 — The Cat Finally Read the Album Label
+
+MeowPlayer 0.18.1 fixes a Creator Nest bug where YouTube Music release results could all appear with the **same fake name**.
+
+A real failure looked like this:
+
+```text
+Creator Nest — siinamota - Topic / playlists · 18 thing(s)
+
+siinamota - albums · playlist
+siinamota - albums · playlist
+siinamota - albums · playlist
+siinamota - albums · playlist
+...
+```
+
+The 18 releases were real. The names were not.
+
+### What went wrong
+
+The YouTube Music `#albums` fallback can return sparse release rows whose own title is missing. yt-dlp may still attach the **parent search container** as `playlist_title`:
+
+```text
+creator query:     siinamota
+search section:    albums
+container title:   siinamota - albums
+```
+
+MeowPlayer previously accepted that container label as if it were the title of each individual release.
+
+So the cat successfully found a box containing 18 albums, read:
+
+```text
+SIINAMOTA — ALBUMS
+```
+
+on the outside of the box, and concluded every album inside had that exact name.
+
+### Release-title hydration
+
+0.18.1 now recognizes the fake parent-container label and performs a **bounded metadata-only yt-dlp lookup** for each sparse YouTube Music release.
+
+```text
+YouTube Music #albums result
+        ↓
+MPREb_... / release URL
+        ↓
+metadata-only yt-dlp lookup
+        ↓
+actual album / playlist title
+        ↓
+Creator Nest row
+```
+
+The lookup uses:
+
+```text
+--flat-playlist
+--skip-download
+--playlist-items 1
+--dump-single-json
+```
+
+so MeowPlayer asks only for enough metadata to identify the release. It does **not** download audio and does not recursively resolve the entire album just to paint one row.
+
+### Topic channels are normalized correctly
+
+The exact bug shown above also exposed a naming mismatch:
+
+```text
+Creator Nest identity:
+siinamota - Topic
+
+YouTube Music search container:
+siinamota - albums
+```
+
+0.18.1 strips the `- Topic` / `– Topic` / `— Topic` suffix before deciding whether a title is merely the YouTube Music albums-search container.
+
+That means:
+
+```text
+siinamota - Topic
+        ↓ normalize
+siinamota
+
+siinamota - albums
+        ↓
+recognized as container label
+        ↓
+hydrate real release title
+```
+
+### It stays asynchronous
+
+Release-name resolution happens inside the existing Creator Nest background browse worker.
+
+That means curses stays responsive and release rows can appear progressively as their names are resolved. MeowPlayer does **not** launch one yt-dlp process per album all at once; the worker resolves them sequentially.
+
+If title hydration fails, MeowPlayer no longer repeats the misleading parent label. It falls back to an explicit release placeholder such as:
+
+```text
+YouTube release MPREb_...
+```
+
+which is less pretty, but at least truthful.
+
+### Regression coverage
+
+0.18.1 adds tests for:
+
+- `siinamota - Topic` vs `siinamota - albums`
+- real top-level album titles
+- album names recovered from nested track metadata
+- bounded metadata-only yt-dlp command construction
+- replacing the repeated container label with the hydrated release title
+- avoiding false positives for legitimate release names
+
+In short:
+
+```text
+0.18.0: Internet Nest became part of the house
+0.18.1: the cat learned that "albums" is a shelf label, not an album title
+```
+
+> **MeowPlayer 0.18.1 — eighteen albums may live on one shelf; they are not all named after the shelf.**
 
 ## What's new in 0.18.0 — The Internet Cat No Longer Needs Permission
 
@@ -3739,7 +3866,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 | Meow Level ≥90% | Screaming |
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.18.0 — Loafing
+ /\_/\   ♫ MEOWPLAYER v0.18.1 — Loafing
 ( -.- )
  > ^ <  ...
 ```
@@ -3870,8 +3997,8 @@ Output:
 
 ```text
 dist/
-├── meowplayer_terminal-0.18.0-py3-none-any.whl
-└── meowplayer_terminal-0.18.0.tar.gz
+├── meowplayer_terminal-0.18.1-py3-none-any.whl
+└── meowplayer_terminal-0.18.1.tar.gz
 ```
 
 The installed CLI is still:
