@@ -174,6 +174,58 @@ recognized as container label
 hydrate real release title
 ```
 
+### Session-only album cache
+
+Once Creator Nest has resolved a release, MeowPlayer now remembers it for the rest of the current process.
+
+The cache has two parts:
+
+```text
+release identity
+    ↓
+hydrated release title
+
+opened release
+    ↓
+album track list
+```
+
+That means revisiting the same creator or reopening the same album does not need to repeat the same yt-dlp metadata work:
+
+```text
+first visit
+release discovered
+    ↓
+hydrate title with yt-dlp
+    ↓
+store title in RAM
+
+open album
+    ↓
+fetch tracks
+    ↓
+store track list in RAM
+
+later in the same MeowPlayer session
+    ↓
+cache hit
+    ↓
+reuse title / tracks immediately
+```
+
+The cache is deliberately **session-only**:
+
+- nothing is written to SQLite;
+- nothing is written to the config directory;
+- nothing becomes a persistent online catalog;
+- leaving Creator Nest does not clear it;
+- returning to the Music Nest does not clear it;
+- quitting MeowPlayer explicitly clears it, and process exit destroys the remaining in-memory state.
+
+Album-track cache keys prefer the underlying release identity, such as a YouTube playlist ID or Music `MPRE...` browse ID, instead of blindly depending on the exact URL spelling.
+
+So a release can be remembered even when the same album is encountered through slightly different YouTube / YouTube Music URL forms.
+
 ### It stays asynchronous
 
 Release-name resolution happens inside the existing Creator Nest background browse worker.

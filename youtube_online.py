@@ -173,6 +173,10 @@ class YouTubeCatalog:
             if default_limit is None
             else max(1, min(50, int(default_limit)))
         )
+        # Session-only Creator Nest cache. It intentionally lives only in
+        # memory and is cleared when MeowPlayer shuts down.
+        self._release_title_cache = {}
+        self._playlist_tracks_cache = {}
         LOGGER.debug(
             "YouTubeCatalog enabled=%s executable=%s timeout=%s default_limit=%s",
             self.enabled,
@@ -192,6 +196,84 @@ class YouTubeCatalog:
         if not self.executable:
             return "yt-dlp was not found on PATH."
         return ""
+
+    @staticmethod
+    def _release_cache_key(item):
+        playlist_id = str(getattr(item, "playlist_id", "") or "").strip()
+        if playlist_id:
+            return f"id:{playlist_id}"
+        url = str(getattr(item, "url", "") or "").strip()
+        return f"url:{url}" if url else ""
+
+    def cached_release_title(self, item):
+        key = self._release_cache_key(item)
+        if not key:
+            return ""
+        return str(self._release_title_cache.get(key) or "")
+
+    def cache_release_title(self, item, title):
+        key = self._release_cache_key(item)
+        title = str(title or "").strip()
+        if not key or not title:
+            return False
+        self._release_title_cache[key] = title
+        LOGGER.debug(
+            "Cached Creator Nest release title key=%s title=%r",
+            key,
+            title,
+        )
+        return True
+
+    @staticmethod
+    def _playlist_tracks_cache_key(source_url):
+        raw = str(source_url or "").strip()
+        if not raw:
+            return ""
+        try:
+            parsed = urlsplit(raw)
+            list_id = parse_qs(parsed.query).get("list", [""])[0]
+            if list_id:
+                return f"id:{list_id}"
+            path_parts = [
+                part for part in parsed.path.split("/") if part
+            ]
+            if len(path_parts) >= 2 and path_parts[-2] == "browse":
+                return f"id:{path_parts[-1]}"
+        except (TypeError, ValueError):
+            pass
+        return f"url:{raw}"
+
+    def cached_playlist_tracks(self, source_url):
+        key = self._playlist_tracks_cache_key(source_url)
+        if not key:
+            return ()
+        return tuple(self._playlist_tracks_cache.get(key) or ())
+
+    def cache_playlist_tracks(self, source_url, tracks):
+        key = self._playlist_tracks_cache_key(source_url)
+        tracks = tuple(tracks or ())
+        if not key or not tracks:
+            return False
+        self._playlist_tracks_cache[key] = tracks
+        LOGGER.debug(
+            "Cached Creator Nest playlist tracks key=%s count=%s",
+            key,
+            len(tracks),
+        )
+        return True
+
+    def clear_session_cache(self):
+        release_count = len(self._release_title_cache)
+        playlist_count = len(self._playlist_tracks_cache)
+        self._release_title_cache.clear()
+        self._playlist_tracks_cache.clear()
+        LOGGER.debug(
+            "Cleared session-only Creator Nest cache releases=%s playlists=%s",
+            release_count,
+            playlist_count,
+        )
+        return release_count + playlist_count
+
 
     def search(self, query, limit=None, search_mode="all"):
         if not self.enabled:
@@ -1108,6 +1190,15 @@ class YouTubeBrowseSession:
 
     def _hydrate_release_title(self, item):
         """Resolve the actual title of one sparse YouTube Music album result."""
+        cached = self.catalog.cached_release_title(item)
+        if cached:
+            LOGGER.debug(
+                "Creator Nest release title cache hit playlist_id=%s title=%r",
+                item.playlist_id,
+                cached,
+            )
+            return replace(item, title=cached)
+
         if not item.url or not self.catalog.executable:
             return item
 
@@ -1169,6 +1260,7 @@ class YouTubeBrowseSession:
                 item.playlist_id,
                 title,
             )
+            self.catalog.cache_release_title(item, title)
             return replace(item, title=title)
         except OSError:
             LOGGER.exception(
@@ -1189,6 +1281,23 @@ class YouTubeBrowseSession:
                     self.catalog.unavailable_reason
                 )
 
+            if self.mode == "playlist":
+                cached_tracks = self.catalog.cached_playlist_tracks(
+                    self.source_url
+                )
+                if cached_tracks:
+                    LOGGER.debug(
+                        "Creator Nest playlist cache hit source=%s count=%s",
+                        self.source_url,
+                        len(cached_tracks),
+                    )
+                    for track in cached_tracks:
+                        if self.cancel.is_set():
+                            return
+                        self.results.put(("track", track))
+                    self.results.put(("done", None))
+                    return
+
             targets = self._targets()
             if not targets:
                 raise YouTubeBrowseError(
@@ -1202,6 +1311,7 @@ class YouTubeBrowseSession:
                 "webpage_url,original_url,url})j"
             )
             seen = set()
+            playlist_tracks = []
             succeeded = False
 
             for attempt, target in enumerate(targets, start=1):
@@ -1279,24 +1389,27 @@ class YouTubeBrowseSession:
                                     ):
                                         continue
 
-                                    if (
-                                        "#albums" in target
-                                        and youtube_release_title_is_container(
-                                            item.title,
-                                            self.creator_name,
-                                        )
-                                    ):
-                                        item = self._hydrate_release_title(item)
+                                    if "#albums" in target:
                                         if youtube_release_title_is_container(
                                             item.title,
                                             self.creator_name,
                                         ):
-                                            item = replace(
+                                            item = self._hydrate_release_title(item)
+                                            if youtube_release_title_is_container(
+                                                item.title,
+                                                self.creator_name,
+                                            ):
+                                                item = replace(
+                                                    item,
+                                                    title=(
+                                                        "YouTube release "
+                                                        f"{item.playlist_id[:12]}"
+                                                    ),
+                                                )
+                                        else:
+                                            self.catalog.cache_release_title(
                                                 item,
-                                                title=(
-                                                    "YouTube release "
-                                                    f"{item.playlist_id[:12]}"
-                                                ),
+                                                item.title,
                                             )
 
                                     seen.add(item.playlist_id)
@@ -1310,6 +1423,8 @@ class YouTubeBrowseSession:
                                     if track.video_id in seen:
                                         continue
                                     seen.add(track.video_id)
+                                    if self.mode == "playlist":
+                                        playlist_tracks.append(track)
                                     self.results.put(("track", track))
 
                     if self.cancel.is_set():
@@ -1354,6 +1469,16 @@ class YouTubeBrowseSession:
             if not succeeded:
                 raise YouTubeBrowseError(
                     "yt-dlp could not browse this YouTube channel."
+                )
+
+            if (
+                self.mode == "playlist"
+                and playlist_tracks
+                and not self.cancel.is_set()
+            ):
+                self.catalog.cache_playlist_tracks(
+                    self.source_url,
+                    playlist_tracks,
                 )
 
             if not self.cancel.is_set():

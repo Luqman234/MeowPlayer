@@ -260,9 +260,125 @@ class YouTubeOnlineTests(unittest.TestCase):
             "https://music.youtube.com/browse/MPREb_release",
         )
 
+    def test_release_title_cache_survives_between_browse_sessions(self):
+        catalog = YouTubeCatalog(
+            enabled=True,
+            executable="/usr/bin/yt-dlp",
+        )
+        item = YouTubePlaylist(
+            playlist_id="MPREb_cached",
+            title="Creator Cat - albums",
+            channel="Creator Cat - Topic",
+            url="https://music.youtube.com/browse/MPREb_cached",
+        )
+
+        self.assertEqual(catalog.cached_release_title(item), "")
+        self.assertTrue(
+            catalog.cache_release_title(item, "Actually Named Album")
+        )
+        self.assertEqual(
+            catalog.cached_release_title(item),
+            "Actually Named Album",
+        )
+
+        # A new browse worker shares the same long-lived catalog object.
+        first = YouTubeBrowseSession.__new__(YouTubeBrowseSession)
+        second = YouTubeBrowseSession.__new__(YouTubeBrowseSession)
+        first.catalog = catalog
+        second.catalog = catalog
+        first.creator_name = second.creator_name = "Creator Cat - Topic"
+        first.timeout = second.timeout = 2.0
+        first.cancel = second.cancel = SimpleNamespace(is_set=lambda: False)
+
+        with mock.patch("youtube_online.subprocess.Popen") as popen:
+            hydrated = second._hydrate_release_title(item)
+
+        self.assertEqual(hydrated.title, "Actually Named Album")
+        popen.assert_not_called()
+
+    def test_album_track_cache_reuses_release_across_url_forms(self):
+        catalog = YouTubeCatalog(
+            enabled=True,
+            executable="/usr/bin/yt-dlp",
+        )
+        track = YouTubeTrack(
+            "track001",
+            "Cached Song",
+            "Creator Cat",
+            180,
+            "https://www.youtube.com/watch?v=track001",
+        )
+
+        self.assertTrue(
+            catalog.cache_playlist_tracks(
+                "https://music.youtube.com/browse/MPREb_cached_album",
+                [track],
+            )
+        )
+        self.assertEqual(
+            catalog.cached_playlist_tracks(
+                "https://www.youtube.com/playlist"
+                "?list=MPREb_cached_album"
+            ),
+            (track,),
+        )
+
+    def test_cached_album_tracks_skip_yt_dlp_on_reopen(self):
+        catalog = YouTubeCatalog(
+            enabled=True,
+            executable="/usr/bin/yt-dlp",
+        )
+        source = "https://music.youtube.com/browse/MPREb_cached_album"
+        track = YouTubeTrack(
+            "track002",
+            "Already Hydrated",
+            "Creator Cat",
+            200,
+            "https://www.youtube.com/watch?v=track002",
+        )
+        catalog.cache_playlist_tracks(source, [track])
+
+        session = YouTubeBrowseSession.__new__(YouTubeBrowseSession)
+        session.catalog = catalog
+        session.source_url = source
+        session.mode = "playlist"
+        session.creator_name = "Creator Cat"
+        session.timeout = 2.0
+        session.results = queue.SimpleQueue()
+        session.cancel = mock.Mock()
+        session.cancel.is_set.return_value = False
+
+        with mock.patch("youtube_online.subprocess.Popen") as popen:
+            session._run()
+
+        first = session.results.get_nowait()
+        second = session.results.get_nowait()
+        self.assertEqual(first, ("track", track))
+        self.assertEqual(second, ("done", None))
+        popen.assert_not_called()
+
+    def test_release_title_cache_is_cleared_explicitly(self):
+        catalog = YouTubeCatalog(
+            enabled=True,
+            executable="/usr/bin/yt-dlp",
+        )
+        item = YouTubePlaylist(
+            playlist_id="MPREb_clear",
+            title="Creator Cat - albums",
+            channel="Creator Cat - Topic",
+            url="https://music.youtube.com/browse/MPREb_clear",
+        )
+        catalog.cache_release_title(item, "Temporary Album")
+
+        cleared = catalog.clear_session_cache()
+
+        self.assertEqual(cleared, 1)
+        self.assertEqual(catalog.cached_release_title(item), "")
+
     def test_release_hydration_replaces_container_title(self):
         player = YouTubeBrowseSession.__new__(YouTubeBrowseSession)
-        player.catalog = SimpleNamespace(
+        player.catalog = YouTubeCatalog(
+            enabled=True,
             executable="/usr/bin/yt-dlp",
         )
         player.creator_name = "siinamota - Topic"
