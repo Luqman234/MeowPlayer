@@ -893,7 +893,7 @@ class MeowPlayer:
         visualizer_enabled=True,
         filesystem_watch_enabled=True,
         cat_chaos_mode=None,
-        youtube_enabled=True,
+        youtube_enabled=False,
         debug_log_path=None,
         mpv_log_path=None,
         app_config=None,
