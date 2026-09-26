@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.18.3** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.18.4** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.18.3 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.18.4 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -80,6 +80,30 @@ MeowPlayer tries to stay true to a few rules:
 | Desktop | MPRIS / D-Bus, `playerctl`, media keys |
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.18.4 — The Cat Finally Used the Same Door
+
+0.18.3 fixed sequence preservation in the helper used by remote/MPRIS playback, but the normal **Enter key** took a different path through `activate_library_selection()` and still called `play(index)` without the visible sequence.
+
+That meant interactive playback could still discard the Music Nest ordering before crossfade was primed. With no sequence left, MeowPlayer fell back to raw scan indices — commonly producing the very obvious jump to the second raw library song.
+
+0.18.4 fixes the actual interactive path:
+
+```text
+ENTER on visible track
+        ↓
+activate_library_selection()
+        ↓
+snapshot ordered_library_indices()
+        ↓
+play(..., sequence=visible_order)
+        ↓
+Next / gapless / crossfade all agree
+```
+
+The regression suite now exercises the real Enter-key activation path, not only the remote-play helper.
+
+> **MeowPlayer 0.18.4 — the DJ cat now enters through the correct door.** 🐈‍⬛🚪🎚️
 
 ## What's new in 0.18.3 — The Cat Stopped Teleporting to Track One
 
