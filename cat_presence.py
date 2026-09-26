@@ -162,6 +162,18 @@ class CatPresence:
                 r" > ♫ <  streaming",
             ),
         ),
+        "Empty-Pawed": (
+            (
+                " /\\_/\\   ?",
+                r"( ._. )",
+                r" > ^ <  no stream",
+            ),
+            (
+                " /\\_/\\   ...",
+                r"( ;_; )",
+                r" > ^ <  empty paws",
+            ),
+        ),
         "Dancing": (
             (
                 " /\\_/\\  ▁▃▆",
@@ -212,6 +224,7 @@ class CatPresence:
         "DJ": "Two decks, four paws, zero formal DJ qualifications.",
         "Hunting": "The Internet Cat is following a suspicious packet trail.",
         "Headphones": "The Internet Cat has put on headphones and ignored local files.",
+        "Empty-Pawed": "The Internet Cat came back carrying absolutely nothing.",
         "Dancing": "The spectrum has been classified as prey.",
         "Judging": "One star detected. The cat would like the track to explain itself.",
         "Adoring": "Five stars detected. The cat has declared this legally excellent.",
@@ -225,6 +238,8 @@ class CatPresence:
 
         if snapshot.online and snapshot.online_state in {"resolving", "loading"}:
             return "Hunting"
+        if snapshot.online and snapshot.online_state == "failed":
+            return "Empty-Pawed"
         if snapshot.online:
             return "Headphones"
 
