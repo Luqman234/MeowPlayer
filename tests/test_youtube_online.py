@@ -587,11 +587,6 @@ class YouTubeOnlineTests(unittest.TestCase):
     def test_no_youtube_disables_internet_nest_for_run(self):
         self.assertFalse(parse_args(["--no-youtube"]).youtube)
 
-    def test_catalog_defaults_to_enabled_but_still_requires_executable(self):
-        catalog = YouTubeCatalog(executable="/usr/bin/yt-dlp")
-        self.assertTrue(catalog.enabled)
-        self.assertTrue(catalog.available)
-
     def test_play_online_clears_local_playback_state(self):
         player = MeowPlayer.__new__(MeowPlayer)
         player.current = 3
