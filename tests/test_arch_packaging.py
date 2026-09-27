@@ -30,8 +30,11 @@ class ArchPackagingTests(unittest.TestCase):
     def test_pkgbuild_exercises_tests_and_installs_wheel(self):
         text = self.text()
         self.assertIn("python -m unittest discover -s tests -v", text)
+        self.assertIn("rm -rf dist", text)
         self.assertIn("python -m build --wheel --no-isolation", text)
-        self.assertIn('python -m installer --destdir="$pkgdir"', text)
+        self.assertIn('local wheels=(dist/*.whl)', text)
+        self.assertIn('if (( ${#wheels[@]} != 1 )); then', text)
+        self.assertIn('python -m installer --destdir="$pkgdir" "${wheels[0]}"', text)
 
     def test_pkgbuild_declares_core_arch_dependencies(self):
         text = self.text()
