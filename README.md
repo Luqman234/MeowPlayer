@@ -14,7 +14,7 @@ No account is required. No proprietary cloud library is required. Your songs may
 
 The Arch package now installs the full desktop litter box—`mpv`, `yt-dlp`, `cava`, and `playerctl`—with `makepkg -si`.
 
-The cat is still not optional unless you invoke **Serious Mode**, which is less "remove cat" and more "ask the cat to put on a tie and stop yelling during the meeting."
+The cat is still not optional unless you invoke **Serious Mode**, which is less like "remove cat" and more like "ask the cat to put on a tie and stop yelling during the meeting."
 
 > 🐾 **Project doctrine:** local-first, keyboard-first, terminal-native, technically serious, catastrophically cat-themed.
 >
