@@ -1,7 +1,7 @@
 # Maintainer: Luqman234
 pkgname=meowplayer
 pkgver=0.19.1
-pkgrel=1
+pkgrel=2
 pkgdesc="A lightweight, aggressively cat-themed terminal music player powered by mpv"
 arch=('any')
 url="https://github.com/Luqman234/MeowPlayer"
@@ -10,6 +10,8 @@ license=('GPL-3.0-only')
 depends=(
   'python'
   'mpv'
+  'yt-dlp'
+  'cava'
   'python-mutagen'
   'python-dbus-next'
   'python-pillow'
@@ -25,8 +27,6 @@ makedepends=(
 )
 
 optdepends=(
-  'yt-dlp: Internet Nest, Creator Nest, online playback, and downloads'
-  'cava: terminal spectrum visualizer'
   'playerctl: command-line MPRIS control'
 )
 

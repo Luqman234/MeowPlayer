@@ -38,12 +38,18 @@ class ArchPackagingTests(unittest.TestCase):
         for package in (
             "python",
             "mpv",
+            "yt-dlp",
+            "cava",
             "python-mutagen",
             "python-dbus-next",
             "python-pillow",
             "python-watchdog",
         ):
             self.assertIn(f"'{package}'", text)
+
+        optdepends = text.split("optdepends=(", 1)[1].split(")", 1)[0]
+        self.assertNotIn("'yt-dlp:", optdepends)
+        self.assertNotIn("'cava:", optdepends)
 
 
 if __name__ == "__main__":
