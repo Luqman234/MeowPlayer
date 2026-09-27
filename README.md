@@ -2,7 +2,7 @@
 
 **A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
 
-**MeowPlayer 0.19.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+**MeowPlayer 0.19.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
 
 No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
 
@@ -11,7 +11,7 @@ No account is required. Your normal music library can remain ordinary files on d
 > If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.19.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.19.1 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -81,6 +81,31 @@ MeowPlayer tries to stay true to a few rules:
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Cat Presence | read-only mascot state engine, animated moods, DJ/headphones/hunting/judgment reactions |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.19.1 — The Cat Learned `makepkg`
+
+Arch users can now install MeowPlayer as a native pacman-managed package directly from the repository:
+
+```bash
+git clone https://github.com/Luqman234/MeowPlayer.git
+cd MeowPlayer
+makepkg -si
+```
+
+The repository ships a real `PKGBUILD`. It builds MeowPlayer as a Python wheel, runs the unit suite in `check()`, installs the wheel into the package root, and lets pacman own the resulting files.
+
+The package declares the core Arch dependencies needed by local playback and the desktop integration layer. Optional integrations remain optional:
+
+```text
+yt-dlp    → Internet Nest / Creator Nest / online playback
+cava      → spectrum visualizer
+playerctl → command-line MPRIS control
+kitty     → Kitty-compatible inline album art
+```
+
+The source used by the `PKGBUILD` is pinned to the exact v0.19.1 release-source commit instead of following moving `main`. CI also gets a dedicated Arch packaging job that performs the real `makepkg -si` workflow inside an Arch Linux container.
+
+> **MeowPlayer 0.19.1 — pacman has adopted the cat.** 🐈📦
 
 ## What's new in 0.19.0 — The Cat Became Sentient
 
@@ -2688,24 +2713,30 @@ Underneath the jokes, the normal presentation layer remains separated from playb
 
 ### Arch Linux
 
-Install the system runtime dependency and `pipx`:
+The native Arch path is now the shortest one:
+
+```bash
+sudo pacman -S --needed base-devel git
+git clone https://github.com/Luqman234/MeowPlayer.git
+cd MeowPlayer
+makepkg -si
+```
+
+`makepkg -si` resolves the declared Arch dependencies, builds the wheel, runs MeowPlayer's package checks, and installs a pacman-managed `meowplayer` package.
+
+Optional integrations can be added normally:
+
+```bash
+sudo pacman -S yt-dlp   # Internet Nest / Creator Nest / online playback
+sudo pacman -S cava     # spectrum visualizer
+sudo pacman -S playerctl
+```
+
+If you prefer an isolated `pipx` installation instead:
 
 ```bash
 sudo pacman -S mpv python-pipx
 pipx ensurepath
-
-# Optional dependency: enables Internet Nest automatically
-sudo pacman -S yt-dlp
-
-# Optional: make the bars wiggle
-sudo pacman -S cava
-```
-
-Clone and install:
-
-```bash
-git clone https://github.com/Luqman234/MeowPlayer.git
-cd MeowPlayer
 pipx install .
 ```
 
@@ -2748,7 +2779,15 @@ meowplayer --log-file /tmp/meowplayer-debug.log
 meowplayer --version
 ```
 
-Update an existing local `pipx` install:
+Update an existing Arch package built from this repository:
+
+```bash
+cd MeowPlayer
+git pull
+makepkg -si
+```
+
+For an existing local `pipx` install:
 
 ```bash
 cd MeowPlayer
