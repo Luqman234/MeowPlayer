@@ -1,14 +1,26 @@
 # MeowPlayer 🐱🎵
 
-**A terminal music player with suspiciously serious engineering and an entirely unnecessary cat.**
+**A terminal music player with suspiciously serious engineering and a cat who has somehow obtained commit access.**
 
-**MeowPlayer 0.19.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch synchronized or plain lyrics, MusicBrainz can fill missing metadata, and the cat takes credit for all of it.
+```text
+ /_/\
+( o.o )   "I checked the playback engine."
+ > ^ <    "No you did not."
+```
 
-No account is required. Your normal music library can remain ordinary files on disk. Online features are optional. The cat is not optional unless you invoke **Serious Mode**, which is legally distinct from making the cat leave.
+**MeowPlayer 0.19.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch lyrics, MusicBrainz can investigate missing metadata, and a small cat stands nearby claiming architectural ownership.
+
+No account is required. No proprietary cloud library is required. Your songs may continue being ordinary files that live on your disk like civilized audio.
+
+The Arch package now installs the full desktop litter box—`mpv`, `yt-dlp`, `cava`, and `playerctl`—with `makepkg -si`.
+
+The cat is still not optional unless you invoke **Serious Mode**, which is less "remove cat" and more "ask the cat to put on a tie and stop yelling during the meeting."
 
 > 🐾 **Project doctrine:** local-first, keyboard-first, terminal-native, technically serious, catastrophically cat-themed.
 >
-> If a feature can be engineered properly, it should be. If that same feature can also be called **The Catnip Stash**, apparently it will be.
+> If a feature can be engineered properly, it should be.
+>
+> If that same feature can also be called **The Catnip Stash**, then unfortunately the naming committee has already reached quorum.
 
 ```text
  /\_/\   ♫ MEOWPLAYER v0.19.1 — Purring
@@ -25,13 +37,18 @@ Music Nest / Songs — 842 meow(s)
 🐾 Space Song — Beach House · Depression Cherry · Dream Pop · ★★★★☆ · 05:20
 ```
 
-### The short version — before the cat turns this README into a thesis
+### The short version — before the cat sits on Page Down
 
-MeowPlayer started from a simple idea:
+MeowPlayer started from a beautifully restrained engineering specification:
 
 ```text
-find music → play music → add cat
+1. find music
+2. play music
+3. add cat
+4. STOP ADDING FEATURES
 ```
+
+Step 4 experienced a severe and ongoing implementation failure.
 
 It then made several questionable architectural decisions:
 
@@ -57,7 +74,16 @@ let the user pet the cat
 
 The result is still supposed to feel like a terminal music player: fast to launch, keyboard-driven, local-first, readable, hackable, and comfortable living next to `git`, `ssh`, and whatever other crimes are occurring in your shell.
 
-### The Cat Constitution — six laws written in paw ink
+```text
+$ meowplayer
+ /_/\
+( ^.^ )   your shell now contains one additional process
+ > ♫ <    and approximately 34% more cat
+```
+
+### The Cat Constitution — six laws written in paw ink and one suspicious hair
+
+The cat attempted to add Article VII: "all keyboards are beds." It was vetoed.
 
 MeowPlayer tries to stay true to a few rules:
 
@@ -68,7 +94,7 @@ MeowPlayer tries to stay true to a few rules:
 - **Your audio files are not secretly rewritten.** Online metadata and downloaded lyrics live in MeowPlayer's own cache/catalog unless you create sidecar files yourself.
 - **Serious Mode remains a first-class citizen.** The application can remove most cat presentation without removing actual features.
 
-### What lives under the fur — an alarming amount of software
+### What lives under the fur — please do not X-ray the cat
 
 | Area | What MeowPlayer actually uses |
 | --- | --- |
@@ -92,18 +118,20 @@ cd MeowPlayer
 makepkg -si
 ```
 
-The repository ships a real `PKGBUILD`. It builds MeowPlayer as a Python wheel, runs the unit suite in `check()`, installs the wheel into the package root, and lets pacman own the resulting files.
+The repository ships a real `PKGBUILD`. It builds MeowPlayer as a Python wheel, runs the unit suite in `check()`, installs the wheel into the package root, and lets pacman become the cat's legal guardian.
 
-The package declares the core Arch dependencies needed by local playback and the desktop integration layer. Optional integrations remain optional:
+The current Arch package installs the complete desktop stack as required dependencies:
 
 ```text
-yt-dlp    → Internet Nest / Creator Nest / online playback
-cava      → spectrum visualizer
-playerctl → command-line MPRIS control
-kitty     → Kitty-compatible inline album art
+mpv       → makes sound happen
+yt-dlp    → lets Internet Cat leave the house
+cava      → makes terminal bars wiggle dramatically
+playerctl → gives the cat limited desktop bureaucracy powers
 ```
 
-The source used by the `PKGBUILD` is pinned to the exact v0.19.1 release-source commit instead of following moving `main`. CI also gets a dedicated Arch packaging job that performs the real `makepkg -si` workflow inside an Arch Linux container.
+`kitty` remains a terminal capability rather than a hard package requirement; when supported, MeowPlayer can use it for inline album art.
+
+The source used by the `PKGBUILD` is pinned to the exact v0.19.1 release-source commit instead of following moving `main`. CI also performs the literal `makepkg -si` workflow inside an Arch Linux container, because "works on my cat" is not a recognized packaging standard.
 
 > **MeowPlayer 0.19.1 — pacman has adopted the cat.** 🐈📦
 
@@ -2709,9 +2737,9 @@ In other words, editing `~/.config/meowplayer/config.json` by hand is still allo
 
 Underneath the jokes, the normal presentation layer remains separated from playback state. Random Cat Incidents do not get permission to reorder playback, mutate ratings, alter music files, or rewrite Smart Mix rules. The only exception is the explicitly requested malicious playback family: `--bad-bad-cat`, `--very-bad-cat`, and `--dangerous-cat`.
 
-## Quick start — summon the cat
+## Quick start — open the cardboard box
 
-### Arch Linux
+### Arch Linux — pacman adopts a stray
 
 The native Arch path is now the shortest one:
 
@@ -2723,6 +2751,12 @@ makepkg -si
 ```
 
 `makepkg -si` resolves the declared Arch dependencies, builds the wheel, runs MeowPlayer's package checks, and installs a pacman-managed `meowplayer` package.
+
+```text
+makepkg: building...
+pacman:  installing...
+cat:     already sitting in ~/.cache for reasons nobody authorized
+```
 
 The Arch package now treats `mpv`, `yt-dlp`, `cava`, and `playerctl` as required runtime dependencies, so `makepkg -si` installs the complete local + Internet Nest + visualizer + desktop media-control experience automatically.
 
@@ -2830,7 +2864,7 @@ Keep the repository itself in Termux's private home directory; shared storage is
 
 MPRIS is intentionally disabled on Termux because a normal Linux desktop D-Bus session is usually unavailable there.
 
-## Requirements — food, water, mpv, and one emotionally invested cat
+## Requirements — food, water, mpv, and legally excessive cat infrastructure
 
 - Python **3.10+**
 - `mpv`
@@ -2846,7 +2880,7 @@ MPRIS is intentionally disabled on Termux because a normal Linux desktop D-Bus s
 
 Python dependencies live in `pyproject.toml` and are installed by normal `pip` / `pipx` installation.
 
-> 🐾 **Cat translation:** install the dependencies once so the cat does not have to discover `ImportError` live on stage.
+> 🐾 **Cat translation:** install the dependencies once so the cat does not discover `ImportError` live on stage and immediately blame Python.
 
 If Mutagen is unavailable, MeowPlayer can still discover and play files using filename/folder fallbacks, but rich metadata and cached duration will naturally be worse.
 
@@ -3929,7 +3963,7 @@ So Settings Nest is not a second configuration system. It is simply a TUI editor
 
 > **The cat may now edit configuration. The cat still does not get arbitrary JSON access.**
 
-## Persistent config and state — because the cat has a memory now, unfortunately
+## Persistent config and state — the cat remembers. this was a mistake.
 
 MeowPlayer follows the XDG base-directory layout.
 
@@ -3986,7 +4020,7 @@ State is written periodically and again during shutdown.
 
 Session restore loads the saved track at its saved position **paused**. Launching MeowPlayer is not supposed to surprise the entire room with whatever you were listening to at 02:17 yesterday.
 
-## MPRIS and media keys — the cat gains limited desktop privileges
+## MPRIS and media keys — the cat receives a tiny government position
 
 On Linux desktops, MeowPlayer exposes:
 
@@ -4206,7 +4240,7 @@ The mascot reacts to player state because apparently “idle-active=false” was
 
 Serious Mode translates most of the visible vocabulary back into something fit for a project-management meeting.
 
-## Architecture — far too much engineering for a cat
+## Architecture — an irresponsible amount of engineering underneath three ASCII whiskers
 
 ```text
                            LOCAL MUSIC FILES
@@ -4267,7 +4301,7 @@ Serious Mode translates most of the visible vocabulary back into something fit f
                    terminal UI              playerctl/media keys
 ```
 
-### Responsibility boundaries — who is responsible when the cat denies everything
+### Responsibility boundaries — formal blame allocation after the cat leaves the room
 
 - **Python / MeowPlayer** owns the UI, library model, queue, Pounce Bag, ratings, Pawmarks, Smart Mixes, persistence, lyrics state, search, metadata merge policy, and gapless scheduling decisions.
 - **mpv** owns decoding, actual audio output, seeking, ReplayGain processing, and the final handoff between primed playlist entries.
@@ -4284,11 +4318,11 @@ Most importantly, the cat-chaos presentation layer sits **above** these systems 
 
 In architectural terms: the jokes may observe the machine. The jokes do not get database write access just because the footer announced a CAT INCIDENT.
 
-## Build packages — put the cat in a wheel (and an sdist)
+## Build packages — put the cat in a wheel (please interpret this as Python packaging)
 
 Install the build frontend:
 
-The cat has requested reproducible packaging and a cardboard box. Only one of those ships to PyPI.
+The cat requested reproducible packaging, a cardboard box, and removal of the phrase "source distribution" from human language. Two requests were denied.
 
 ```bash
 python -m pip install build
@@ -4314,7 +4348,7 @@ The installed CLI is still:
 meowplayer
 ```
 
-## Project structure — anatomy of the creature
+## Project structure — which file do I blame when the cat does something
 
 ```text
 MeowPlayer/
@@ -4361,7 +4395,7 @@ There is a non-zero amount of code whose purpose is to make a cat react to volum
 
 There is also a non-zero amount of code ensuring that the code which makes the cat react to volume does not break gapless playback. This project has priorities.
 
-## Development and tests — prove the cat still works
+## Development and tests — trust, but verify the cat did not touch playback
 
 Compile first-party modules:
 
@@ -4393,11 +4427,11 @@ Build the package:
 python -m build
 ```
 
-### CI — Continuous Inspection by Cat
+### CI — Continuous Inspection by Cat (the cat is not the approver)
 
 The lightweight package-smoke workflow checks the normal packaging path.
 
-The cat is not trusted to declare a release “probably fine.”
+The cat is not trusted to declare a release “probably fine.” The cat's previous QA methodology was sitting on the keyboard until GitHub turned green.
 
 ```text
 compile
@@ -4429,7 +4463,7 @@ The goal is not to prove that the jokes are funny. The goal is to prove that add
 
 A failed joke is survivable. A broken queue is an incident.
 
-## Roadmap — possible future crimes, pending feline review
+## Roadmap — future crimes currently being considered by the feline board
 
 Ideas, not promises. The cat is not allowed to convert bullet points into contractual obligations:
 
@@ -4449,13 +4483,44 @@ Ideas, not promises. The cat is not allowed to convert bullet points into contra
 
 A future feature has to fit the project's identity: **terminal-native, local-first, keyboard-first, and capable of being used seriously even if a cat is currently filing a bug report against gravity.**
 
-## License — the only adult still in the room
+## License — the only adult in the repository
 
 MeowPlayer is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
 
 The README may call a queue "The Catnip Stash." The license, mercifully, does not.
 
 The cat has attempted to rename GPLv3 to the **General Purring License**. Legal rejected the patch.
+
+```text
+CAT:   but it says GPL
+LEGAL: yes
+CAT:   General Purring License
+LEGAL: no
+CAT:   merge anyway?
+LEGAL: absolutely not
+```
+
+## Mandatory mid-README cat inspection
+
+You have been reading technical documentation for suspiciously long.
+
+```text
+      /\_/\
+     ( o.o )
+      > ^ <
+     /     \
+    /|     |\
+
+INSPECTION RESULT:
+[✓] music player still music player
+[✓] local files still yours
+[✓] queue not eaten
+[✓] SQLite still remembers too much
+[✓] cat still has no production database credentials
+[?] why are you still reading this
+```
+
+You may continue.
 
 ## Why "MeowPlayer"? — because "mpv-but-a-cat-keeps-commenting" was too long
 
