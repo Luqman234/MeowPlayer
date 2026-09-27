@@ -2724,13 +2724,7 @@ makepkg -si
 
 `makepkg -si` resolves the declared Arch dependencies, builds the wheel, runs MeowPlayer's package checks, and installs a pacman-managed `meowplayer` package.
 
-The Arch package now treats `mpv`, `yt-dlp`, and `cava` as required runtime dependencies, so `makepkg -si` installs the complete local + Internet Nest + visualizer experience automatically.
-
-`playerctl` remains optional for command-line MPRIS control:
-
-```bash
-sudo pacman -S playerctl
-```
+The Arch package now treats `mpv`, `yt-dlp`, `cava`, and `playerctl` as required runtime dependencies, so `makepkg -si` installs the complete local + Internet Nest + visualizer + desktop media-control experience automatically.
 
 If you prefer an isolated `pipx` installation instead:
 

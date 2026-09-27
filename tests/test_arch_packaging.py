@@ -40,6 +40,7 @@ class ArchPackagingTests(unittest.TestCase):
             "mpv",
             "yt-dlp",
             "cava",
+            "playerctl",
             "python-mutagen",
             "python-dbus-next",
             "python-pillow",
@@ -47,9 +48,7 @@ class ArchPackagingTests(unittest.TestCase):
         ):
             self.assertIn(f"'{package}'", text)
 
-        optdepends = text.split("optdepends=(", 1)[1].split(")", 1)[0]
-        self.assertNotIn("'yt-dlp:", optdepends)
-        self.assertNotIn("'cava:", optdepends)
+        self.assertNotIn("optdepends=(", text)
 
 
 if __name__ == "__main__":
