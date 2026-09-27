@@ -1,0 +1,45 @@
+name: Arch makepkg
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  makepkg:
+    name: makepkg -si / Arch Linux
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Bootstrap Arch tooling
+        run: pacman -Syu --noconfirm git sudo
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare unprivileged makepkg user
+        shell: bash
+        run: |
+          useradd --create-home builder
+          printf '%s\n' 'builder ALL=(ALL) NOPASSWD: /usr/bin/pacman' > /etc/sudoers.d/meowplayer-builder
+          chmod 0440 /etc/sudoers.d/meowplayer-builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Build, check, resolve dependencies, and install
+        shell: bash
+        run: |
+          runuser -u builder -- bash -lc "cd '$GITHUB_WORKSPACE' && makepkg -si --noconfirm"
+
+      - name: Verify pacman owns MeowPlayer
+        shell: bash
+        run: |
+          pacman -Q meowplayer
+          pacman -Qo /usr/bin/meowplayer
+
+      - name: Verify installed CLI version
+        shell: bash
+        run: |
+          meowplayer --version | grep -F '0.19.1'
