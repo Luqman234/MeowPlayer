@@ -3,7 +3,7 @@
 **A terminal music player with suspiciously serious engineering and a cat who has somehow obtained commit access.**
 
 ```text
- /_/\
+ /\_/\
 ( o.o )   "I checked the playback engine."
  > ^ <    "No you did not."
 ```
@@ -76,7 +76,7 @@ The result is still supposed to feel like a terminal music player: fast to launc
 
 ```text
 $ meowplayer
- /_/\
+ /\_/\
 ( ^.^ )   your shell now contains one additional process
  > ♫ <    and approximately 34% more cat
 ```
