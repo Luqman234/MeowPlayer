@@ -2070,7 +2070,10 @@ class MeowPlayer:
             elif action == "play_pause":
                 if self.online_current is not None:
                     if bool(self.mpv.get_property("idle-active")):
-                        self.play_online(self.online_current)
+                        self.play_online(
+                            self.online_current,
+                            preserve_playlist=True,
+                        )
                     else:
                         self.mpv.toggle_pause()
                 elif self.current is None:
@@ -4568,6 +4571,11 @@ class MeowPlayer:
         return True
 
     def next_song(self, automatic=False):
+        if self.online_current is not None:
+            if self.online_playlist_next() is not None:
+                self.advance_online_playlist()
+            return
+
         if not self.songs:
             return
 
