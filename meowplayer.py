@@ -3813,8 +3813,10 @@ class MeowPlayer:
             else dict(getattr(self.mpv, "playback_events", {}))
         )
         sent = float(getattr(self, "_online_load_sent", 0.0) or 0.0)
+        end_event = float(events.get("end-file", 0.0) or 0.0)
         ended = (
-            events.get("end-file", 0) >= sent
+            sent > 0.0
+            and end_event >= sent
             and events.get("end-reason") == "eof"
         )
 
