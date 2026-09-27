@@ -4500,9 +4500,9 @@ CAT:   merge anyway?
 LEGAL: absolutely not
 ```
 
-## Mandatory mid-README cat inspection
+## Mandatory pre-exit cat inspection
 
-You have been reading technical documentation for suspiciously long.
+You have survived an irresponsible quantity of technical documentation.
 
 ```text
       /\_/\
