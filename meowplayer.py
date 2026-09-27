@@ -4573,7 +4573,7 @@ class MeowPlayer:
         return True
 
     def next_song(self, automatic=False):
-        if self.online_current is not None:
+        if getattr(self, "online_current", None) is not None:
             if self.online_playlist_next() is not None:
                 self.advance_online_playlist()
             return
