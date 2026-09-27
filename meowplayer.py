@@ -79,7 +79,7 @@ from youtube_online import (
 )
 
 
-__version__ = "0.19.1"
+__version__ = "0.20.0"
 
 
 LOGGER = logging.getLogger("meowplayer")
@@ -91,6 +91,7 @@ SUPPORTED_EXTENSIONS = {
     ".wav", ".m4a", ".aac", ".wma"
 }
 ONLINE_RETRY_GUARD_SECONDS = 8.0
+ONLINE_PLAYLIST_PREFETCH_SECONDS = 20.0
 
 LIBRARY_VIEWS = (
     "songs",
@@ -967,6 +968,11 @@ class MeowPlayer:
         self.online_current = None
         self.online_load_state = "idle"
         self.online_load_started_at = 0.0
+        self.online_playlist_tracks = []
+        self.online_playlist_index = None
+        self.online_playlist_title = ""
+        self._online_playlist_prefetch_video_id = None
+        self._online_playlist_prefetch_future = None
         self.saved_state = saved_state or {}
         self.app_config = dict(app_config or {})
         self.settings_selected = 0
@@ -2044,7 +2050,10 @@ class MeowPlayer:
             elif action == "play":
                 if self.online_current is not None:
                     if bool(self.mpv.get_property("idle-active")):
-                        self.play_online(self.online_current)
+                        self.play_online(
+                            self.online_current,
+                            preserve_playlist=True,
+                        )
                     else:
                         self.mpv.play()
                 elif self.current is None:
@@ -2061,7 +2070,10 @@ class MeowPlayer:
             elif action == "play_pause":
                 if self.online_current is not None:
                     if bool(self.mpv.get_property("idle-active")):
-                        self.play_online(self.online_current)
+                        self.play_online(
+                            self.online_current,
+                            preserve_playlist=True,
+                        )
                     else:
                         self.mpv.toggle_pause()
                 elif self.current is None:
@@ -3675,9 +3687,181 @@ class MeowPlayer:
             )
         return True
 
-    def play_online(self, track, now=None):
+    def clear_online_playlist_context(self):
+        self.online_playlist_tracks = []
+        self.online_playlist_index = None
+        self.online_playlist_title = ""
+        self._online_playlist_prefetch_video_id = None
+        self._online_playlist_prefetch_future = None
+
+    def set_online_playlist_context(self, tracks, index, title=""):
+        tracks = list(tracks or [])
+        if not tracks:
+            self.clear_online_playlist_context()
+            return False
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            self.clear_online_playlist_context()
+            return False
+        if index < 0 or index >= len(tracks):
+            self.clear_online_playlist_context()
+            return False
+        if not all(hasattr(track, "video_id") for track in tracks):
+            self.clear_online_playlist_context()
+            return False
+
+        self.online_playlist_tracks = tracks
+        self.online_playlist_index = index
+        self.online_playlist_title = str(title or "")
+        self._online_playlist_prefetch_video_id = None
+        self._online_playlist_prefetch_future = None
+        return True
+
+    def online_playlist_next(self):
+        tracks = getattr(self, "online_playlist_tracks", None) or []
+        index = getattr(self, "online_playlist_index", None)
+        if index is None:
+            return None
+        next_index = index + 1
+        if next_index >= len(tracks):
+            return None
+        return next_index, tracks[next_index]
+
+    def prefetch_online_playlist_next(self):
+        next_item = self.online_playlist_next()
+        resolver = getattr(self, "stream_resolver", None)
+        if next_item is None or resolver is None:
+            return False
+
+        _, track = next_item
+        if (
+            getattr(self, "_online_playlist_prefetch_video_id", None)
+            == track.video_id
+        ):
+            return False
+
+        self._online_playlist_prefetch_video_id = track.video_id
+        self._online_playlist_prefetch_future = resolver.request(
+            track,
+            prefetch=True,
+            debounce=0.0,
+        )
+        LOGGER.debug(
+            "YT_PLAYLIST_PREFETCH queued video_id=%s threshold=%.1fs",
+            track.video_id,
+            ONLINE_PLAYLIST_PREFETCH_SECONDS,
+        )
+        self.set_status(
+            f"Preparing next playlist track: {track.artist_title}",
+            (
+                "The internet cat is pre-sniffing the next playlist meow "
+                f"20 seconds early: {track.artist_title}"
+            ),
+        )
+        return True
+
+    def advance_online_playlist(self, now=None):
+        next_item = self.online_playlist_next()
+        if next_item is None:
+            return False
+
+        next_index, track = next_item
+        tracks = list(self.online_playlist_tracks)
+        title = self.online_playlist_title
+        return self.play_online(
+            track,
+            now=now,
+            playlist_tracks=tracks,
+            playlist_index=next_index,
+            playlist_title=title,
+            automatic=True,
+        )
+
+    def process_online_playlist_streaming(self, now=None):
+        if (
+            self.online_current is None
+            or self.online_load_state != "streaming"
+            or not getattr(self, "online_playlist_tracks", None)
+            or getattr(self, "online_playlist_index", None) is None
+        ):
+            return False
+
+        changed = False
+        next_item = self.online_playlist_next()
+
+        if next_item is not None:
+            try:
+                duration = float(
+                    self.mpv.get_property("duration")
+                    or self.online_current.duration
+                    or 0.0
+                )
+                position = float(self.mpv.get_property("time-pos") or 0.0)
+            except (TypeError, ValueError):
+                duration = 0.0
+                position = 0.0
+
+            if duration > 0 and position >= 0:
+                remaining = max(0.0, duration - position)
+                if remaining <= ONLINE_PLAYLIST_PREFETCH_SECONDS:
+                    changed = self.prefetch_online_playlist_next() or changed
+
+        events = (
+            self.mpv.playback_snapshot()
+            if hasattr(self.mpv, "playback_snapshot")
+            else dict(getattr(self.mpv, "playback_events", {}))
+        )
+        sent = float(getattr(self, "_online_load_sent", 0.0) or 0.0)
+        end_event = float(events.get("end-file", 0.0) or 0.0)
+        ended = (
+            sent > 0.0
+            and end_event >= sent
+            and events.get("end-reason") == "eof"
+        )
+
+        if not ended:
+            return changed
+
+        if next_item is not None:
+            LOGGER.info(
+                "Auto-advancing online playlist from=%s to=%s index=%s",
+                self.online_current.video_id,
+                next_item[1].video_id,
+                next_item[0],
+            )
+            return self.advance_online_playlist(now=now) or changed
+
+        self.online_load_state = "idle"
+        playlist = self.online_playlist_title or "online playlist"
+        self.set_status(
+            f"Finished playlist: {playlist}",
+            f"The internet cat reached the bottom of {playlist} and found no more meows.",
+        )
+        return True
+
+    def play_online(
+        self,
+        track,
+        now=None,
+        *,
+        playlist_tracks=None,
+        playlist_index=None,
+        playlist_title="",
+        preserve_playlist=False,
+        automatic=False,
+    ):
         if track is None:
             return False
+
+        if playlist_tracks is not None:
+            self.set_online_playlist_context(
+                playlist_tracks,
+                playlist_index,
+                playlist_title,
+            )
+        elif not preserve_playlist:
+            self.clear_online_playlist_context()
 
         self.cancel_crossfade()
         timestamp = time.monotonic() if now is None else float(now)
@@ -3724,11 +3908,14 @@ class MeowPlayer:
             )
 
         LOGGER.info(
-            "Starting online playback video_id=%s title=%r artist=%r url=%s",
+            "Starting online playback video_id=%s title=%r artist=%r url=%s automatic=%s playlist=%s index=%s",
             track.video_id,
             track.title,
             track.artist,
             track.url,
+            automatic,
+            bool(getattr(self, "online_playlist_tracks", None)),
+            getattr(self, "online_playlist_index", None),
         )
 
         self.online_current = track
@@ -3813,6 +4000,8 @@ class MeowPlayer:
             return False
         if self.online_load_state == "resolving":
             return self._finish_online_resolve()
+        if self.online_load_state == "streaming":
+            return self.process_online_playlist_streaming(now=now)
         if self.online_load_state != "loading":
             return False
         timestamp = time.monotonic() if now is None else float(now)
@@ -3916,7 +4105,10 @@ class MeowPlayer:
             0,
             min(self.youtube_selected, len(self.youtube_results) - 1),
         )
-        return self.play_online(self.youtube_results[self.youtube_selected])
+        return self.play_online(
+            self.youtube_results[self.youtube_selected],
+            preserve_playlist=False,
+        )
 
     def download_youtube_track(self, track):
         if track is None:
@@ -4094,7 +4286,19 @@ class MeowPlayer:
         item = self.creator_items[self.creator_selected]
         if self.creator_level == "playlists":
             return self.start_creator_browse("playlist", item)
-        return self.play_online(item)
+        if self.creator_level == "playlist":
+            title = (
+                self.creator_playlist.title
+                if self.creator_playlist is not None
+                else ""
+            )
+            return self.play_online(
+                item,
+                playlist_tracks=list(self.creator_items),
+                playlist_index=self.creator_selected,
+                playlist_title=title,
+            )
+        return self.play_online(item, preserve_playlist=False)
 
     def download_selected_creator_track(self):
         if (
@@ -4190,6 +4394,7 @@ class MeowPlayer:
         self._online_future = None
         self.online_load_state = "idle"
         self.online_load_started_at = 0.0
+        self.clear_online_playlist_context()
 
         reset_shuffle_bag = False
         if not preserve_sequence:
@@ -4368,6 +4573,11 @@ class MeowPlayer:
         return True
 
     def next_song(self, automatic=False):
+        if getattr(self, "online_current", None) is not None:
+            if self.online_playlist_next() is not None:
+                self.advance_online_playlist()
+            return
+
         if not self.songs:
             return
 
