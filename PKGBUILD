@@ -1,7 +1,7 @@
 # Maintainer: Luqman234
 pkgname=meowplayer
-pkgver=0.19.1
-pkgrel=3
+pkgver=0.20.0
+pkgrel=1
 pkgdesc="A lightweight, aggressively cat-themed terminal music player powered by mpv"
 arch=('any')
 url="https://github.com/Luqman234/MeowPlayer"
@@ -27,7 +27,7 @@ makedepends=(
   'python-wheel'
 )
 
-_commit='eb2d459a0a2488faadf8d338ead8678ca6e83a08'
+_commit='da710735c0ac7bae56bc61edde3e6890a3cc273f'
 source=("$pkgname::git+$url.git#commit=$_commit")
 sha256sums=('SKIP')
 
