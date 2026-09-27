@@ -49,6 +49,16 @@ class FakeMPV:
         return self.properties.get(name)
 
 
+class FakeResolver:
+    def __init__(self):
+        self.requests = []
+
+    def request(self, track, *, prefetch=False, debounce=0.0):
+        future = mock.Mock()
+        self.requests.append((track, prefetch, debounce, future))
+        return future
+
+
 class _PromptScreen:
     def __init__(self, keys, width=24, height=12):
         self.keys = list(keys)
@@ -794,6 +804,127 @@ class YouTubeOnlineTests(unittest.TestCase):
 
     def test_no_youtube_disables_internet_nest_for_run(self):
         self.assertFalse(parse_args(["--no-youtube"]).youtube)
+
+    def test_creator_playlist_playback_snapshots_playlist_context(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        first = YouTubeTrack("p1", "One", "Cat", 120, "https://youtube.com/watch?v=p1")
+        second = YouTubeTrack("p2", "Two", "Cat", 120, "https://youtube.com/watch?v=p2")
+        player.creator_level = "playlist"
+        player.creator_items = [first, second]
+        player.creator_selected = 0
+        player.creator_playlist = SimpleNamespace(title="Cat Album")
+        player.play_online = mock.Mock(return_value=True)
+
+        self.assertTrue(player.activate_creator_selection())
+
+        player.play_online.assert_called_once_with(
+            first,
+            playlist_tracks=[first, second],
+            playlist_index=0,
+            playlist_title="Cat Album",
+        )
+
+    def test_online_playlist_prefetch_starts_at_twenty_seconds_remaining(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        first = YouTubeTrack("p1", "One", "Cat", 200, "https://youtube.com/watch?v=p1")
+        second = YouTubeTrack("p2", "Two", "Cat", 200, "https://youtube.com/watch?v=p2")
+        player.online_current = first
+        player.online_load_state = "streaming"
+        player.online_playlist_tracks = [first, second]
+        player.online_playlist_index = 0
+        player.online_playlist_title = "Cat Album"
+        player._online_playlist_prefetch_video_id = None
+        player._online_playlist_prefetch_future = None
+        player._online_load_sent = 10.0
+        player.stream_resolver = FakeResolver()
+        player.mpv = FakeMPV()
+        player.mpv.playback_events = {}
+        player.set_status = lambda *args: None
+
+        player.mpv.properties["duration"] = 200.0
+        player.mpv.properties["time-pos"] = 179.9
+        self.assertFalse(player.process_online_playlist_streaming())
+        self.assertEqual(player.stream_resolver.requests, [])
+
+        player.mpv.properties["time-pos"] = 180.0
+        self.assertTrue(player.process_online_playlist_streaming())
+
+        self.assertEqual(len(player.stream_resolver.requests), 1)
+        track, prefetch, debounce, _ = player.stream_resolver.requests[0]
+        self.assertIs(track, second)
+        self.assertTrue(prefetch)
+        self.assertEqual(debounce, 0.0)
+
+        self.assertFalse(player.process_online_playlist_streaming())
+        self.assertEqual(len(player.stream_resolver.requests), 1)
+
+    def test_standalone_online_track_never_prefetches_a_next_song(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        track = YouTubeTrack("solo", "Solo", "Cat", 200, "https://youtube.com/watch?v=solo")
+        player.online_current = track
+        player.online_load_state = "streaming"
+        player.online_playlist_tracks = []
+        player.online_playlist_index = None
+        player.stream_resolver = FakeResolver()
+        player.mpv = FakeMPV()
+        player.mpv.properties["duration"] = 200.0
+        player.mpv.properties["time-pos"] = 199.0
+
+        self.assertFalse(player.process_online_playlist_streaming())
+        self.assertEqual(player.stream_resolver.requests, [])
+
+    def test_online_playlist_eof_advances_to_next_track(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        first = YouTubeTrack("p1", "One", "Cat", 200, "https://youtube.com/watch?v=p1")
+        second = YouTubeTrack("p2", "Two", "Cat", 200, "https://youtube.com/watch?v=p2")
+        player.online_current = first
+        player.online_load_state = "streaming"
+        player.online_playlist_tracks = [first, second]
+        player.online_playlist_index = 0
+        player.online_playlist_title = "Cat Album"
+        player._online_playlist_prefetch_video_id = second.video_id
+        player._online_playlist_prefetch_future = mock.Mock()
+        player._online_load_sent = 10.0
+        player.stream_resolver = FakeResolver()
+        player.mpv = FakeMPV()
+        player.mpv.playback_events = {"end-file": 15.0, "end-reason": "eof"}
+        player.advance_online_playlist = mock.Mock(return_value=True)
+        player.set_status = lambda *args: None
+
+        self.assertTrue(player.process_online_playlist_streaming(now=15.1))
+        player.advance_online_playlist.assert_called_once_with(now=15.1)
+
+    def test_online_playlist_last_track_stops_without_wrapping(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        last = YouTubeTrack("last", "Last", "Cat", 200, "https://youtube.com/watch?v=last")
+        player.online_current = last
+        player.online_load_state = "streaming"
+        player.online_playlist_tracks = [last]
+        player.online_playlist_index = 0
+        player.online_playlist_title = "One Track Album"
+        player._online_load_sent = 10.0
+        player.mpv = FakeMPV()
+        player.mpv.playback_events = {"end-file": 15.0, "end-reason": "eof"}
+        statuses = []
+        player.set_status = lambda serious, cat: statuses.append((serious, cat))
+
+        self.assertTrue(player.process_online_playlist_streaming(now=15.1))
+        self.assertEqual(player.online_load_state, "idle")
+        self.assertIn("Finished playlist", statuses[-1][0])
+
+    def test_manual_next_stays_inside_active_online_playlist(self):
+        player = MeowPlayer.__new__(MeowPlayer)
+        first = YouTubeTrack("p1", "One", "Cat", 200, "https://youtube.com/watch?v=p1")
+        second = YouTubeTrack("p2", "Two", "Cat", 200, "https://youtube.com/watch?v=p2")
+        player.online_current = first
+        player.online_playlist_tracks = [first, second]
+        player.online_playlist_index = 0
+        player.advance_online_playlist = mock.Mock(return_value=True)
+        player.songs = [Path("/music/local.flac")]
+
+        player.next_song()
+
+        player.advance_online_playlist.assert_called_once_with()
 
     def test_play_online_clears_local_playback_state(self):
         player = MeowPlayer.__new__(MeowPlayer)
