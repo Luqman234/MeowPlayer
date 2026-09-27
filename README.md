@@ -8,7 +8,7 @@
  > ^ <    "No you did not."
 ```
 
-**MeowPlayer 0.19.1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch lyrics, MusicBrainz can investigate missing metadata, and a small cat stands nearby claiming architectural ownership.
+**MeowPlayer 0.20.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch lyrics, MusicBrainz can investigate missing metadata, and a small cat stands nearby claiming architectural ownership.
 
 No account is required. No proprietary cloud library is required. Your songs may continue being ordinary files that live on your disk like civilized audio.
 
@@ -23,7 +23,7 @@ The cat is still not optional unless you invoke **Serious Mode**, which is less 
 > If that same feature can also be called **The Catnip Stash**, then unfortunately the naming committee has already reached quorum.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.19.1 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.20.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -98,7 +98,7 @@ MeowPlayer tries to stay true to a few rules:
 
 | Area | What MeowPlayer actually uses |
 | --- | --- |
-| Playback | `mpv` JSON IPC, gapless priming, optional two-deck equal-power crossfade, ReplayGain, optional yt-dlp online streams |
+| Playback | `mpv` JSON IPC, gapless priming, optional two-deck equal-power crossfade, ReplayGain, yt-dlp online streams + playlist auto-advance/pre-resolve |
 | Library | SQLite **Cat Catalog**, recursive scanning, Watchdog/inotify |
 | Metadata | Mutagen locally, optional MusicBrainz enrichment for missing fields |
 | Lyrics | sidecar/embedded lyrics + optional LRCLIB synchronized/plain lookup |
@@ -107,6 +107,56 @@ MeowPlayer tries to stay true to a few rules:
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Cat Presence | read-only mascot state engine, animated moods, DJ/headphones/hunting/judgment reactions |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.20.0 — The Internet Cat Learns What Comes Next
+
+Online playback can now continue automatically — **but only when you deliberately start a track from an opened online playlist or album**.
+
+The rule is intentionally narrow:
+
+```text
+single search result    → play once → stop
+Creator Nest upload     → play once → stop
+opened playlist / album → play track → next track → next track → stop at end
+```
+
+MeowPlayer snapshots the playlist when playback starts. Browsing somewhere else afterward does not silently rewrite the active online sequence.
+
+### The twenty-second head start
+
+Online playback cannot promise local-file latency: resolving a YouTube entry through yt-dlp and opening its direct media URL takes real network time.
+
+So when an online playlist track reaches **20 seconds remaining**, the Internet Cat quietly asks the existing stream resolver for the next item:
+
+```text
+current track
+█████████████████████████████░░░░
+                           20s
+                            │
+                            ▼
+                 resolve next track now
+                            │
+                            ▼
+             session-only ResolvedStream cache
+                            │
+EOF ────────────────────────┘
+                            ▼
+                 load cached direct URL
+```
+
+What is cached is the resolved direct stream URL, extractor-supplied HTTP headers, format ID, and expiry metadata. MeowPlayer does **not** download the next song to disk.
+
+The resolver cache is memory-only, bounded, and expiry-aware. Quitting MeowPlayer destroys it.
+
+### EOF means next, not surprise shuffle
+
+At natural EOF, an active online playlist advances to its next snapshot entry. The final item stops normally instead of wrapping to the beginning.
+
+Manual **Next** while an online playlist is active also stays inside that playlist instead of accidentally falling into the local Music Nest.
+
+Search results and Creator Nest uploads deliberately remain one-shot playback. The cat is not allowed to infer a queue you did not choose.
+
+> **MeowPlayer 0.20.0 — the Internet Cat now checks the next cardboard box before the current one is empty.** 🐈📡📦
 
 ## What's new in 0.19.1 — The Cat Learned `makepkg`
 
