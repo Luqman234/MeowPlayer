@@ -1,7 +1,7 @@
 # Maintainer: Luqman234
 pkgname=meowplayer
 pkgver=0.20.0
-pkgrel=1
+pkgrel=2
 pkgdesc="A lightweight, aggressively cat-themed terminal music player powered by mpv"
 arch=('any')
 url="https://github.com/Luqman234/MeowPlayer"
@@ -33,6 +33,9 @@ sha256sums=('SKIP')
 
 build() {
   cd "$srcdir/$pkgname"
+  # VCS source directories survive normal makepkg updates. Remove wheels from
+  # older MeowPlayer versions so installer never receives multiple releases.
+  rm -rf dist
   python -m build --wheel --no-isolation
 }
 
@@ -43,6 +46,13 @@ check() {
 
 package() {
   cd "$srcdir/$pkgname"
-  python -m installer --destdir="$pkgdir" dist/*.whl
+
+  local wheels=(dist/*.whl)
+  if (( ${#wheels[@]} != 1 )); then
+    printf 'Expected exactly one MeowPlayer wheel, found %d\n' "${#wheels[@]}" >&2
+    return 1
+  fi
+
+  python -m installer --destdir="$pkgdir" "${wheels[0]}"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
