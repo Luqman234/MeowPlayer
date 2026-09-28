@@ -27,6 +27,18 @@ BUS_NAME = "org.mpris.MediaPlayer2.meowplayer"
 def _metadata_variants(metadata):
     metadata = metadata or {}
 
+    def text_field(key):
+        value = metadata.get(key)
+        if value is None:
+            return None
+        # POSIX surrogateescape filenames and malformed tags are valid Python
+        # strings, but D-Bus requires UTF-8 without embedded NUL. Sanitize only
+        # the presentation boundary; never change filesystem identity.
+        return (
+            str(value).encode("utf-8", "replace").decode("utf-8")
+            .replace("\x00", "\ufffd")
+        )
+
     result = {
         "mpris:trackid": Variant(
             "o",
@@ -37,13 +49,13 @@ def _metadata_variants(metadata):
         )
     }
 
-    title = metadata.get("title")
-    artist = metadata.get("artist")
-    album = metadata.get("album")
-    album_artist = metadata.get("album_artist")
-    genre = metadata.get("genre")
-    art_url = metadata.get("art_url")
-    url = metadata.get("url")
+    title = text_field("title")
+    artist = text_field("artist")
+    album = text_field("album")
+    album_artist = text_field("album_artist")
+    genre = text_field("genre")
+    art_url = text_field("art_url")
+    url = text_field("url")
     length = int(metadata.get("length_us") or 0)
 
     if title:
