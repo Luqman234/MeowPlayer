@@ -1826,7 +1826,7 @@ class MeowPlayer:
 
         try:
             track_path = Path(track).expanduser().resolve()
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, TypeError, ValueError):
             return
 
         index = self.song_lookup.get(track_path)
@@ -2562,8 +2562,9 @@ class MeowPlayer:
         return indices
 
     def rescan_library(self, event_summary=None):
-        if getattr(self, "_crossfade_active", False):
-            self.cancel_crossfade()
+        # Even an idle preloaded deck refers to the OLD index space. Discard
+        # it before remapping: the same index may name a different file below.
+        self.cancel_crossfade()
 
         old_paths = {
             str(song.resolve())
@@ -2615,6 +2616,9 @@ class MeowPlayer:
         }
 
         self.catnip_stash = self._indices_from_paths(stash_paths)
+        self.stash_selected = max(
+            0, min(self.stash_selected, len(self.catnip_stash) - 1)
+        )
         self.history = self._indices_from_paths(
             history_paths,
             unique=False,
