@@ -42,4 +42,4 @@ jobs:
       - name: Verify installed CLI version
         shell: bash
         run: |
-          meowplayer --version | grep -F '0.21.0rc1'
+          meowplayer --version | grep -F '0.21.0'
