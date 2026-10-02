@@ -894,6 +894,50 @@ class YouTubeOnlineTests(unittest.TestCase):
         self.assertTrue(player.process_online_playlist_streaming(now=15.1))
         player.advance_online_playlist.assert_called_once_with(now=15.1)
 
+    def test_creator_playlist_labelled_eof_advances_even_after_eof_flag_clears(self):
+        """Real mpv keeps native entry ownership on the EOF snapshot.
+
+        By the time MeowPlayer polls that snapshot, eof-reached may already be
+        false because mpv has entered idle. The labelled end-file event itself
+        remains authoritative and must advance the Creator Nest playlist.
+        """
+        player = MeowPlayer.__new__(MeowPlayer)
+        first = YouTubeTrack(
+            "creator-p1",
+            "One",
+            "Creator Cat",
+            200,
+            "https://youtube.com/watch?v=creator-p1",
+        )
+        second = YouTubeTrack(
+            "creator-p2",
+            "Two",
+            "Creator Cat",
+            200,
+            "https://youtube.com/watch?v=creator-p2",
+        )
+        player.online_current = first
+        player.online_load_state = "streaming"
+        player.online_playlist_tracks = [first, second]
+        player.online_playlist_index = 0
+        player.online_playlist_title = "Creator Album"
+        player._online_playlist_prefetch_video_id = second.video_id
+        player._online_playlist_prefetch_future = mock.Mock()
+        player._online_load_sent = 10.0
+        player.stream_resolver = FakeResolver()
+        player.mpv = FakeMPV()
+        player.mpv.properties["eof-reached"] = False
+        player.mpv.playback_events = {
+            "entry-id": 77,
+            "end-file": 15.0,
+            "end-reason": "eof",
+        }
+        player.advance_online_playlist = mock.Mock(return_value=True)
+        player.set_status = lambda *args: None
+
+        self.assertTrue(player.process_online_playlist_streaming(now=15.1))
+        player.advance_online_playlist.assert_called_once_with(now=15.1)
+
     def test_online_playlist_last_track_stops_without_wrapping(self):
         player = MeowPlayer.__new__(MeowPlayer)
         last = YouTubeTrack("last", "Last", "Cat", 200, "https://youtube.com/watch?v=last")
