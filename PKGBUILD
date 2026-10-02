@@ -27,7 +27,7 @@ makedepends=(
   'python-wheel'
 )
 
-_commit='5d3b3320c6d6ebdcc3c779f2688bfdb6dec6f4f5'
+_commit='00cd4323097fefdb68a13f8731fe75b5ef2e4b95'
 source=("$pkgname::git+$url.git#commit=$_commit")
 sha256sums=('SKIP')
 
