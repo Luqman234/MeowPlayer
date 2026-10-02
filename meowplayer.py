@@ -68,6 +68,7 @@ from settings_nest import (
     normalize_setting_value,
 )
 from youtube_online import (
+    NicoNicoSearchSession,
     YouTubeBrowseSession,
     YouTubeCatalog,
     YouTubeDownloadSession,
@@ -76,6 +77,8 @@ from youtube_online import (
     YouTubeSearchSession,
     network_subprocess_env,
     normalize_youtube_search,
+    online_provider_label,
+    online_track_key,
 )
 
 
@@ -1050,6 +1053,7 @@ class MeowPlayer:
         self.youtube_selected = 0
         self.youtube_query = ""
         self.youtube_search_mode = "all"
+        self.online_provider = "youtube"
         self.creator_session = None
         self.creator_name = ""
         self.creator_channel_url = ""
@@ -2099,15 +2103,17 @@ class MeowPlayer:
                 char if char.isalnum() else "_"
                 for char in track.video_id
             )
+            provider = getattr(track, "provider", "youtube")
+            provider_name = online_provider_label(provider)
             metadata = {
                 "track_id": (
-                    f"/org/mpris/MediaPlayer2/track/youtube_{safe_id}"
+                    f"/org/mpris/MediaPlayer2/track/{provider}_{safe_id}"
                 ),
                 "title": track.title,
                 "artist": track.artist,
-                "album": "YouTube",
+                "album": provider_name,
                 "album_artist": track.artist,
-                "genre": "YouTube",
+                "genre": provider_name,
                 "art_url": track.thumbnail_url or None,
                 "url": track.url,
                 "length_us": int(max(0.0, duration) * 1_000_000),
@@ -4089,7 +4095,7 @@ class MeowPlayer:
         timestamp = time.monotonic() if now is None else float(now)
         same_track = (
             self.online_current is not None
-            and self.online_current.video_id == track.video_id
+            and online_track_key(self.online_current) == online_track_key(track)
         )
 
         if same_track and not getattr(self, "_playback_stopped", False):
@@ -4110,9 +4116,12 @@ class MeowPlayer:
                     elapsed,
                     idle,
                 )
+                provider_name = online_provider_label(
+                    getattr(track, "provider", "youtube")
+                )
                 self.set_status(
                     (
-                        f"YouTube stream {state}: {track.artist_title}. "
+                        f"{provider_name} stream {state}: {track.artist_title}. "
                         "Repeated Enter ignored."
                     ),
                     (
@@ -4172,8 +4181,11 @@ class MeowPlayer:
             self._load_online_fallback()
 
         state = "Loading" if self.online_load_state == "loading" else "Resolving"
+        provider_name = online_provider_label(
+            getattr(track, "provider", "youtube")
+        )
         self.set_status(
-            f"{state} YouTube stream: {track.artist_title}",
+            f"{state} {provider_name} stream: {track.artist_title}",
             f"The internet cat is {state.lower()}: {track.artist_title}",
         )
         self.sync_mpris(force=True)
@@ -4261,8 +4273,13 @@ class MeowPlayer:
                 (timestamp - events["file-loaded"]) * 1000,
                 events["start-file"], events["file-loaded"],
                 events.get("audio-reconfig", 0), events["playback-restart"], timestamp)
-            self.set_status(f"Streaming from YouTube: {self.online_current.artist_title}",
-                            f"The internet cat is streaming: {self.online_current.artist_title}")
+            provider_name = online_provider_label(
+                getattr(self.online_current, "provider", "youtube")
+            )
+            self.set_status(
+                f"Streaming from {provider_name}: {self.online_current.artist_title}",
+                f"The internet cat is streaming: {self.online_current.artist_title}",
+            )
             return True
         failed = (events.get("end-file", 0) >= sent and events.get("end-reason") == "error")
         if failed or timestamp - sent >= 30.0:
@@ -4278,14 +4295,23 @@ class MeowPlayer:
                     self._load_online_fallback()
             else:
                 self.online_load_state = "failed"
-                self.set_status("YouTube stream did not start. Press Enter to retry.",
-                                "The internet cat returned empty-pawed. Enter to retry.")
+                provider_name = online_provider_label(
+                    getattr(self.online_current, "provider", "youtube")
+                )
+                self.set_status(
+                    f"{provider_name} stream did not start. Press Enter to retry.",
+                    "The internet cat returned empty-pawed. Enter to retry.",
+                )
             return True
         return False
 
     def process_youtube(self):
         if getattr(self, "_shutting_down", False):
             return None
+
+        provider_name = online_provider_label(
+            getattr(self, "online_provider", "youtube")
+        )
         session = self.youtube_search_session
         if session:
             while True:
@@ -4293,17 +4319,30 @@ class MeowPlayer:
                     kind, value = session.results.get_nowait()
                 except queue.Empty:
                     break
+
                 if kind == "track":
                     self.youtube_results.append(value)
                     if self.youtube_search_mode == "artist":
                         self.set_status(
-                            f"Artist search: {len(self.youtube_results)} result(s)...",
-                            f"The artist-scent cat found {len(self.youtube_results)} meow(s)...",
+                            (
+                                f"{provider_name} artist search: "
+                                f"{len(self.youtube_results)} result(s)..."
+                            ),
+                            (
+                                f"The artist-scent cat found "
+                                f"{len(self.youtube_results)} {provider_name} meow(s)..."
+                            ),
                         )
                     else:
                         self.set_status(
-                            f"Searching YouTube: {len(self.youtube_results)} result(s)...",
-                            f"The internet cat found {len(self.youtube_results)} meow(s)...",
+                            (
+                                f"Searching {provider_name}: "
+                                f"{len(self.youtube_results)} result(s)..."
+                            ),
+                            (
+                                f"The internet cat found "
+                                f"{len(self.youtube_results)} {provider_name} meow(s)..."
+                            ),
                         )
                 else:
                     self.youtube_search_session = None
@@ -4311,20 +4350,38 @@ class MeowPlayer:
                         self.set_status(value, value)
                     elif self.youtube_search_mode == "artist":
                         self.set_status(
-                            f"Artist search: {len(self.youtube_results)} result(s).",
-                            f"The artist-scent cat found {len(self.youtube_results)} meow(s).",
+                            (
+                                f"{provider_name} artist search: "
+                                f"{len(self.youtube_results)} result(s)."
+                            ),
+                            (
+                                f"The artist-scent cat found "
+                                f"{len(self.youtube_results)} {provider_name} meow(s)."
+                            ),
                         )
                     else:
                         self.set_status(
-                            f"YouTube search: {len(self.youtube_results)} result(s).",
-                            f"The internet cat found {len(self.youtube_results)} meow(s).",
+                            (
+                                f"{provider_name} search: "
+                                f"{len(self.youtube_results)} result(s)."
+                            ),
+                            (
+                                f"The internet cat found "
+                                f"{len(self.youtube_results)} {provider_name} meow(s)."
+                            ),
                         )
+
         if self.stream_resolver and self.youtube_results:
             track = self.youtube_results[self.youtube_selected]
-            if self._prefetch_selection != track.video_id:
+            selection_key = online_track_key(track)
+            if self._prefetch_selection != selection_key:
                 first = self._prefetch_selection is None
-                self._prefetch_selection = track.video_id
-                self.stream_resolver.request(track, prefetch=True, debounce=0 if first else 0.15)
+                self._prefetch_selection = selection_key
+                self.stream_resolver.request(
+                    track,
+                    prefetch=True,
+                    debounce=0 if first else 0.15,
+                )
 
     def play_selected_youtube_result(self):
         if not self.youtube_results:
@@ -4386,6 +4443,12 @@ class MeowPlayer:
             min(self.youtube_selected, len(self.youtube_results) - 1),
         )
         track = self.youtube_results[self.youtube_selected]
+        if getattr(track, "provider", "youtube") != "youtube":
+            self.set_status(
+                "Creator Nest browsing is currently available for YouTube results only.",
+                "The NicoNico cat has not learned Creator Nest navigation yet.",
+            )
+            return False
         if not track.channel_url:
             self.set_status(
                 "This result does not expose a browsable YouTube channel.",
@@ -4491,8 +4554,11 @@ class MeowPlayer:
                 min(self.creator_selected, len(self.creator_items) - 1),
             )
             track = self.creator_items[self.creator_selected]
-            if hasattr(track, "video_id") and self._prefetch_selection != track.video_id:
-                self._prefetch_selection = track.video_id
+            if (
+                hasattr(track, "video_id")
+                and self._prefetch_selection != online_track_key(track)
+            ):
+                self._prefetch_selection = online_track_key(track)
                 self.stream_resolver.request(
                     track,
                     prefetch=True,
@@ -5955,7 +6021,10 @@ class MeowPlayer:
             stdscr.nodelay(True)
             stdscr.timeout(100)
 
-    def open_youtube_search(self, stdscr, search_mode="all"):
+    def open_online_search(self, stdscr, search_mode="all", provider="youtube"):
+        provider = "niconico" if provider == "niconico" else "youtube"
+        provider_name = online_provider_label(provider)
+
         if not self.youtube.enabled:
             self.set_status(
                 "Internet Nest is disabled for this run. Restart without --no-youtube.",
@@ -5965,52 +6034,82 @@ class MeowPlayer:
 
         if not self.youtube.available:
             self.set_status(
-                "YouTube unavailable: yt-dlp was not found on PATH.",
+                f"{provider_name} unavailable: yt-dlp was not found on PATH.",
                 "The internet cat cannot find yt-dlp.",
             )
             return False
 
         requested_mode = "artist" if search_mode == "artist" else "all"
         prompt = self.text(
-            "YouTube artist search" if requested_mode == "artist" else "YouTube search",
             (
-                "Internet Nest artist scent"
+                f"{provider_name} artist search"
                 if requested_mode == "artist"
-                else "Internet Nest search (artist:Name also works)"
+                else f"{provider_name} search"
+            ),
+            (
+                f"Internet Nest {provider_name} artist scent"
+                if requested_mode == "artist"
+                else f"Internet Nest {provider_name} search (artist:Name also works)"
             ),
         )
         query = self.prompt_text(stdscr, prompt)
         query, search_mode = normalize_youtube_search(query, requested_mode)
         if not query:
-            LOGGER.debug("YouTube search cancelled or empty")
+            LOGGER.debug("%s search cancelled or empty", provider_name)
             return False
 
         LOGGER.info(
-            "YouTube search requested mode=%s query=%r",
+            "%s search requested mode=%s query=%r",
+            provider_name,
             search_mode,
             query,
         )
         if self.youtube_search_session:
             self.youtube_search_session.close()
+
         self.youtube_query = query
         self.youtube_search_mode = search_mode
+        self.online_provider = provider
         self.youtube_results = []
         self.youtube_selected = 0
         self._prefetch_selection = None
-        self.youtube_search_session = YouTubeSearchSession(
+        session_class = (
+            NicoNicoSearchSession
+            if provider == "niconico"
+            else YouTubeSearchSession
+        )
+        self.youtube_search_session = session_class(
             self.youtube,
             query,
             search_mode=search_mode,
         )
         self.view = "online"
+
         if search_mode == "artist":
             self.set_status(
-                f"Searching YouTube for artist: {query}...",
-                f'The internet cat is stalking artist "{query}"...',
+                f"Searching {provider_name} for artist: {query}...",
+                f'The internet cat is stalking artist "{query}" on {provider_name}...',
             )
         else:
-            self.set_status("Searching YouTube...", "The internet cat is hunting...")
+            self.set_status(
+                f"Searching {provider_name}...",
+                f"The internet cat is hunting on {provider_name}...",
+            )
         return True
+
+    def open_youtube_search(self, stdscr, search_mode="all"):
+        return self.open_online_search(
+            stdscr,
+            search_mode=search_mode,
+            provider="youtube",
+        )
+
+    def open_niconico_search(self, stdscr, search_mode="all"):
+        return self.open_online_search(
+            stdscr,
+            search_mode=search_mode,
+            provider="niconico",
+        )
 
     def prompt_path(self, stdscr, prompt, default):
         height, width = stdscr.getmaxyx()
@@ -6321,7 +6420,10 @@ class MeowPlayer:
 
         if not results:
             message = self.text(
-                "No YouTube results. Press / or Y to search, A for artist search.",
+                (
+                    f"No {online_provider_label(getattr(self, 'online_provider', 'youtube'))} "
+                    "results. Press / to search, A for artist search."
+                ),
                 "The Internet Nest is empty. / hunts songs; A stalks an artist.",
             )
             try:
@@ -6342,12 +6444,14 @@ class MeowPlayer:
             selected = result_index == self.youtube_selected
             playing = (
                 self.online_current is not None
-                and track.video_id == self.online_current.video_id
+                and online_track_key(track)
+                == online_track_key(self.online_current)
             )
             download_track = getattr(self, "youtube_download_track", None)
             downloading = (
                 download_track is not None
-                and track.video_id == download_track.video_id
+                and online_track_key(track)
+                == online_track_key(download_track)
             )
 
             if playing:
@@ -6358,7 +6462,8 @@ class MeowPlayer:
                 prefix = "   "
 
             label = (
-                f"{track.artist_title} · {track.duration_label} · YouTube"
+                f"{track.artist_title} · {track.duration_label} · "
+                f"{online_provider_label(getattr(track, 'provider', 'youtube'))}"
             )
             if downloading:
                 label += self.text(" · downloading", " · adopting")
@@ -6642,8 +6747,8 @@ class MeowPlayer:
                         "Now Internet-Purring",
                     )
                 now_playing = (
-                    f"{icon}  {label}: {self.online_current.artist_title} "
-                    "· YouTube"
+                    f"{icon}  {label}: {self.online_current.artist_title} · "
+                    f"{online_provider_label(getattr(self.online_current, 'provider', 'youtube'))}"
                 )
             elif self.current is not None:
                 meta = self.meta(self.current)
@@ -6856,12 +6961,15 @@ class MeowPlayer:
                 )
             elif self.view == "online":
                 query = self.youtube_query or "none"
+                provider_name = online_provider_label(
+                    getattr(self, "online_provider", "youtube")
+                )
                 artist_search = self.youtube_search_mode == "artist"
                 serious_label = "artist" if artist_search else "query"
                 cat_label = "artist scent" if artist_search else "scent"
                 mode_line = self.text(
                     (
-                        f"YouTube Online — {serious_label}: {query} · "
+                        f"{provider_name} Online — {serious_label}: {query} · "
                         f"{len(self.youtube_results)} result(s)"
                     ),
                     (
@@ -7050,13 +7158,13 @@ class MeowPlayer:
                 if self.serious_mode:
                     controls = (
                         "↑↓ Select  ENTER Open/Play  1-7 Views  F Favorite  "
-                        "[ ] Rate  L Lyrics  V Viz  M Mixes  Y YouTube  , Settings  Q Queue  X Quit"
+                        "[ ] Rate  L Lyrics  V Viz  M Mixes  y YouTube  Y NicoNico  , Settings  Q Queue  X Quit"
                     )
                     quote = ""
                 else:
                     controls = (
                         "↑↓ Choose  ENTER Open/Purr  1-7 Nests  F Pawmark  "
-                        "[ ] Judge  L Songbook  M Mixes  Y Internet  , Settings  G Pet  Q Catnip"
+                        "[ ] Judge  L Songbook  M Mixes  y YouTube  Y NicoNico  , Settings  G Pet  Q Catnip"
                     )
                     quote = self.cat_footer_message()
             elif self.view == "settings":
@@ -7260,8 +7368,13 @@ class MeowPlayer:
                 self.reload_custom_smart_mixes()
                 continue
 
-            if key in (ord("y"), ord("Y")):
+            if key == ord("y"):
                 if self.open_youtube_search(stdscr):
+                    youtube_scroll = 0
+                continue
+
+            if key == ord("Y"):
+                if self.open_niconico_search(stdscr):
                     youtube_scroll = 0
                 continue
 
@@ -7531,10 +7644,17 @@ class MeowPlayer:
                     if self.open_selected_youtube_creator():
                         creator_scroll = 0
                 elif key == ord("/"):
-                    if self.open_youtube_search(stdscr):
+                    if self.open_online_search(
+                        stdscr,
+                        provider=getattr(self, "online_provider", "youtube"),
+                    ):
                         youtube_scroll = 0
                 elif key in (ord("a"), ord("A")):
-                    if self.open_youtube_search(stdscr, search_mode="artist"):
+                    if self.open_online_search(
+                        stdscr,
+                        search_mode="artist",
+                        provider=getattr(self, "online_provider", "youtube"),
+                    ):
                         youtube_scroll = 0
                 elif key == 27:
                     self.view = "library"
@@ -7761,7 +7881,7 @@ def parse_args(argv=None):
         "--no-youtube",
         dest="youtube",
         action="store_false",
-        help="disable Internet Nest / YouTube search and streaming for this run",
+        help="disable Internet Nest / online search and streaming for this run",
     )
     parser.set_defaults(youtube=True)
     parser.add_argument(
@@ -8014,8 +8134,8 @@ def main():
 
     if not player.songs and player.youtube.available:
         player.set_status(
-            "No local tracks found; YouTube search is available with Y.",
-            "The local nest is empty, but Y opens the Internet Nest.",
+            "No local tracks found; online search is available with y/Y.",
+            "The local nest is empty, but y/Y opens the Internet Nest.",
         )
 
     try:

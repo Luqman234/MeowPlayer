@@ -98,7 +98,7 @@ MeowPlayer tries to stay true to a few rules:
 
 | Area | What MeowPlayer actually uses |
 | --- | --- |
-| Playback | `mpv` JSON IPC, gapless priming, optional two-deck equal-power crossfade, ReplayGain, yt-dlp online streams + playlist auto-advance/pre-resolve |
+| Playback | `mpv` JSON IPC, gapless priming, optional two-deck equal-power crossfade, ReplayGain, yt-dlp YouTube + NicoNico streams + online pre-resolve |
 | Library | SQLite **Cat Catalog**, recursive scanning, Watchdog/inotify |
 | Metadata | Mutagen locally, optional MusicBrainz enrichment for missing fields |
 | Lyrics | sidecar/embedded lyrics + optional LRCLIB synchronized/plain lookup |
@@ -108,6 +108,68 @@ MeowPlayer tries to stay true to a few rules:
 | Cat Presence | read-only mascot state engine, animated moods, DJ/headphones/hunting/judgment reactions |
 | Critical infrastructure | `G` to pet the cat |
 
+## Internet Nest — the cat found NicoNico too
+
+Internet Nest is no longer a one-site cardboard box.
+
+MeowPlayer can now search **YouTube** and **NicoNico** through the same yt-dlp-backed online pipeline:
+
+```text
+y  → YouTube search
+Y  → NicoNico search
+```
+
+Once a provider is open, the controls stay intentionally boring:
+
+| Key | Internet Nest action |
+| --- | --- |
+| `↑ / ↓` | choose a result |
+| `Enter` | stream the selected result |
+| `/` | search the current provider again |
+| `A` | artist/creator-style search on the current provider |
+| `D` | adopt/download the selected result into the local Music Nest |
+| `Q / Esc` | return to the local library |
+
+Both providers reuse the same hardened stream resolver, expiry-aware session cache, mpv loading path, transient online Songbook/LRCLIB flow, download/adoption path, MPRIS surface, and stale-result ownership rules.
+
+Provider identity is part of the cache key:
+
+```text
+("youtube", video_id)
+("niconico", video_id)
+```
+
+so two services are never treated as the same remote track merely because their IDs happen to match.
+
+NicoNico search uses yt-dlp's `nicosearch` extractor and streams results progressively instead of waiting for the entire result set before drawing the first row.
+
+### One deliberate boundary
+
+**Creator Nest channel/release browsing is still YouTube-only.**
+
+NicoNico search results can be searched, streamed, used with transient lyrics, and adopted locally, but pressing `C` on a NicoNico result will explain that creator browsing has not been wired up yet. That avoids pretending YouTube's channel/playlists model maps cleanly onto NicoNico users, channels, and mylists.
+
+The old CLI name is retained for compatibility:
+
+```bash
+meowplayer --no-youtube
+```
+
+Despite the historical name, it now means **disable Internet Nest online search/streaming for this run**, including NicoNico.
+
+Public NicoNico content is the initial target. Content that requires an authenticated NicoNico session may still require future cookie/login plumbing.
+
+```text
+ /\_/\
+( o.o )   "YouTube wasn't enough?"
+ > ^ <
+
+No.
+
+ /\_/\
+( ^.^ )   "Excellent. I found a Japanese video site."
+ > ♫ <
+```
 ## What's new in 0.21.0 — The Cat Raided the Software Graveyard
 
 The release candidate survived its trip through the haunted basement, so **v0.21.0 is now the stable archaeology release**.
