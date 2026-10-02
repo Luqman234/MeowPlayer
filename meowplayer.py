@@ -2103,15 +2103,17 @@ class MeowPlayer:
                 char if char.isalnum() else "_"
                 for char in track.video_id
             )
+            provider = getattr(track, "provider", "youtube")
+            provider_name = online_provider_label(provider)
             metadata = {
                 "track_id": (
-                    f"/org/mpris/MediaPlayer2/track/youtube_{safe_id}"
+                    f"/org/mpris/MediaPlayer2/track/{provider}_{safe_id}"
                 ),
                 "title": track.title,
                 "artist": track.artist,
-                "album": "YouTube",
+                "album": provider_name,
                 "album_artist": track.artist,
-                "genre": "YouTube",
+                "genre": provider_name,
                 "art_url": track.thumbnail_url or None,
                 "url": track.url,
                 "length_us": int(max(0.0, duration) * 1_000_000),
@@ -6745,8 +6747,8 @@ class MeowPlayer:
                         "Now Internet-Purring",
                     )
                 now_playing = (
-                    f"{icon}  {label}: {self.online_current.artist_title} "
-                    "· YouTube"
+                    f"{icon}  {label}: {self.online_current.artist_title} · "
+                    f"{online_provider_label(getattr(self.online_current, 'provider', 'youtube'))}"
                 )
             elif self.current is not None:
                 meta = self.meta(self.current)
@@ -7879,7 +7881,7 @@ def parse_args(argv=None):
         "--no-youtube",
         dest="youtube",
         action="store_false",
-        help="disable Internet Nest / YouTube search and streaming for this run",
+        help="disable Internet Nest / online search and streaming for this run",
     )
     parser.set_defaults(youtube=True)
     parser.add_argument(
@@ -8132,8 +8134,8 @@ def main():
 
     if not player.songs and player.youtube.available:
         player.set_status(
-            "No local tracks found; YouTube search is available with Y.",
-            "The local nest is empty, but Y opens the Internet Nest.",
+            "No local tracks found; online search is available with y/Y.",
+            "The local nest is empty, but y/Y opens the Internet Nest.",
         )
 
     try:
