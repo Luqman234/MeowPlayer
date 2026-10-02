@@ -566,6 +566,13 @@ class MPVController:
         self._commands = 0
         self._events = 0
         self.playback_events = {}
+        self._active_entry_id = None
+        self._accept_playback_events = False
+        self._stopped = False
+        self._entry_id_floor = -1
+        self._last_entry_id = -1
+        self._load_pending = False
+        self._ipc_needs_sync = False
 
     def _close_ipc(self, expected=None):
         with self._ipc_lock:
@@ -574,6 +581,10 @@ class MPVController:
                 return
             self._ipc_socket = None
             self._properties.clear()
+            # Connection-local observations cannot confirm a later load.
+            # Retain native entry ownership: reconnect does not restart audio.
+            self.playback_events.clear()
+            self._ipc_needs_sync = True
             for waiter, box in self._pending.values():
                 waiter.set()
             self._pending.clear()
@@ -648,13 +659,33 @@ class MPVController:
                             if event == "property-change":
                                 name, value = message.get("name"), message.get("data")
                                 self._properties[name] = value
-                                if name == "time-pos" and isinstance(value, (int, float)) and value > 0:
+                                if (self._accept_playback_events and not self._stopped
+                                        and name == "time-pos"
+                                        and isinstance(value, (int, float)) and value > 0):
                                     self.playback_events.setdefault("first-nonzero-time-pos", time.monotonic())
                             else:
                                 if event == "start-file":
-                                    # A prior entry's end/error may arrive after
-                                    # loadfile was sent but before this start.
+                                    if self._stopped:
+                                        continue
+                                    entry = message.get("playlist_entry_id")
+                                    if isinstance(entry, int):
+                                        if entry <= self._entry_id_floor or entry < self._last_entry_id:
+                                            continue
+                                        self._last_entry_id = entry
                                     self.playback_events.clear()
+                                    self._active_entry_id = entry
+                                    self._accept_playback_events = True
+                                    self.playback_events["entry-id"] = self._active_entry_id
+                                elif not self._accept_playback_events:
+                                    continue
+                                if (event == "end-file" and
+                                        (self._active_entry_id is None or
+                                         message.get("playlist_entry_id") != self._active_entry_id)):
+                                    # Arrival time cannot identify a load. mpv's
+                                    # entry ID distinguishes even same-path reloads.
+                                    continue
+                                if event == "file-loaded":
+                                    self._load_pending = False
                                 self.playback_events[event] = time.monotonic()
                                 if event == "end-file":
                                     self.playback_events["end-reason"] = message.get("reason")
@@ -691,7 +722,9 @@ class MPVController:
         return box[0] if box else None
 
     def get_property(self, name):
-        if name in self.OBSERVED_PROPERTIES:
+        # EOF observations have no entry ID and may still describe a replaced
+        # load or pre-seek position. Only a fresh reply may authorize advancing.
+        if name in self.OBSERVED_PROPERTIES and name != "eof-reached":
             with self._ipc_lock:
                 try:
                     self._ensure_ipc()
@@ -711,14 +744,67 @@ class MPVController:
                 "events_per_second": self._events / elapsed}
 
     def playback_snapshot(self):
+        self._recover_playback_events()
         with self._ipc_lock:
             return dict(self.playback_events)
 
     def begin_load(self):
         with self._ipc_lock:
             self.playback_events.clear()
+            self._entry_id_floor = self._last_entry_id
+            self._load_pending = True
+            self._active_entry_id = None
+            self._accept_playback_events = False
+            self._stopped = False
             for name in ("path", "time-pos", "duration", "eof-reached"):
                 self._properties.pop(name, None)
+
+    def _recover_playback_events(self):
+        # mpv does not replay start/file-loaded after IPC reconnect. Confirm a
+        # live native entry around a fresh decoder-position query; never infer
+        # identity from the path or from a cached event's arrival timestamp.
+        with self._ipc_lock:
+            if (not (self._ipc_needs_sync or self._load_pending)
+                    or self._stopped or self._closing):
+                return
+            floor = self._entry_id_floor
+        def current_entry():
+            response = self.command("get_property", "playlist")
+            entries = response.get("data") if response else None
+            if isinstance(entries, list):
+                return next((e.get("id") for e in entries
+                             if isinstance(e, dict) and e.get("current")), None)
+            return None
+        entry = current_entry()
+        if not isinstance(entry, int) or entry <= floor:
+            return
+        response = self.command("get_property", "time-pos")
+        position = response.get("data") if response else None
+        if not isinstance(position, (int, float)) or isinstance(position, bool) or position < 0:
+            return
+        if current_entry() != entry:
+            return
+        with self._ipc_lock:
+            if (self._stopped or self._closing or floor != self._entry_id_floor
+                    or entry < self._last_entry_id):
+                return
+            self._active_entry_id = self._last_entry_id = entry
+            self._accept_playback_events = True
+            self._load_pending = False
+            self._ipc_needs_sync = False
+            now = time.monotonic()
+            if self.playback_events.get("entry-id") != entry:
+                self.playback_events.clear()
+            self.playback_events["entry-id"] = entry
+            # These times describe live recovery, not the original load latency.
+            for name in ("start-file", "file-loaded", "playback-restart"):
+                self.playback_events.setdefault(name, now)
+            self.playback_events["resynchronized"] = now
+
+    def load_is_pending(self):
+        self._recover_playback_events()
+        with self._ipc_lock:
+            return self._load_pending
 
     def load_stream(self, stream):
         self.begin_load()
@@ -757,6 +843,7 @@ class MPVController:
         if current < 0 or target >= count:
             return None
 
+        self.begin_load()
         return self.command("playlist-play-index", target)
 
     def clear_future_playlist(self):
@@ -811,6 +898,8 @@ class MPVController:
     def current_path(self):
         # The gapless scheduler uses this as a mutation barrier. An observed
         # path can lag a playlist transition, so preserve its synchronous read.
+        if self.load_is_pending():
+            return None
         response = self.command("get_property", "path")
         value = response.get("data") if response and response.get("error") == "success" else None
         return str(value) if value else None
@@ -847,6 +936,9 @@ class MPVController:
 
     def stop(self):
         MPV_LOGGER.info("stop")
+        with self._ipc_lock:
+            self.begin_load()
+            self._stopped = True
         self.command("stop")
 
     def seek(self, seconds):
@@ -1101,6 +1193,10 @@ class MeowPlayer:
             unique=True,
         )
 
+        self.playback_sequence_active = bool(
+            self.saved_state.get("playback_sequence_active", False)
+            or self.saved_state.get("playback_sequence")
+        )
         self.search_query = ""
         self.search_active = False
 
@@ -1265,9 +1361,17 @@ class MeowPlayer:
 
         return indices
 
-    def shuffle_pool(self):
+    def has_explicit_sequence(self):
+        # Retain intent after a rescan removes every member. Older saved state
+        # has only the list, so a nonempty list also establishes this boundary.
         if self.playback_sequence:
-            return list(self.playback_sequence)
+            self.playback_sequence_active = True
+        return getattr(self, "playback_sequence_active", False)
+
+    def shuffle_pool(self):
+        if self.has_explicit_sequence():
+            return [i for i in self.playback_sequence
+                    if isinstance(i, int) and 0 <= i < len(self.songs)]
         return list(range(len(self.songs)))
 
     def sanitize_shuffle_bag(self):
@@ -1314,35 +1418,34 @@ class MeowPlayer:
         self.prime_gapless_next()
 
     def peek_next_index(self):
-        if not self.songs or self.current is None or self.repeat:
+        if self.current is None or self.repeat:
             return None
+        return self._next_local_index()
 
+    def _next_local_index(self):
+        """One ordering decision for manual/EOF, gapless and crossfade."""
+        if not self.songs:
+            return None
         if self.catnip_stash:
             return self.catnip_stash[0]
-
+        pool = self.shuffle_pool()
+        if not pool:
+            return None
         if self.shuffle:
-            pool = self.shuffle_pool()
-            if not pool:
-                return None
-
             if len(pool) == 1:
                 return pool[0]
-
             self.sanitize_shuffle_bag()
             if not self.shuffle_bag:
                 self.refill_shuffle_bag()
-
             return self.shuffle_bag[-1] if self.shuffle_bag else pool[0]
-
-        if self.playback_sequence:
-            if self.current in self.playback_sequence:
-                position = self.playback_sequence.index(self.current)
-                return self.playback_sequence[
-                    (position + 1) % len(self.playback_sequence)
-                ]
-            return self.playback_sequence[0]
-
-        return (self.current + 1) % len(self.songs)
+        if self.has_explicit_sequence():
+            if self.current is None:
+                return pool[0]
+            if self.current not in pool:
+                return None
+            position = pool.index(self.current) + 1
+            return pool[position] if position < len(pool) else None
+        return 0 if self.current is None else (self.current + 1) % len(self.songs)
 
     def _crossfade_enabled(self):
         try:
@@ -1436,7 +1539,9 @@ class MeowPlayer:
 
     def prime_crossfade_next(self):
         if getattr(self, "_crossfade_active", False):
-            return True
+            if self.crossfade_next_index == self.peek_next_index():
+                return True
+            self.cancel_crossfade()
 
         if (
             not self._crossfade_enabled()
@@ -1580,6 +1685,8 @@ class MeowPlayer:
         return True
 
     def _finish_crossfade(self):
+        if not getattr(self, "_crossfade_active", False):
+            return False
         target = getattr(self, "crossfade_next_index", None)
         incoming = getattr(self, "crossfade_mpv", None)
         departed = self.current
@@ -1639,6 +1746,8 @@ class MeowPlayer:
         return True
 
     def process_crossfade_transition(self, now=None):
+        if getattr(self, "_playback_stopped", False):
+            return False
         if (
             not self._crossfade_enabled()
             or self.current is None
@@ -1700,6 +1809,8 @@ class MeowPlayer:
         )
 
     def prime_gapless_next(self):
+        if getattr(self, "_playback_stopped", False):
+            return
         if self._crossfade_enabled():
             self.gapless_next_index = None
             try:
@@ -1737,6 +1848,8 @@ class MeowPlayer:
             self.mpv.clear_future_playlist()
             return
 
+        events = self.mpv.playback_snapshot() if hasattr(self.mpv, "playback_snapshot") else {}
+        self._gapless_current_entry_id = events.get("entry-id")
         self.mpv.trim_playlist_before_current()
         primed = self.mpv.prime_next(self.songs[next_index])
         if primed is False:
@@ -1758,6 +1871,8 @@ class MeowPlayer:
             self.shuffle_bag.remove(index)
 
     def sync_gapless_transition(self):
+        if getattr(self, "_playback_stopped", False):
+            return False
         if self._crossfade_enabled():
             return False
 
@@ -1767,6 +1882,8 @@ class MeowPlayer:
         ):
             return False
 
+        if hasattr(self.mpv, "load_is_pending") and self.mpv.load_is_pending():
+            return False
         current_path = self.mpv.current_path()
         if not current_path:
             return False
@@ -1787,6 +1904,12 @@ class MeowPlayer:
             return False
 
         if mpv_index == self.current:
+            events = self.mpv.playback_snapshot() if hasattr(self.mpv, "playback_snapshot") else {}
+            previous_entry = getattr(self, "_gapless_current_entry_id", None)
+            if (previous_entry is None or events.get("entry-id") is None
+                    or events["entry-id"] == previous_entry):
+                return False
+        if mpv_index != self.gapless_next_index:
             return False
 
         departed = self.current
@@ -1819,6 +1942,27 @@ class MeowPlayer:
         self.sync_mpris(force=True)
         return True
 
+    def process_local_eof(self):
+        """Only the authoritative local file may advance on a confirmed EOF."""
+        if (self.current is None or self.repeat
+                or getattr(self, "_playback_stopped", False)):
+            return False
+        if hasattr(self.mpv, "load_is_pending") and self.mpv.load_is_pending():
+            return False
+        path = self.mpv.current_path()
+        if not path:
+            return False
+        try:
+            if Path(path).resolve() != self.songs[self.current].resolve():
+                return False
+        except (OSError, RuntimeError, ValueError):
+            return False
+        eof = self.mpv.get_property("eof-reached")
+        if eof and (self.gapless_mode == "no" or self.gapless_next_index is None):
+            self.next_song(automatic=True)
+            return True
+        return False
+
     def restore_session(self, saved_state):
         track = saved_state.get("current_track")
         if not track:
@@ -1838,6 +1982,7 @@ class MeowPlayer:
         except (TypeError, ValueError):
             position = 0.0
 
+        self._playback_stopped = False
         self.current = index
         self.load_current_lyrics(index)
         self.mpv.pause()
@@ -1895,6 +2040,7 @@ class MeowPlayer:
                 for index in self.history[-200:]
                 if 0 <= index < len(self.songs)
             ],
+            "playback_sequence_active": self.has_explicit_sequence(),
             "playback_sequence": [
                 str(self.songs[index].resolve())
                 for index in self.playback_sequence
@@ -1918,7 +2064,8 @@ class MeowPlayer:
         duration = 0.0
 
         if active:
-            idle = bool(self.mpv.get_property("idle-active"))
+            idle = (getattr(self, "_playback_stopped", False)
+                    or bool(self.mpv.get_property("idle-active")))
             paused = bool(self.mpv.get_property("pause"))
 
             try:
@@ -2028,6 +2175,8 @@ class MeowPlayer:
         self.last_mpris_sync = now
 
     def process_external_actions(self):
+        if getattr(self, "_shutting_down", False):
+            return None
         handled = False
 
         while True:
@@ -2049,7 +2198,8 @@ class MeowPlayer:
                     self.set_playback_paused(True)
             elif action == "play":
                 if self.online_current is not None:
-                    if bool(self.mpv.get_property("idle-active")):
+                    if (getattr(self, "_playback_stopped", False)
+                            or bool(self.mpv.get_property("idle-active"))):
                         self.play_online(
                             self.online_current,
                             preserve_playlist=True,
@@ -2058,7 +2208,8 @@ class MeowPlayer:
                         self.mpv.play()
                 elif self.current is None:
                     self.play_selected_library_song()
-                elif bool(self.mpv.get_property("idle-active")):
+                elif (getattr(self, "_playback_stopped", False)
+                            or bool(self.mpv.get_property("idle-active"))):
                     self.play(
                         self.current,
                         record_history=False,
@@ -2069,7 +2220,8 @@ class MeowPlayer:
                     self.set_playback_paused(False)
             elif action == "play_pause":
                 if self.online_current is not None:
-                    if bool(self.mpv.get_property("idle-active")):
+                    if (getattr(self, "_playback_stopped", False)
+                            or bool(self.mpv.get_property("idle-active"))):
                         self.play_online(
                             self.online_current,
                             preserve_playlist=True,
@@ -2078,7 +2230,8 @@ class MeowPlayer:
                         self.mpv.toggle_pause()
                 elif self.current is None:
                     self.play_selected_library_song()
-                elif bool(self.mpv.get_property("idle-active")):
+                elif (getattr(self, "_playback_stopped", False)
+                            or bool(self.mpv.get_property("idle-active"))):
                     self.play(
                         self.current,
                         record_history=False,
@@ -2088,6 +2241,7 @@ class MeowPlayer:
                 else:
                     self.toggle_playback_pause()
             elif action == "stop":
+                self._playback_stopped = True
                 if self.has_active_track():
                     if getattr(self, "_crossfade_active", False):
                         self.cancel_crossfade()
@@ -2123,6 +2277,14 @@ class MeowPlayer:
             self.sync_mpris(force=True)
 
     def shutdown(self):
+        if getattr(self, "_shutting_down", False):
+            return
+        # Establish authority before closing/joining any producer.
+        self._shutting_down = True
+        self._playback_stopped = True
+        self._online_future = None
+        self.online_load_state = "idle"
+        self._crossfade_active = False
         LOGGER.info("Player shutdown starting")
         self.persist_state(force=True)
         self.playback_saboteur.dismiss(self)
@@ -2562,9 +2724,26 @@ class MeowPlayer:
         return indices
 
     def rescan_library(self, event_summary=None):
-        # Even an idle preloaded deck refers to the OLD index space. Discard
-        # it before remapping: the same index may name a different file below.
-        self.cancel_crossfade()
+        if getattr(self, "_shutting_down", False):
+            return
+        reserved_path = (
+            str(self.songs[self.gapless_next_index].resolve())
+            if self.gapless_next_index is not None
+            and 0 <= self.gapless_next_index < len(self.songs)
+            and not self._awaiting_mpv_path
+            and not self._crossfade_enabled()
+            and not getattr(self, "_playback_stopped", False)
+            else None
+        )
+        active_fade = getattr(self, "_crossfade_active", False)
+        incoming_path = None
+        if active_fade and self.crossfade_next_index is not None:
+            incoming_path = self.songs[self.crossfade_next_index].resolve()
+        else:
+            # An idle reservation must be rebuilt, even if its numerical index
+            # happens to survive. Active decks are remapped by identity below.
+            self.cancel_crossfade()
+        self.has_explicit_sequence()
 
         old_paths = {
             str(song.resolve())
@@ -2615,6 +2794,30 @@ class MeowPlayer:
             for index, song in enumerate(self.songs)
         }
 
+        # mpv can advance while filesystem/metadata work blocks the UI.
+        # Reconcile the reservation before replacing it with the next one.
+        handed_off = False
+        if reserved_path is not None:
+            audible = self.mpv.current_path()
+            try:
+                handed_off = bool(audible and str(Path(audible).resolve()) == reserved_path)
+                if handed_off and reserved_path == current_path:
+                    events = self.mpv.playback_snapshot() if hasattr(self.mpv, "playback_snapshot") else {}
+                    previous_entry = getattr(self, "_gapless_current_entry_id", None)
+                    handed_off = (previous_entry is not None
+                                  and events.get("entry-id") is not None
+                                  and events["entry-id"] != previous_entry)
+            except (OSError, RuntimeError, ValueError):
+                handed_off = False
+        if handed_off:
+            if stash_paths and stash_paths[0] == reserved_path:
+                stash_paths.pop(0)
+            if reserved_path in bag_paths:
+                bag_paths.remove(reserved_path)
+            if current_path is not None and current_path != reserved_path:
+                history_paths.append(current_path)
+            current_path = reserved_path
+
         self.catnip_stash = self._indices_from_paths(stash_paths)
         self.stash_selected = max(
             0, min(self.stash_selected, len(self.catnip_stash) - 1)
@@ -2645,6 +2848,16 @@ class MeowPlayer:
             )
         else:
             self.current = None
+
+        if handed_off and self.current is not None and self.catalog is not None:
+            self.catalog.record_play(self.songs[self.current])
+            self.refresh_library_stats()
+
+        if active_fade:
+            self.crossfade_next_index = self.song_lookup.get(incoming_path)
+            if (self.current is None or self.crossfade_next_index is None
+                    or self.crossfade_next_index != self.peek_next_index()):
+                self.cancel_crossfade()
 
         if current_path is not None and self.current is None:
             self.mpv.stop()
@@ -2705,6 +2918,8 @@ class MeowPlayer:
         )
 
     def process_filesystem_watch(self):
+        if getattr(self, "_shutting_down", False):
+            return False
         summary = self.library_watcher.poll()
         if summary is None:
             return False
@@ -2733,6 +2948,8 @@ class MeowPlayer:
         return queued
 
     def process_online_metadata(self):
+        if getattr(self, "_shutting_down", False):
+            return 0
         results = self.online_metadata.poll()
         if not results:
             return 0
@@ -3822,6 +4039,7 @@ class MeowPlayer:
             sent > 0.0
             and end_event >= sent
             and events.get("end-reason") == "eof"
+            and ("entry-id" not in events or self.mpv.get_property("eof-reached"))
         )
 
         if not ended:
@@ -3874,7 +4092,7 @@ class MeowPlayer:
             and self.online_current.video_id == track.video_id
         )
 
-        if same_track:
+        if same_track and not getattr(self, "_playback_stopped", False):
             elapsed = max(0.0, timestamp - self.online_load_started_at)
             idle = bool(self.mpv.get_property("idle-active"))
 
@@ -3922,6 +4140,7 @@ class MeowPlayer:
             getattr(self, "online_playlist_index", None),
         )
 
+        self._playback_stopped = False
         self.online_current = track
         self.online_load_state = "resolving"
         self.online_load_started_at = timestamp
@@ -3973,6 +4192,8 @@ class MeowPlayer:
                      (self._online_load_sent - self.online_load_started_at) * 1000)
 
     def _finish_online_resolve(self):
+        if getattr(self, "_shutting_down", False):
+            return False
         future = getattr(self, "_online_future", None)
         if future is None or not future.done():
             return False
@@ -3999,6 +4220,8 @@ class MeowPlayer:
         return True
 
     def refresh_online_playback_state(self, now=None):
+        if getattr(self, "_shutting_down", False):
+            return False
         if self.online_current is None:
             self.online_load_state = "idle"
             return False
@@ -4061,6 +4284,8 @@ class MeowPlayer:
         return False
 
     def process_youtube(self):
+        if getattr(self, "_shutting_down", False):
+            return None
         session = self.youtube_search_session
         if session:
             while True:
@@ -4227,6 +4452,8 @@ class MeowPlayer:
         return True
 
     def process_creator_browse(self):
+        if getattr(self, "_shutting_down", False):
+            return False
         session = self.creator_session
         if session is None:
             return False
@@ -4344,6 +4571,8 @@ class MeowPlayer:
         return True
 
     def process_youtube_download(self):
+        if getattr(self, "_shutting_down", False):
+            return None
         session = self.youtube_download_session
         if session is None:
             return False
@@ -4403,6 +4632,7 @@ class MeowPlayer:
         reset_shuffle_bag = False
         if not preserve_sequence:
             self.playback_sequence = list(sequence or [])
+            self.playback_sequence_active = sequence is not None
             reset_shuffle_bag = self.shuffle
 
         if (
@@ -4421,6 +4651,7 @@ class MeowPlayer:
         ):
             self.shuffle_bag.remove(index)
 
+        self._playback_stopped = False
         self.current = index
         self.load_current_lyrics(index)
         if reset_shuffle_bag:
@@ -4549,6 +4780,9 @@ class MeowPlayer:
         if not self.catnip_stash:
             return False
 
+        # Playing a Stash without a sequence is a bounded queue session.
+        if not self.has_explicit_sequence():
+            self.playback_sequence_active = True
         position = max(0, min(position, len(self.catnip_stash) - 1))
         index = self.catnip_stash.pop(position)
 
@@ -4585,39 +4819,25 @@ class MeowPlayer:
         if not self.songs:
             return
 
+        if automatic and getattr(self, "repeat", False):
+            return
         if self.catnip_stash:
             self.play_stash_position(0, automatic=automatic)
             return
 
-        if self.shuffle:
-            pool = self.shuffle_pool()
-            if not pool:
+        index = self._next_local_index()
+        if index is None:
+            if getattr(self, "repeat", False):
                 return
-            if len(pool) == 1:
-                index = pool[0]
-            else:
-                self.sanitize_shuffle_bag()
-                if not self.shuffle_bag:
-                    self.refill_shuffle_bag()
-                if not self.shuffle_bag:
-                    index = pool[0]
-                else:
-                    index = self.shuffle_bag.pop()
-        elif self.current is None:
-            if self.playback_sequence:
-                index = self.playback_sequence[0]
-            else:
-                index = 0
-        elif self.playback_sequence:
-            if self.current in self.playback_sequence:
-                position = self.playback_sequence.index(self.current)
-                index = self.playback_sequence[
-                    (position + 1) % len(self.playback_sequence)
-                ]
-            else:
-                index = self.playback_sequence[0]
-        else:
-            index = (self.current + 1) % len(self.songs)
+            self.cancel_crossfade()
+            self.gapless_next_index = None
+            self.mpv.clear_future_playlist()
+            self.mpv.stop()
+            self._playback_stopped = True
+            self.sync_mpris(force=True)
+            return
+        if self.shuffle and index in self.shuffle_bag:
+            self.shuffle_bag.remove(index)
 
         self.play(
             index,
@@ -4679,6 +4899,8 @@ class MeowPlayer:
             self.set_status("Queue is empty.", "The Catnip Stash is already empty.")
             return
 
+        if self.stash_selected == 0 and getattr(self, "_crossfade_active", False):
+            self.cancel_crossfade()
         index = self.catnip_stash.pop(self.stash_selected)
         if self.catnip_stash:
             self.stash_selected = min(
@@ -4705,6 +4927,8 @@ class MeowPlayer:
         if new == old:
             return
 
+        if 0 in (old, new) and getattr(self, "_crossfade_active", False):
+            self.cancel_crossfade()
         self.catnip_stash[old], self.catnip_stash[new] = (
             self.catnip_stash[new],
             self.catnip_stash[old],
@@ -4719,6 +4943,8 @@ class MeowPlayer:
 
     def clear_stash(self):
         count = len(self.catnip_stash)
+        if count and getattr(self, "_crossfade_active", False):
+            self.cancel_crossfade()
         self.catnip_stash.clear()
         self.stash_selected = 0
 
@@ -4774,8 +5000,8 @@ class MeowPlayer:
         missing = 0
 
         for raw_line in lines:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
+            line = raw_line
+            if not line.strip() or line.startswith("#"):
                 continue
 
             song_path = Path(line).expanduser()
@@ -4977,6 +5203,8 @@ class MeowPlayer:
         self.lyrics_scroll = 0
 
     def refresh_current_lyrics(self):
+        if getattr(self, "_shutting_down", False):
+            return False
         online_track = getattr(self, "online_current", None)
         if online_track is not None:
             poll_transient = getattr(self.lyrics, "poll_transient", None)
@@ -6938,20 +7166,8 @@ class MeowPlayer:
             if not transitioned:
                 transitioned = self.sync_gapless_transition()
 
-            if (
-                self.current is not None
-                and not self.repeat
-                and not transitioned
-            ):
-                eof = self.mpv.get_property("eof-reached")
-                if (
-                    eof
-                    and (
-                        self.gapless_mode == "no"
-                        or self.gapless_next_index is None
-                    )
-                ):
-                    self.next_song(automatic=True)
+            if not transitioned:
+                self.process_local_eof()
 
             try:
                 if self.search_active:

@@ -708,6 +708,11 @@ class YouTubeStreamResolver:
                     future.set_exception(exc)
             else:
                 with self._condition:
+                    if self._closed or cancel.is_set():
+                        self._jobs.pop(track.video_id, None)
+                        self._active = None
+                        future.set_exception(CancelledError())
+                        continue
                     self._cache[("youtube", track.video_id)] = stream
                     while len(self._cache) > self.capacity:
                         self._cache.popitem(last=False)

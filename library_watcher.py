@@ -58,6 +58,7 @@ class LibraryWatcher:
         self.error = None
 
         self._observer = None
+        self._closed = False
         self._lock = threading.Lock()
         self._pending_paths = set()
         self._event_types = set()
@@ -99,6 +100,8 @@ class LibraryWatcher:
         timestamp = time.monotonic() if now is None else float(now)
 
         with self._lock:
+            if self._closed:
+                return False
             if relevant:
                 self._pending_paths.update(relevant)
             elif is_directory:
@@ -109,7 +112,7 @@ class LibraryWatcher:
         return True
 
     def start(self):
-        if not self.available:
+        if self._closed or not self.available:
             return False
         if self.running:
             return True
@@ -154,6 +157,11 @@ class LibraryWatcher:
         return result
 
     def stop(self):
+        with self._lock:
+            self._closed = True
+            self._pending_paths.clear()
+            self._event_types.clear()
+            self._last_event = None
         observer = self._observer
         self._observer = None
         self.running = False

@@ -32,6 +32,7 @@ DEFAULT_STATE = {
     "shuffle_bag": [],
     "playback_history": [],
     "playback_sequence": [],
+    "playback_sequence_active": False,
 }
 
 
