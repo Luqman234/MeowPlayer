@@ -4041,11 +4041,19 @@ class MeowPlayer:
         )
         sent = float(getattr(self, "_online_load_sent", 0.0) or 0.0)
         end_event = float(events.get("end-file", 0.0) or 0.0)
+        # MPVController already accepts end-file only for the currently
+        # authoritative native playlist entry. Once a labelled end-file(eof)
+        # has survived that ownership filter, asking mpv for eof-reached again
+        # is both redundant and racy: by the time this polling loop runs mpv
+        # may already have cleared eof-reached while entering idle state.
+        #
+        # The old extra check made real Creator Nest playlists stop after one
+        # track even though the valid EOF event was present. Unit fakes without
+        # an entry-id masked the bug.
         ended = (
             sent > 0.0
             and end_event >= sent
             and events.get("end-reason") == "eof"
-            and ("entry-id" not in events or self.mpv.get_property("eof-reached"))
         )
 
         if not ended:
