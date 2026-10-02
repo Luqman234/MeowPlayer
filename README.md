@@ -8,7 +8,7 @@
  > ^ <    "No you did not."
 ```
 
-**MeowPlayer 0.21.0rc1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch lyrics, MusicBrainz can investigate missing metadata, and a small cat stands nearby claiming architectural ownership.
+**MeowPlayer 0.21.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch lyrics, MusicBrainz can investigate missing metadata, and a small cat stands nearby claiming architectural ownership.
 
 No account is required. No proprietary cloud library is required. Your songs may continue being ordinary files that live on your disk like civilized audio.
 
@@ -23,7 +23,7 @@ The cat is still not optional unless you invoke **Serious Mode**, which is less 
 > If that same feature can also be called **The Catnip Stash**, then unfortunately the naming committee has already reached quorum.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.21.0rc1 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.21.0 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -108,9 +108,11 @@ MeowPlayer tries to stay true to a few rules:
 | Cat Presence | read-only mascot state engine, animated moods, DJ/headphones/hunting/judgment reactions |
 | Critical infrastructure | `G` to pet the cat |
 
-## What's new in 0.21.0rc1 — The Cat Raided the Software Graveyard
+## What's new in 0.21.0 — The Cat Raided the Software Graveyard
 
-> **PRE-RELEASE / RC1:** this is the first v0.21.0 release candidate. The cat has passed a frankly unreasonable number of tests, but this build exists specifically so real-world use can shake out anything the archaeology missed before v0.21.0 is declared stable.
+The release candidate survived its trip through the haunted basement, so **v0.21.0 is now the stable archaeology release**.
+
+The cat did not become bug-free. The cat did, however, return from three expeditions through cmus history carrying 77 permanent regression tests and a much healthier fear of stale state.
 
 MeowPlayer 0.21.0 is about something much less glamorous than another giant feature:
 
@@ -194,13 +196,13 @@ not "eh, raw library track 0 I guess"
 
 Path equality alone is no longer treated as magical proof that two playback events belong to the same logical load, and same-file transitions now receive the same ownership scrutiny as different-file transitions.
 
-### What RC1 means
+### What "stable" means here
 
-`0.21.0rc1` is intentionally a **pre-release**.
+v0.21.0 is the first stable release after the three cmus archaeology rounds.
 
-It means the cmus archaeology work is merged and locally validated, but we want a stabilization window before calling v0.21.0 final.
+"Stable" does not mean "the cat has transcended software defects." It means the archaeology work has been merged, exercised locally and through the repository's normal validation gates, and is no longer being presented as a release candidate.
 
-The current evidence includes:
+The evidence includes:
 
 - all **77 archaeology regressions** passing;
 - **332 total tests** passing with zero skips;
@@ -224,7 +226,7 @@ No.
 Also no. We made them regression tests.
 ```
 
-> **MeowPlayer 0.21.0rc1 — The Cat Raided the Software Graveyard.** 🐈‍⬛🔬🪦
+> **MeowPlayer 0.21.0 — The Cat Raided the Software Graveyard, found several ghosts, and made them unit tests.** 🐈‍⬛🔬🪦
 
 ## What's new in 0.20.0 — The Internet Cat Learns What Comes Next
 
