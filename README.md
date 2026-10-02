@@ -8,7 +8,7 @@
  > ^ <    "No you did not."
 ```
 
-**MeowPlayer 0.20.0** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch lyrics, MusicBrainz can investigate missing metadata, and a small cat stands nearby claiming architectural ownership.
+**MeowPlayer 0.21.0rc1** is a local-first, keyboard-first terminal music player for Linux and Termux. `mpv` does the decoding, Python + `curses` run the TUI, SQLite remembers the library, Mutagen reads tags, Watchdog notices filesystem changes, LRCLIB can fetch lyrics, MusicBrainz can investigate missing metadata, and a small cat stands nearby claiming architectural ownership.
 
 No account is required. No proprietary cloud library is required. Your songs may continue being ordinary files that live on your disk like civilized audio.
 
@@ -23,7 +23,7 @@ The cat is still not optional unless you invoke **Serious Mode**, which is less 
 > If that same feature can also be called **The Catnip Stash**, then unfortunately the naming committee has already reached quorum.
 
 ```text
- /\_/\   ♫ MEOWPLAYER v0.20.0 — Purring
+ /\_/\   ♫ MEOWPLAYER v0.21.0rc1 — Purring
 ( ^.^ )
  > ♫ <
 
@@ -107,6 +107,124 @@ MeowPlayer tries to stay true to a few rules:
 | Terminal candy | Kitty album art, CAVA spectrum |
 | Cat Presence | read-only mascot state engine, animated moods, DJ/headphones/hunting/judgment reactions |
 | Critical infrastructure | `G` to pet the cat |
+
+## What's new in 0.21.0rc1 — The Cat Raided the Software Graveyard
+
+> **PRE-RELEASE / RC1:** this is the first v0.21.0 release candidate. The cat has passed a frankly unreasonable number of tests, but this build exists specifically so real-world use can shake out anything the archaeology missed before v0.21.0 is declared stable.
+
+MeowPlayer 0.21.0 is about something much less glamorous than another giant feature:
+
+**making the features already here considerably harder to break.**
+
+Instead of waiting for users to rediscover bugs that mature terminal music players already found years ago, MeowPlayer spent three rounds studying historical failure modes from **cmus**, translating the relevant ones into MeowPlayer-native regression tests, reproducing the failures where possible, and fixing them without copying cmus implementation code.
+
+```text
+cmus changelog / patches / history
+              ↓
+      "that looks awful"
+              ↓
+   reproduce MeowPlayer equivalent
+              ↓
+       regression test first
+              ↓
+       FAIL? fix the invariant
+              ↓
+       keep the test forever
+```
+
+The result is now documented in `docs/BUG_ARCHAEOLOGY.md`.
+
+### Three archaeological expeditions, one increasingly nervous cat
+
+Across cmus Bug Archaeology Rounds 1–3:
+
+```text
+historical cmus cases reviewed     34
+archaeology regression tests       77
+full MeowPlayer tests             332
+skipped tests                        0
+```
+
+The archaeology did not merely produce theoretical concerns. It reproduced real MeowPlayer weaknesses involving:
+
+- stale crossfade reservations after library rescans;
+- queue selections becoming invalid after deletion;
+- malformed Unicode/NUL escaping into MPRIS;
+- corrupt UTF-8 or malformed saved-track values breaking restoration;
+- queue mutation while a crossfade is active;
+- stale EOF and pending-load ownership;
+- Stop being overridden by old transition/MPRIS observations;
+- exhausted explicit sequences falling back to unrelated library order;
+- playlist parsing damaging filenames with significant whitespace;
+- same-file gapless handoffs failing to consume the queued occurrence;
+- rescans during natural handoff losing playback/history/queue/listen-count reconciliation;
+- explicit Play after Stop being blocked by stale observations.
+
+This release also tightens reconnect recovery, event ownership, late resolver publication, watcher shutdown, repeated crossfade completion, and teardown behavior.
+
+### The new rule: old ghosts do not own playback
+
+A lot of the hardening converges on one rule:
+
+```text
+newest authoritative action wins
+```
+
+So:
+
+```text
+user presses Stop
+    ↓
+old EOF arrives
+    ↓
+still stopped
+
+user starts Track B
+    ↓
+late event from Track A arrives
+    ↓
+Track B remains authoritative
+
+explicit sequence ends
+    ↓
+STOP
+    ↓
+not "eh, raw library track 0 I guess"
+```
+
+Path equality alone is no longer treated as magical proof that two playback events belong to the same logical load, and same-file transitions now receive the same ownership scrutiny as different-file transitions.
+
+### What RC1 means
+
+`0.21.0rc1` is intentionally a **pre-release**.
+
+It means the cmus archaeology work is merged and locally validated, but we want a stabilization window before calling v0.21.0 final.
+
+The current evidence includes:
+
+- all **77 archaeology regressions** passing;
+- **332 total tests** passing with zero skips;
+- real mpv playback, reconnect/reload, same-file gapless and player smoke checks passing;
+- isolated D-Bus/MPRIS passing;
+- wheel + sdist builds and offline installation passing.
+
+It does **not** mean "MeowPlayer is now physically incapable of bugs." The archaeology document explicitly records remaining unproven limits instead of turning confidence into mythology.
+
+```text
+ /\_/\
+( o.o )   "Did we eliminate every possible race condition?"
+ > ^ <
+
+No.
+
+ /\_/\
+( ^.^ )   "Did we make 77 of them somebody else's future problem?"
+ > ^ <
+
+Also no. We made them regression tests.
+```
+
+> **MeowPlayer 0.21.0rc1 — The Cat Raided the Software Graveyard.** 🐈‍⬛🔬🪦
 
 ## What's new in 0.20.0 — The Internet Cat Learns What Comes Next
 
