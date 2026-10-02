@@ -60,6 +60,26 @@ class YouTubeBrowseError(RuntimeError):
 
 
 YOUTUBE_SEARCH_MODES = {"all", "artist"}
+ONLINE_PROVIDER_LABELS = {
+    "youtube": "YouTube",
+    "niconico": "NicoNico",
+}
+
+
+def normalize_online_provider(provider):
+    provider = str(provider or "youtube").strip().lower()
+    return provider if provider in ONLINE_PROVIDER_LABELS else "youtube"
+
+
+def online_provider_label(provider):
+    return ONLINE_PROVIDER_LABELS[normalize_online_provider(provider)]
+
+
+def online_track_key(track):
+    return (
+        normalize_online_provider(getattr(track, "provider", "youtube")),
+        str(getattr(track, "video_id", "") or ""),
+    )
 
 
 def normalize_youtube_search(query, search_mode="all"):
@@ -103,6 +123,21 @@ def youtube_search_target(query, limit=None, search_mode="all"):
     limit = max(1, min(50, int(limit)))
     return f"ytsearch{limit}:{query}"
 
+
+def niconico_search_target(query, limit=None, search_mode="all"):
+    """Build the yt-dlp NicoNico search target.
+
+    yt-dlp exposes NicoNico through the nicosearch prefix. Artist mode keeps
+    the artist text intact instead of adding YouTube-specific "music" biasing.
+    """
+    query, _ = normalize_youtube_search(query, search_mode)
+    query = " ".join(query.split())
+    if limit is None:
+        return f"nicosearchall:{query}"
+    limit = max(1, min(50, int(limit)))
+    return f"nicosearch{limit}:{query}"
+
+
 @dataclass(frozen=True)
 class YouTubeTrack:
     video_id: str
@@ -113,6 +148,11 @@ class YouTubeTrack:
     thumbnail_url: str = ""
     channel_id: str = ""
     channel_url: str = ""
+    provider: str = "youtube"
+
+    @property
+    def provider_label(self):
+        return online_provider_label(self.provider)
 
     @property
     def artist_title(self):
@@ -131,7 +171,7 @@ class YouTubeTrack:
 
     @property
     def queue_label(self):
-        return f"{self.artist_title} · YouTube · {self.duration_label}"
+        return f"{self.artist_title} · {self.provider_label} · {self.duration_label}"
 
 
 @dataclass(frozen=True)
@@ -311,9 +351,11 @@ class YouTubeCatalog:
             session.close()
 
     @classmethod
-    def _tracks_from_payload(cls, payload, limit=None):
+    def _tracks_from_payload(cls, payload, limit=None, provider="youtube"):
         if not isinstance(payload, dict):
             return []
+
+        provider = normalize_online_provider(provider)
 
         entries = payload.get("entries") or []
         tracks = []
@@ -331,11 +373,14 @@ class YouTubeCatalog:
             if not title:
                 continue
 
-            artist = cls._artist_from_entry(entry)
+            artist = cls._artist_from_entry(entry, provider=provider)
             duration = cls._duration_from_entry(entry)
-            url = cls._watch_url(entry, video_id)
+            url = cls._watch_url(entry, video_id, provider=provider)
             thumbnail = cls._thumbnail_from_entry(entry)
-            channel_id, channel_url = cls._channel_from_entry(entry)
+            channel_id, channel_url = cls._channel_from_entry(
+                entry,
+                provider=provider,
+            )
 
             tracks.append(
                 YouTubeTrack(
@@ -347,6 +392,7 @@ class YouTubeCatalog:
                     thumbnail_url=thumbnail,
                     channel_id=channel_id,
                     channel_url=channel_url,
+                    provider=provider,
                 )
             )
             seen.add(video_id)
@@ -357,7 +403,7 @@ class YouTubeCatalog:
         return tracks
 
     @staticmethod
-    def _artist_from_entry(entry):
+    def _artist_from_entry(entry, provider="youtube"):
         for key in (
             "artist",
             "artists",
@@ -376,6 +422,8 @@ class YouTubeCatalog:
             value = str(value or "").strip()
             if value:
                 return value
+        if normalize_online_provider(provider) == "niconico":
+            return "Unknown NicoNico Creator"
         return "Unknown YouTube Artist"
 
     @staticmethod
@@ -386,7 +434,7 @@ class YouTubeCatalog:
             return 0.0
 
     @staticmethod
-    def _watch_url(entry, video_id):
+    def _watch_url(entry, video_id, provider="youtube"):
         for key in ("webpage_url", "original_url"):
             value = str(entry.get(key) or "").strip()
             if value.startswith(("https://", "http://")):
@@ -396,6 +444,8 @@ class YouTubeCatalog:
         if raw_url.startswith(("https://", "http://")):
             return raw_url
 
+        if normalize_online_provider(provider) == "niconico":
+            return f"https://www.nicovideo.jp/watch/{video_id}"
         return f"https://www.youtube.com/watch?v={video_id}"
 
     @staticmethod
@@ -416,7 +466,7 @@ class YouTubeCatalog:
         return ""
 
     @staticmethod
-    def _channel_from_entry(entry):
+    def _channel_from_entry(entry, provider="youtube"):
         channel_id = ""
         for key in ("channel_id", "uploader_id"):
             value = str(entry.get(key) or "").strip()
@@ -432,7 +482,13 @@ class YouTubeCatalog:
                 break
 
         if not channel_url and channel_id:
-            channel_url = f"https://www.youtube.com/channel/{channel_id}"
+            if (
+                normalize_online_provider(provider) == "niconico"
+                and channel_id.isdigit()
+            ):
+                channel_url = f"https://www.nicovideo.jp/user/{channel_id}"
+            elif normalize_online_provider(provider) == "youtube":
+                channel_url = f"https://www.youtube.com/channel/{channel_id}"
 
         return channel_id, channel_url
 
@@ -578,7 +634,7 @@ class YouTubeStreamResolver:
 
     def cached(self, track):
         with self._condition:
-            key = ("youtube", track.video_id)
+            key = online_track_key(track)
             stream = self._cache.get(key)
             if stream and stream.valid():
                 self._cache.move_to_end(key)
@@ -588,26 +644,30 @@ class YouTubeStreamResolver:
 
     def invalidate(self, track):
         with self._condition:
-            self._cache.pop(("youtube", track.video_id), None)
+            self._cache.pop(online_track_key(track), None)
 
     def request(self, track, *, prefetch=False, debounce=0.0):
         with self._condition:
             future = Future()
+            track_key = online_track_key(track)
             if self._closed:
                 future.cancel()
                 return future
             # Returning to a cached/active selection must also discard a stale
             # queued background selection. Never displace an Enter request.
-            if (self._next and self._next.prefetch
-                    and self._next.track.video_id != track.video_id):
+            if (
+                self._next
+                and self._next.prefetch
+                and online_track_key(self._next.track) != track_key
+            ):
                 self._next.future.cancel()
-                self._jobs.pop(self._next.track.video_id, None)
+                self._jobs.pop(online_track_key(self._next.track), None)
                 self._next = None
             cached = self.cached(track)
             if cached:
                 future.set_result(cached)
                 return future
-            existing = self._jobs.get(track.video_id)
+            existing = self._jobs.get(track_key)
             if existing:
                 if not prefetch:
                     existing.due = 0.0
@@ -621,11 +681,11 @@ class YouTubeStreamResolver:
                 return future
             if self._next:
                 self._next.future.cancel()
-                self._jobs.pop(self._next.track.video_id, None)
+                self._jobs.pop(online_track_key(self._next.track), None)
             job = _ResolveJob(track, future, time.monotonic() + debounce,
                               threading.Event(), prefetch)
             self._next = job
-            self._jobs[track.video_id] = job
+            self._jobs[track_key] = job
             if not prefetch and self._active:
                 self._active.cancel.set()
             self._condition.notify_all()
@@ -690,7 +750,7 @@ class YouTubeStreamResolver:
                 self._next = None
                 self._active = job
                 if not job.future.set_running_or_notify_cancel():
-                    self._jobs.pop(job.track.video_id, None)
+                    self._jobs.pop(online_track_key(job.track), None)
                     self._active = None
                     continue
             track, future = job.track, job.future
@@ -703,20 +763,20 @@ class YouTubeStreamResolver:
             except Exception as exc:
                 LOGGER.debug("YT_PREFETCH failed video_id=%s error=%s", track.video_id, type(exc).__name__)
                 with self._condition:
-                    self._jobs.pop(track.video_id, None)
+                    self._jobs.pop(online_track_key(track), None)
                     self._active = None
                     future.set_exception(exc)
             else:
                 with self._condition:
                     if self._closed or cancel.is_set():
-                        self._jobs.pop(track.video_id, None)
+                        self._jobs.pop(online_track_key(track), None)
                         self._active = None
                         future.set_exception(CancelledError())
                         continue
-                    self._cache[("youtube", track.video_id)] = stream
+                    self._cache[online_track_key(track)] = stream
                     while len(self._cache) > self.capacity:
                         self._cache.popitem(last=False)
-                    self._jobs.pop(track.video_id, None)
+                    self._jobs.pop(online_track_key(track), None)
                     self._active = None
                     future.set_result(stream)
                 LOGGER.debug("YT_PREFETCH complete video_id=%s elapsed_ms=%.3f",
@@ -817,6 +877,124 @@ class YouTubeSearchSession:
                 process.communicate()
             LOGGER.debug("YT_LATENCY search_complete=%.6f search_total_ms=%.3f",
                          time.monotonic(), (time.monotonic() - started) * 1000)
+
+    def close(self):
+        self.cancel.set()
+        self.thread.join(timeout=2.0)
+
+
+class NicoNicoSearchSession:
+    """Line-oriented NicoNico search using the same yt-dlp pipeline."""
+
+    def __init__(self, catalog, query, limit=None, search_mode="all"):
+        self.results = queue.SimpleQueue()
+        self.cancel = threading.Event()
+        self.query, self.search_mode = normalize_youtube_search(
+            query,
+            search_mode,
+        )
+        self.thread = threading.Thread(
+            target=self._run,
+            args=(catalog, self.query, limit, self.search_mode),
+            name="nico-search",
+            daemon=True,
+        )
+        self.thread.start()
+
+    def _run(self, catalog, query, limit, search_mode):
+        started = time.monotonic()
+        process = None
+        LOGGER.debug(
+            "NICO_LATENCY search_start=%.6f search_mode=%s",
+            started,
+            search_mode,
+        )
+        try:
+            if not catalog.available:
+                raise YouTubeUnavailable(catalog.unavailable_reason)
+            if limit is None:
+                limit = catalog.default_limit
+            elif limit is not None:
+                limit = max(1, min(50, int(limit)))
+
+            command = [
+                catalog.executable,
+                "--ignore-config",
+                "--flat-playlist",
+                "--skip-download",
+                "--no-warnings",
+                "--lazy-playlist",
+                "--print",
+                "%(.{id,title,artist,artists,creator,uploader,channel,"
+                "channel_id,channel_url,uploader_id,uploader_url,duration,"
+                "webpage_url,thumbnail})j",
+                niconico_search_target(query, limit, search_mode),
+            ]
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=network_subprocess_env(PYTHONUNBUFFERED="1"),
+            )
+            seen = set()
+            buffer = b""
+            last_progress = started
+
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while not self.cancel.is_set():
+                    if not selector.select(timeout=0.1):
+                        if process.poll() is not None:
+                            break
+                        if time.monotonic() - last_progress >= catalog.timeout:
+                            raise YouTubeSearchError("NicoNico search stalled")
+                        continue
+
+                    chunk = os.read(process.stdout.fileno(), 65536)
+                    if not chunk:
+                        break
+                    last_progress = time.monotonic()
+                    buffer += chunk
+
+                    while b"\n" in buffer:
+                        line, buffer = buffer.split(b"\n", 1)
+                        data = json.loads(line)
+                        tracks = catalog._tracks_from_payload(
+                            {"entries": [data]},
+                            provider="niconico",
+                        )
+                        for track in tracks:
+                            key = online_track_key(track)
+                            if key in seen:
+                                continue
+                            if not seen:
+                                LOGGER.debug(
+                                    "NICO_LATENCY first_search_result=%.6f "
+                                    "search_first_result_ms=%.3f",
+                                    time.monotonic(),
+                                    (time.monotonic() - started) * 1000,
+                                )
+                            seen.add(key)
+                            self.results.put(("track", track))
+
+            if not self.cancel.is_set() and process.wait(timeout=1) != 0:
+                raise YouTubeSearchError("yt-dlp NicoNico search failed")
+            self.results.put(("done", None))
+        except Exception:
+            # Never expose extractor output: it may contain signed URLs/cookies.
+            self.results.put(
+                ("error", "NicoNico search failed or timed out.")
+            )
+        finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
+            LOGGER.debug(
+                "NICO_LATENCY search_complete=%.6f search_total_ms=%.3f",
+                time.monotonic(),
+                (time.monotonic() - started) * 1000,
+            )
 
     def close(self):
         self.cancel.set()
