@@ -1,6 +1,6 @@
 # Maintainer: Luqman234
 pkgname=meowplayer
-pkgver=0.21.0rc1
+pkgver=0.21.0
 pkgrel=1
 pkgdesc="A lightweight, aggressively cat-themed terminal music player powered by mpv"
 arch=('any')
