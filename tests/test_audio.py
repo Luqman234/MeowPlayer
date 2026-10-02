@@ -534,6 +534,7 @@ class AudioEngineTests(unittest.TestCase):
 
     def test_advance_playlist_targets_exact_next_index(self):
         controller = MPVController.__new__(MPVController)
+        controller._init_ipc()
         commands = []
 
         def fake_get_property(name):

@@ -7,3 +7,10 @@ venv/
 build/
 dist/
 *.egg-info/
+
+# makepkg / Arch packaging artifacts
+/src/
+/pkg/
+/meowplayer/
+/*.pkg.tar.*
+/*.src.tar.*
