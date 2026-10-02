@@ -108,7 +108,7 @@ MeowPlayer tries to stay true to a few rules:
 | Cat Presence | read-only mascot state engine, animated moods, DJ/headphones/hunting/judgment reactions |
 | Critical infrastructure | `G` to pet the cat |
 
-## Internet Nest — the cat found NicoNico too
+## Internet Nest — the cat found the Anime's Nest
 
 Internet Nest is no longer a one-site cardboard box.
 
