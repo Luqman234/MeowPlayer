@@ -106,9 +106,12 @@ def main():
                     report["errors"].append(f"{label}: {type(exc).__name__}")
             report[label] = summary(samples)
     resolver = YouTubeStreamResolver(catalog.executable, timeout=args.timeout)
-    mpv = MPVController()
+    mpv = MPVController(network_resolver_workaround=True)
     player = player_for(mpv, resolver)
-    samples = {"cold_enter_to_playback": [], "warm_enter_to_playback": [], "resolve": [], "cache_lookup": [], "mpv_direct_open": []}
+    report["warm_policy"] = "wait for extracted available_at before Enter; prefetch lead time reported separately"
+    report["network_environment"] = "product default: process-local glibc resolver workaround"
+    samples = {"cold_enter_to_playback": [], "warm_enter_to_playback": [], "resolve": [],
+               "prefetch_readiness_wait": [], "cache_lookup": [], "mpv_direct_open": []}
     try:
         for _ in range(args.runs):
             resolver.invalidate(track)
@@ -116,14 +119,20 @@ def main():
                 samples["cold_enter_to_playback"].append(measure_play(player, track, args.timeout * 3))
                 resolver.invalidate(track)
                 start = time.monotonic()
-                resolver.resolve(track)
+                prefetched = resolver.resolve(track)
                 samples["resolve"].append((time.monotonic() - start) * 1000)
+                # Model a genuinely ready prefetch. A just-resolved cache entry
+                # can still be unavailable; report this lead time explicitly.
+                start = time.monotonic()
+                while time.monotonic() < prefetched.ready_at:
+                    time.sleep(max(0, min(.01, prefetched.ready_at - time.monotonic())))
+                samples["prefetch_readiness_wait"].append((time.monotonic() - start) * 1000)
                 start = time.monotonic()
                 resolver.resolve(track)
                 samples["cache_lookup"].append((time.monotonic() - start) * 1000)
                 samples["warm_enter_to_playback"].append(measure_play(player, track, args.timeout * 3))
                 samples["mpv_direct_open"].append((player._online_playback_started_at - player._online_load_sent) * 1000)
-                if player._online_path != "cache":
+                if player._online_path != "cache" or player._online_attempt != 1:
                     report["errors"].append("warm sample required retry/fallback")
             except Exception as exc:
                 report["errors"].append(type(exc).__name__)
