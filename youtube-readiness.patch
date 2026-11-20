@@ -1,0 +1,1402 @@
+diff --git a/docs/youtube-startup-performance.md b/docs/youtube-startup-performance.md
+index 594ca66..24da726 100644
+--- a/docs/youtube-startup-performance.md
++++ b/docs/youtube-startup-performance.md
+@@ -1,5 +1,170 @@
+ # Internet Nest startup investigation
+ 
++## Immediate playback HTTP 403: availability metadata (2026-10-30)
++
++The immediate-playback failure was reproduced on `dhYOPzcsbGM` with Python
++3.14.8, yt-dlp 2026.10.26, mpv 0.41.0, FFmpeg runtime 9.0.2, and Deno 2.9.8.
++The selected YouTube format includes an **`available_at` Unix timestamp**.
++MeowPlayer's selected-field metadata extraction discarded it. Consequently,
++mpv requested the media before the extractor's availability deadline. Waiting
++in the results screen let the same prefetched URL become usable. Immediate
++invalidation and re-extraction could obtain another URL with a new future
++deadline, repeating the failure.
++
++This is supported by source inspection and live media requests, rather than
++IPC acknowledgements alone. In the installed yt-dlp, `YoutubeIE` computes a
++per-client availability timestamp from pre-content ad duration/skip metadata
++and attaches it to non-live formats; its downloader honors that timestamp
++before the first download. MeowPlayer uses `--skip-download`, so that downloader
++wait never ran. See the upstream [YouTube extractor](https://github.com/yt-dlp/yt-dlp/blob/2026.10.26/yt_dlp/extractor/youtube/_video.py)
++and [download readiness handling](https://github.com/yt-dlp/yt-dlp/blob/2026.10.26/yt_dlp/downloader/common.py).
++
++The search worker delivers results incrementally. `process_youtube()` requests
++prefetch for the selected result with a 150 ms debounce. Enter's
++`play_online()` shares that same Future and removes the debounce, or consumes
++the cache if extraction is complete. Online playlists request the next stream
++20 seconds before the current track ends. Readiness therefore belongs to the
++extracted stream, independently of whether search, selection or a playlist
++initiated resolution.
++
++Live controls, extracting once and replaying the **identical URL and headers**:
++
++| mpv configuration / format | Remaining availability at extraction | First media GET after resolution | Immediate result | Same URL delayed GET | Delayed result |
++| --- | ---: | ---: | --- | ---: | --- |
++| User configuration / 251 Opus | 4,339 ms | ~61 ms | HTTP 403, end-file(error), no progress | ~5,266 ms | Playback progress |
++| `--no-config` / 251 Opus | 4,296 ms | ~49 ms | HTTP 403, end-file(error), no progress | ~5,093 ms | Playback progress |
++| `--no-config` / 140 AAC | 3,920 ms | ~64 ms | HTTP 403, end-file(error), no progress | ~5,089 ms | Playback progress |
++
++GET timings come from FFmpeg's trace immediately before sending the HTTP
++request, relative to stream resolution; process-start timestamp alignment is
++approximate. These are media requests, not loadfile submission times. Success
++requires file-loaded, playback-restart, advancing time-pos and non-idle state.
++Native playlist entry IDs distinguish attempts. The failures are genuine
++HTTP errors, independent of user mpv configuration in these controls.
++
++This demonstrates a timing constraint for these samples, not a universal
++YouTube delay. Both tested audio formats were affected under the default
++extractor clients; other clients, accounts, live formats, regions and networks
++were not exhaustively compared. `available_at` can already be in the past or
++absent. The precise YouTube server-side enforcement is outside MeowPlayer's
++control, and HTTP 403 can have other causes.
++
++### Playback and recovery behavior
++
++`resolver_command()` now retains `available_at`; `parse_stream()` converts it
++once to a monotonic `ResolvedStream.ready_at` deadline. The existing 180-second
++maximum cache TTL and signed expiry minus 30 seconds still apply. Invalid,
++non-finite or unavailable-until-after-expiry metadata is rejected.
++
++`_finish_online_resolve()` retains the stream and calls `_start_online_stream()`.
++If the deadline is in the future, playback enters `waiting`. The normal TUI
++refresh loop checks the deadline; it starts no media request before then and
++does not sleep or block user input. A ready fresh/cached stream loads immediately.
++Prefetching consumes the readiness interval before Enter when there is enough
++lead time, without keeping the resolver worker busy while waiting.
++
++Recovery is bounded per user selection:
++
++1. Before loading, recheck expiry and readiness.
++2. On an early open failure with no file-loaded event or playback progress,
++   retry the same still-valid stream once after a one-second asynchronous
++   backoff, also respecting its availability deadline. mpv's generic
++   `loading failed` (or missing detail) qualifies; decoder/audio-output errors
++   and startup timeouts skip this step. This is a transient-open retry, not a
++   claim that every open error is HTTP 403 or that one second is a readiness rule.
++3. When reuse fails or expiry prevents it, invalidate and resolve fresh once.
++   The fresh stream's own availability deadline also applies.
++4. Use the existing mpv watch-URL fallback once, then report failure. There are
++   at most three direct loads plus one fallback, and two resolver extractions.
++
++Actual position and playback events still determine success. A failure after
++observed progress does not restart the track from zero. Normal EOF keeps the
++existing playlist advancement behavior. Pausing while waiting is preserved
++when the stream loads; a deliberately paused startup does not trigger the
++startup timeout.
++
++Pending state belongs to the selected provider/video. Track changes, local
++playback, Stop and shutdown revoke it. There are no timer callbacks that can
++restart an obsolete selection. mpv start/end ownership still uses native
++playlist entry IDs across same-URL reloads and playlist transitions. An owned
++end-file event now also clears the controller's pending-load flag and retains
++mpv's error category for recovery decisions.
++
++### Current performance and validation
++
++Three patched application-entry-point runs on the reported video, normal mpv
++audio output, product-default process-local DNS environment:
++
++| Measurement | Median | Range |
++| --- | ---: | ---: |
++| Cold Enter to advancing playback | 7,557 ms | 6,970–8,028 ms |
++| Ready prefetched Enter to advancing playback | **230 ms** | **214–232 ms** |
++| Metadata extraction | 3,008 ms | 2,912–3,138 ms |
++| Prefetch readiness lead time after extraction | 3,812 ms | 3,751–4,665 ms |
++
++All three cold and three ready-prefetched runs succeeded. No fixed delay is
++added to ready streams or local files. Cold streams wait only the remaining
++extractor-declared availability interval; network/extraction latency remains
++external. These small samples are not latency or reliability guarantees.
++
++The benchmark now uses the application's mpv resolver environment and reports
++prefetch readiness lead time separately, before timing a *ready* cache hit.
++An initial patched run of the old benchmark also succeeded in all six starts,
++but measured a just-resolved cache entry as warm and omitted mpv's DNS
++workaround: medians were 12,358 ms cold / 9,682 ms just-cached. This is not a
++matched performance comparison. Do not interpret those numbers as ready-cache
++latency or attribute the difference entirely to the availability fix.
++
++Offline fake-clock regression tests cover availability, missing/past metadata,
++expiry, immediate success, same-URL reuse, exhausted recovery, cancellation,
++pause/resume, privacy, entry ownership and playlist prefetch/advancement.
++Opt-in real-mpv tests use a loopback server to assert the first HTTP request
++occurs after declared readiness, observe real 403 failure/recovery, and verify
++bounded persistent failure. They also check per-file header isolation, local
++FLAC/MP3/Opus, native gapless handoff, pause, seek, Stop and ReplayGain. Unit
++tests never require YouTube connectivity.
++
++Final validation: `MEOW_REAL_MPV=1 python -m unittest discover -s tests`
++passed all **368 tests** in 6.89 seconds, including the three real-mpv tests
++(26 additional test methods over the 342-test baseline). A separate real
++MPRIS registration/update check passed on an isolated session D-Bus.
++Existing tests for NicoNico, Creator's Nest, queues, crossfade, lyrics, cache
++behavior and IPC remained green; those services and interactive curses input
++were not separately exercised live. The optional `web_safari` live control
++failed at extraction and therefore supplied no playback timing evidence.
++
++### Troubleshooting future failures
++
++Enable MeowPlayer debug logging and inspect `YT_PLAY`, `YT_RETRY`, `YT_END`
++and `YT_LATENCY`. Logs contain video ID, resolver path, cache hit, format ID,
++stream age, attempt number, remaining wait, end reason and playback latency.
++They do not include media URLs or HTTP headers. The availability wait is
++identified by `wait_reason=availability`; a retry uses `resolver_path=same-url`.
++`success` from loadfile only means the command was accepted.
++
++For an opt-in live control (null audio, no saved media):
++
++```bash
++python tools/probe_youtube_readiness.py 'https://youtu.be/dhYOPzcsbGM'
++python tools/probe_youtube_readiness.py 'https://youtu.be/dhYOPzcsbGM' --no-config
++python tools/probe_youtube_readiness.py 'https://youtu.be/dhYOPzcsbGM' --format 140 --no-config
++# Optional client comparison; availability/formats depend on extractor support:
++python tools/probe_youtube_readiness.py 'https://youtu.be/dhYOPzcsbGM' --client web_safari --no-config
++```
++
++The diagnostic intentionally bypasses the application readiness gate for its
++first attempt, then replays the exact same URL after the reported deadline (or
++five seconds for the diagnostic control). That sleep is confined to the CLI
++probe. It prints safe timings, HTTP-403 detection and actual playback evidence;
++its private temporary mpv traces are deleted on exit. Trace parsing is
++diagnostic only and may need adjustment with future FFmpeg log formats. A
++failure that persists after readiness may involve expiry, rate limits, tokens,
++headers, network conditions, or extractor changes; the timing fix does not
++establish which of those applies. Redact manually retained mpv logs before
++sharing because mpv itself may log signed URLs and headers.
++
++The earlier DNS investigation below describes a separate failure mode.
++
+ Measured on 2026-09-25 with Python 3.14, mpv 0.41.0, yt-dlp
+ 2026.08.19, Linux/glibc, and the default PipeWire audio output. The original
+ performance investigation was based on `95bda09` (main already included the
+@@ -154,8 +319,9 @@ session. The user's original observation was about 1,200 requests in 13 s.
+ - Per-file mpv options preserve extractor HTTP headers, disable ytdl for direct
+   streams, and restore options afterward. Named loadfile arguments support
+   both sides of mpv 0.38's positional index change.
+-- Resolution failure falls back to the watch URL. Direct stream-open failure
+-  invalidates and resolves once, then falls back. Repeated Enter cannot restart
++- Resolution failure falls back to the watch URL. Direct playback honors the
++  extractor availability deadline; an early open failure can reuse the URL once
++  before invalidating/resolving once and falling back. Repeated Enter cannot restart
+   a resolving/loading track. No media files, SQLite inserts, or new dependency.
+ - Local playback and Bad Larry's seek/pause controls use the existing controller.
+   Without `--youtube`, no online workers start.
+diff --git a/meowplayer.py b/meowplayer.py
+index 067b3c2..e8975d8 100755
+--- a/meowplayer.py
++++ b/meowplayer.py
+@@ -94,6 +94,7 @@ SUPPORTED_EXTENSIONS = {
+     ".wav", ".m4a", ".aac", ".wma"
+ }
+ ONLINE_RETRY_GUARD_SECONDS = 8.0
++ONLINE_OPEN_RETRY_SECONDS = 1.0
+ ONLINE_PLAYLIST_PREFETCH_SECONDS = 20.0
+ 
+ LIBRARY_VIEWS = (
+@@ -691,7 +692,9 @@ class MPVController:
+                                     self._load_pending = False
+                                 self.playback_events[event] = time.monotonic()
+                                 if event == "end-file":
++                                    self._load_pending = False
+                                     self.playback_events["end-reason"] = message.get("reason")
++                                    self.playback_events["end-error"] = message.get("file_error", message.get("error"))
+                                 MPV_LOGGER.debug("mpv event=%s monotonic=%.6f", event, time.monotonic())
+                         pending = self._pending.pop(message.get("request_id"), None)
+                         if pending:
+@@ -1046,8 +1049,11 @@ class MeowPlayer:
+         self.youtube_download_session = None
+         self.youtube_download_track = None
+         self._prefetch_selection = None
+-        self._online_future = None
++        self._cancel_online_pending()
+         self._online_retry = 0
++        self._online_same_url_retry = 0
++        self._online_attempt = 0
++        self._online_start_paused = False
+         self._online_path = None
+         self.youtube_results = []
+         self.youtube_selected = 0
+@@ -2204,14 +2210,17 @@ class MeowPlayer:
+                     self.set_playback_paused(True)
+             elif action == "play":
+                 if self.online_current is not None:
+-                    if (getattr(self, "_playback_stopped", False)
++                    if (not getattr(self, "_playback_stopped", False)
++                            and self.online_load_state in {"resolving", "waiting", "loading"}):
++                        self.set_playback_paused(False)
++                    elif (getattr(self, "_playback_stopped", False)
+                             or bool(self.mpv.get_property("idle-active"))):
+                         self.play_online(
+                             self.online_current,
+                             preserve_playlist=True,
+                         )
+                     else:
+-                        self.mpv.play()
++                        self.set_playback_paused(False)
+                 elif self.current is None:
+                     self.play_selected_library_song()
+                 elif (getattr(self, "_playback_stopped", False)
+@@ -2226,14 +2235,17 @@ class MeowPlayer:
+                     self.set_playback_paused(False)
+             elif action == "play_pause":
+                 if self.online_current is not None:
+-                    if (getattr(self, "_playback_stopped", False)
++                    if (not getattr(self, "_playback_stopped", False)
++                            and self.online_load_state in {"resolving", "waiting", "loading"}):
++                        self.toggle_playback_pause()
++                    elif (getattr(self, "_playback_stopped", False)
+                             or bool(self.mpv.get_property("idle-active"))):
+                         self.play_online(
+                             self.online_current,
+                             preserve_playlist=True,
+                         )
+                     else:
+-                        self.mpv.toggle_pause()
++                        self.toggle_playback_pause()
+                 elif self.current is None:
+                     self.play_selected_library_song()
+                 elif (getattr(self, "_playback_stopped", False)
+@@ -2253,7 +2265,7 @@ class MeowPlayer:
+                         self.cancel_crossfade()
+                     self.mpv.stop()
+                     if self.online_current is not None:
+-                        self._online_future = None
++                        self._cancel_online_pending()
+                         self.online_load_state = "idle"
+             elif action == "seek" and self.has_active_track():
+                 if getattr(self, "_crossfade_active", False):
+@@ -2288,7 +2300,7 @@ class MeowPlayer:
+         # Establish authority before closing/joining any producer.
+         self._shutting_down = True
+         self._playback_stopped = True
+-        self._online_future = None
++        self._cancel_online_pending()
+         self.online_load_state = "idle"
+         self._crossfade_active = False
+         LOGGER.info("Player shutdown starting")
+@@ -4087,7 +4099,7 @@ class MeowPlayer:
+         preserve_playlist=False,
+         automatic=False,
+     ):
+-        if track is None:
++        if track is None or getattr(self, "_shutting_down", False):
+             return False
+ 
+         if playlist_tracks is not None:
+@@ -4110,7 +4122,7 @@ class MeowPlayer:
+             elapsed = max(0.0, timestamp - self.online_load_started_at)
+             idle = bool(self.mpv.get_property("idle-active"))
+ 
+-            if self.online_load_state in {"resolving", "loading"} or not idle or elapsed < ONLINE_RETRY_GUARD_SECONDS:
++            if self.online_load_state in {"resolving", "waiting", "loading"} or not idle or elapsed < ONLINE_RETRY_GUARD_SECONDS:
+                 state = (
+                     "resolving"
+                     if self.online_load_state == "resolving"
+@@ -4158,6 +4170,7 @@ class MeowPlayer:
+         )
+ 
+         self._playback_stopped = False
++        self._cancel_online_pending()
+         self.online_current = track
+         self.online_load_state = "resolving"
+         self.online_load_started_at = timestamp
+@@ -4176,6 +4189,9 @@ class MeowPlayer:
+         self._awaiting_mpv_path = False
+ 
+         self._online_retry = 0
++        self._online_same_url_retry = 0
++        self._online_attempt = 0
++        self._online_start_paused = False
+         self._online_path = None
+         LOGGER.debug("YT_LATENCY user_enter=%.6f video_id=%s", timestamp, track.video_id)
+         resolver = getattr(self, "stream_resolver", None)
+@@ -4183,12 +4199,13 @@ class MeowPlayer:
+             self.mpv.stop()
+             cached = resolver.cached(track)
+             self._online_future = resolver.request(track)
++            self._online_future_owner = online_track_key(track)
+             self._online_resolver_path = "cache" if cached else "fresh"
+             self._finish_online_resolve()
+         else:
+-            self._load_online_fallback()
++            self._load_online_fallback("resolver-unavailable")
+ 
+-        state = "Loading" if self.online_load_state == "loading" else "Resolving"
++        state = {"loading": "Loading", "waiting": "Preparing"}.get(self.online_load_state, "Resolving")
+         provider_name = online_provider_label(
+             getattr(track, "provider", "youtube")
+         )
+@@ -4199,52 +4216,148 @@ class MeowPlayer:
+         self.sync_mpris(force=True)
+         return True
+ 
+-    def _load_online_fallback(self):
++    def _cancel_online_pending(self):
++        # All pending work is polled on the TUI thread. Dropping these references
++        # revokes ownership; no timer/worker callback can later load a track.
++        self._online_future = None
++        self._online_future_owner = None
++        self._online_stream = None
++        self._online_stream_owner = None
++        self._online_wait_until = 0.0
++
++    def _load_online_fallback(self, reason="resolution-failed"):
++        if (self.online_current is None or getattr(self, "_shutting_down", False)
++                or getattr(self, "_playback_stopped", False)):
++            return
++        self._cancel_online_pending()
+         self._online_path = "mpv-fallback"
+         self._online_expected_path = None
++        self._online_attempt = getattr(self, "_online_attempt", 0) + 1
+         self._online_load_sent = time.monotonic()
+         self.mpv.load(self.online_current.url)
+-        self.mpv.play()
++        if getattr(self, "_online_start_paused", False):
++            self.mpv.set_property("pause", True)
++        else:
++            self.mpv.play()
+         self.online_load_state = "loading"
+         LOGGER.debug("YT_PLAY resolver=mpv-fallback cache_hit=false "
++                     "video_id=%s playback_attempt=%s fallback_reason=%s "
+                      "mpv_loadfile_sent=%.6f enter_to_loadfile_ms=%.3f",
++                     self.online_current.video_id, self._online_attempt, reason,
+                      self._online_load_sent,
+                      (self._online_load_sent - self.online_load_started_at) * 1000)
+ 
+     def _finish_online_resolve(self):
+-        if getattr(self, "_shutting_down", False):
++        if (getattr(self, "_shutting_down", False) or self.online_current is None
++                or getattr(self, "_playback_stopped", False)
++                or self.online_load_state != "resolving"):
+             return False
+         future = getattr(self, "_online_future", None)
+         if future is None or not future.done():
+             return False
++        owner = getattr(self, "_online_future_owner", None)
++        if owner is not None and owner != online_track_key(self.online_current):
++            return False
+         self._online_future = None
+         try:
+             stream = future.result()
+-            if not stream.valid():
+-                raise ValueError("expired stream")
+         except Exception:
+             self._load_online_fallback()
+             return True
++        if stream.video_id != self.online_current.video_id:
++            return False
+         self._online_path = self._online_resolver_path
++        self._online_stream = stream
++        self._online_stream_owner = online_track_key(self.online_current)
++        return self._start_online_stream()
++
++    def _start_online_stream(self, now=None):
++        timestamp = time.monotonic() if now is None else float(now)
++        stream = getattr(self, "_online_stream", None)
++        if (stream is None or self.online_current is None
++                or getattr(self, "_shutting_down", False)
++                or getattr(self, "_playback_stopped", False)
++                or self._online_stream_owner != online_track_key(self.online_current)):
++            return False
++        if not stream.valid(timestamp):
++            return self._recover_online_stream("expired", timestamp)
++        due = max(stream.ready_at, self._online_wait_until)
++        if timestamp < due:
++            changed = self.online_load_state != "waiting"
++            if changed:
++                LOGGER.debug("YT_PLAY video_id=%s resolver_path=%s cache_hit=%s "
++                             "stream_age_ms=%.3f playback_attempt=%s retry_delay_ms=%.3f wait_reason=availability",
++                             stream.video_id, self._online_path, str(self._online_path == "cache").lower(),
++                             (timestamp - stream.resolved_at) * 1000, self._online_attempt + 1,
++                             (due - timestamp) * 1000)
++            self.online_load_state = "waiting"
++            return changed
++        self._online_attempt += 1
+         self._online_expected_path = stream.url
+         self._online_load_sent = time.monotonic()
+         response = self.mpv.load_stream(stream)
+         if not response or response.get("error") != "success":
+-            self._load_online_fallback()
++            self._load_online_fallback("ipc-load-rejected")
+             return True
+-        self.mpv.play()
++        if self._online_start_paused:
++            self.mpv.set_property("pause", True)
++        else:
++            self.mpv.play()
+         self.online_load_state = "loading"
+-        LOGGER.debug("YT_PLAY resolver=%s cache_hit=%s mpv_loadfile_sent=%.6f enter_to_loadfile_ms=%.3f",
+-                     self._online_path, str(self._online_path == "cache").lower(), self._online_load_sent,
++        LOGGER.debug("YT_PLAY resolver=%s resolver_path=%s cache_hit=%s video_id=%s "
++                     "format_id=%s stream_age_ms=%.3f playback_attempt=%s "
++                     "mpv_loadfile_sent=%.6f enter_to_loadfile_ms=%.3f",
++                     self._online_path, self._online_path, str(self._online_path == "cache").lower(),
++                     stream.video_id, stream.format_id, (timestamp - stream.resolved_at) * 1000,
++                     self._online_attempt, self._online_load_sent,
+                      (self._online_load_sent - self.online_load_started_at) * 1000)
+         return True
+ 
++    def _recover_online_stream(self, reason, timestamp, *, retry_same=False):
++        stream = getattr(self, "_online_stream", None)
++        resolver = getattr(self, "stream_resolver", None)
++        if (retry_same and stream is not None and not self._online_same_url_retry
++                and stream.valid(max(timestamp + ONLINE_OPEN_RETRY_SECONDS, stream.ready_at))):
++            self._online_same_url_retry += 1
++            self._online_wait_until = max(timestamp + ONLINE_OPEN_RETRY_SECONDS, stream.ready_at)
++            self.online_load_state = "waiting"
++            LOGGER.debug("YT_RETRY video_id=%s resolver_path=same-url stream_age_ms=%.3f "
++                         "playback_attempt=%s retry_delay_ms=%.3f fallback_reason=%s",
++                         stream.video_id, (timestamp - stream.resolved_at) * 1000,
++                         self._online_attempt + 1, (self._online_wait_until - timestamp) * 1000, reason)
++            return True
++        if resolver and self._online_path != "mpv-fallback":
++            resolver.invalidate(self.online_current)
++            if self._online_retry == 0:
++                self._online_retry += 1
++                self._online_stream = None
++                self._online_wait_until = 0.0
++                self._online_future = resolver.request(self.online_current)
++                self._online_future_owner = online_track_key(self.online_current)
++                self._online_resolver_path = "fresh"
++                self.online_load_state = "resolving"
++                LOGGER.debug("YT_RETRY video_id=%s resolver_path=fresh fallback_reason=%s",
++                             self.online_current.video_id, reason)
++                return True
++            self._load_online_fallback(reason)
++        else:
++            self._cancel_online_pending()
++            self.online_load_state = "failed"
++            provider_name = online_provider_label(getattr(self.online_current, "provider", "youtube"))
++            self.set_status(
++                f"{provider_name} stream did not start. Press Enter to retry.",
++                "The internet cat returned empty-pawed. Enter to retry.",
++            )
++        return True
++
+     def refresh_online_playback_state(self, now=None):
+         if getattr(self, "_shutting_down", False):
+             return False
+-        if self.online_current is None:
++        if self.online_current is None or getattr(self, "_playback_stopped", False):
+             self.online_load_state = "idle"
+             return False
++        if self.online_load_state == "waiting":
++            return self._start_online_stream(now)
+         if self.online_load_state == "resolving":
+             return self._finish_online_resolve()
+         if self.online_load_state == "streaming":
+@@ -4262,15 +4375,26 @@ class MeowPlayer:
+         # Duration/file-loaded alone is not evidence of audible playback.
+         expected = getattr(self, "_online_expected_path", None)
+         same_file = expected is None or self.mpv.get_property("path") == expected
++        if events.get("end-file", 0) >= sent and events.get("end-reason") == "eof":
++            # A short track can finish between TUI frames. An owned normal EOF
++            # must advance/complete, never become a startup timeout and replay.
++            self.online_load_state = "streaming"
++            if not self.process_online_playlist_streaming(now=now):
++                self.online_load_state = "idle"
++            return True
++        failed = (events.get("end-file", 0) >= sent and events.get("end-reason") == "error")
+         ready = (same_file and started and events.get("file-loaded", 0) >= sent
+                  and events.get("playback-restart", 0) >= sent
+                  and position is not None and float(position) > 0
+-                 and not self.mpv.get_property("idle-active"))
++                 and not self.mpv.get_property("idle-active") and not failed)
+         if ready:
+             timestamp = max(events.get("first-nonzero-time-pos", timestamp),
+                             events["playback-restart"])
+             self._online_playback_started_at = timestamp
+             self.online_load_state = "streaming"
++            LOGGER.debug("YT_PLAY video_id=%s resolver_path=%s playback_attempt=%s playback_start_latency_ms=%.3f",
++                         self.online_current.video_id, self._online_path, self._online_attempt,
++                         (timestamp - self.online_load_started_at) * 1000)
+             LOGGER.debug(
+                 "YT_LATENCY enter_to_playback_ms=%.3f loadfile_to_file_loaded_ms=%.3f "
+                 "file_loaded_to_playback_ms=%.3f mpv_start_file_event=%.6f "
+@@ -4289,28 +4413,23 @@ class MeowPlayer:
+                 f"The internet cat is streaming: {self.online_current.artist_title}",
+             )
+             return True
+-        failed = (events.get("end-file", 0) >= sent and events.get("end-reason") == "error")
+-        if failed or timestamp - sent >= 30.0:
+-            resolver = getattr(self, "stream_resolver", None)
+-            if resolver and self._online_path != "mpv-fallback":
+-                resolver.invalidate(self.online_current)
+-                if self._online_retry == 0:
+-                    self._online_retry += 1
+-                    self._online_future = resolver.request(self.online_current)
+-                    self._online_resolver_path = "fresh"
+-                    self.online_load_state = "resolving"
+-                else:
+-                    self._load_online_fallback()
+-            else:
+-                self.online_load_state = "failed"
+-                provider_name = online_provider_label(
+-                    getattr(self.online_current, "provider", "youtube")
+-                )
+-                self.set_status(
+-                    f"{provider_name} stream did not start. Press Enter to retry.",
+-                    "The internet cat returned empty-pawed. Enter to retry.",
+-                )
++        if failed and events.get("first-nonzero-time-pos", 0) >= sent:
++            # Playback may have started and ended between TUI frames. Never
++            # restart a track from zero after it has already made progress.
++            self.online_load_state = "failed"
++            self.set_status("Online stream ended with an error. Press Enter to retry.",
++                            "The internet cat lost the stream. Enter to retry.")
+             return True
++        if failed or (timestamp - sent >= 30.0 and not getattr(self, "_online_start_paused", False)):
++            LOGGER.debug("YT_END video_id=%s playback_attempt=%s mpv_end_reason=%s",
++                         self.online_current.video_id, self._online_attempt,
++                         events.get("end-reason") if failed else "startup-timeout")
++            return self._recover_online_stream(
++                "early-open-error" if failed else "startup-timeout", timestamp,
++                retry_same=(failed and self._online_path != "mpv-fallback"
++                            and events.get("file-loaded", 0) < sent
++                            and events.get("end-error") in (None, "loading failed")),
++            )
+         return False
+ 
+     def process_youtube(self):
+@@ -4698,7 +4817,7 @@ class MeowPlayer:
+             automatic,
+         )
+         self.online_current = None
+-        self._online_future = None
++        self._cancel_online_pending()
+         self.online_load_state = "idle"
+         self.online_load_started_at = 0.0
+         self.clear_online_playlist_context()
+@@ -5119,6 +5238,8 @@ class MeowPlayer:
+ 
+     def set_playback_paused(self, paused):
+         paused = bool(paused)
++        if getattr(self, "online_current", None) is not None:
++            self._online_start_paused = paused
+         self.mpv.set_property("pause", paused)
+         if getattr(self, "_crossfade_active", False):
+             deck = getattr(self, "crossfade_mpv", None)
+@@ -6736,7 +6857,7 @@ class MeowPlayer:
+ 
+             if self.online_current is not None:
+                 paused = self.mpv.get_property("pause")
+-                if self.online_load_state in {"resolving", "loading"}:
++                if self.online_load_state in {"resolving", "waiting", "loading"}:
+                     icon = "…"
+                     label = self.text(
+                         "Loading Stream" if self.online_load_state == "loading" else "Resolving Stream",
+diff --git a/tests/test_mpv_http.py b/tests/test_mpv_http.py
+index fe1f40b..f3c0198 100644
+--- a/tests/test_mpv_http.py
++++ b/tests/test_mpv_http.py
+@@ -1,8 +1,12 @@
+ """Opt-in real mpv/HTTP integration; only loopback traffic, never YouTube."""
+ import functools
++from concurrent.futures import Future
++from dataclasses import replace
+ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+ import os
+ from pathlib import Path
++import shutil
++import subprocess
+ import tempfile
+ import threading
+ import time
+@@ -12,10 +16,143 @@ from unittest import mock
+ 
+ from meowplayer import MPVController, build_mpv_command
+ from youtube_online import ResolvedStream
++from test_stream_latency import player_for, track
+ 
+ 
+ @unittest.skipUnless(os.environ.get("MEOW_REAL_MPV") == "1", "opt-in real mpv integration")
+ class MPVHTTPTests(unittest.TestCase):
++    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg required for local format integration")
++    def test_local_formats_gapless_pause_seek_stop_and_replaygain(self):
++        with tempfile.TemporaryDirectory() as directory:
++            files = [Path(directory) / f"tone.{ext}" for ext in ("flac", "mp3", "opus")]
++            for path in files:
++                subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
++                                "anullsrc=r=48000:cl=stereo", "-t", "3", str(path)],
++                               check=True, capture_output=True, timeout=10)
++            with mock.patch("meowplayer.build_mpv_command", side_effect=lambda *a, **k:
++                            build_mpv_command(*a, **k) + ["--no-config", "--ao=null"]):
++                controller = MPVController()
++            def wait_for(condition):
++                deadline = time.monotonic() + 5
++                while time.monotonic() < deadline:
++                    if condition():
++                        return
++                    time.sleep(.01)
++                self.fail("mpv did not reach expected local playback state")
++            try:
++                for index, path in enumerate(files):
++                    if index == 0:
++                        controller.load(path)
++                        controller.play()
++                    wait_for(lambda: controller.get_property("path") == str(path)
++                             and (controller.get_property("time-pos") or 0) > 0)
++                    self.assertEqual(controller.get_property("replaygain"), "track")
++                    controller.pause()
++                    wait_for(lambda: controller.get_property("pause") is True)
++                    controller.seek_absolute(.5)
++                    wait_for(lambda: (controller.get_property("time-pos") or 0) >= .4)
++                    controller.play()
++                    wait_for(lambda: controller.get_property("pause") is False)
++                    if index + 1 < len(files):
++                        self.assertTrue(controller.prime_next(files[index + 1]))
++                        controller.seek_absolute(2.8)
++                        # Real EOF handoff to the reserved native playlist entry.
++                controller.stop()
++                wait_for(lambda: controller.get_property("idle-active") is True)
++                self.assertEqual(controller.playback_snapshot(), {})
++            finally:
++                controller.quit()
++
++    def test_real_403_readiness_recovery_and_bounded_failure(self):
++        for mode in ("available_at", "early_403", "always_403"):
++            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
++                audio = Path(directory) / "tone.wav"
++                with wave.open(str(audio), "wb") as output:
++                    output.setnchannels(1)
++                    output.setsampwidth(2)
++                    output.setframerate(8000)
++                    output.writeframes(b"\0\0" * 8000 * 3)
++                requests = []
++                ready_at = time.monotonic() + .5
++                class Handler(SimpleHTTPRequestHandler):
++                    def do_GET(self):
++                        now = time.monotonic()
++                        rejected = mode == "always_403" or now < ready_at
++                        requests.append((now, rejected, dict(self.headers)))
++                        if rejected:
++                            self.send_error(403)
++                        else:
++                            super().do_GET()
++                    def log_message(self, *args):
++                        pass
++                server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=directory))
++                worker = threading.Thread(target=server.serve_forever)
++                worker.start()
++                with mock.patch("meowplayer.build_mpv_command", side_effect=lambda *a, **k:
++                                build_mpv_command(*a, **k) + ["--no-config", "--ao=null"]):
++                    controller = MPVController()
++                try:
++                    url = f"http://127.0.0.1:{server.server_port}/tone.wav"
++                    now = time.monotonic()
++                    # Start availability relative to the completed mpv launch,
++                    # keeping slow hosts deterministic enough for integration.
++                    ready_at = now + .3
++                    value = ResolvedStream("cat", url, {"X-Meow": "per-file"}, "wav", now, now + 60,
++                                           ready_at if mode == "available_at" else 0)
++                    class Resolver:
++                        extractions = 0
++                        cached_value = None
++                        def cached(self, t):
++                            return self.cached_value
++                        def request(self, t, **kw):
++                            if self.cached_value is None:
++                                self.extractions += 1
++                                self.cached_value = replace(value, resolved_at=time.monotonic())
++                            future = Future()
++                            future.set_result(self.cached_value)
++                            return future
++                        def invalidate(self, t):
++                            self.cached_value = None
++                    resolver = Resolver()
++                    player = player_for(controller, resolver)
++                    if mode == "always_403":
++                        # Watch-URL fallback also goes to the loopback server.
++                        selected = replace(track(), url=url)
++                    else:
++                        selected = track()
++                    player.play_online(selected)
++                    deadline = time.monotonic() + 8
++                    while time.monotonic() < deadline:
++                        player.refresh_online_playback_state()
++                        if player.online_load_state in {"streaming", "failed"}:
++                            break
++                        time.sleep(.01)
++                    if mode == "always_403":
++                        self.assertEqual(player.online_load_state, "failed")
++                        self.assertEqual(player._online_path, "mpv-fallback")
++                        self.assertEqual(player._online_attempt, 4)
++                        self.assertEqual(resolver.extractions, 2)
++                        self.assertTrue(all(rejected for _, rejected, _ in requests))
++                    else:
++                        self.assertEqual(player.online_load_state, "streaming")
++                        self.assertGreater(controller.get_property("time-pos"), 0)
++                        self.assertEqual(resolver.extractions, 1)
++                        self.assertEqual(requests[-1][2].get("X-Meow"), "per-file")
++                        if mode == "available_at":
++                            self.assertGreaterEqual(requests[0][0], ready_at)
++                            self.assertFalse(any(rejected for _, rejected, _ in requests))
++                            self.assertEqual(player._online_attempt, 1)
++                        else:
++                            self.assertTrue(requests[0][1])
++                            self.assertFalse(requests[-1][1])
++                            self.assertEqual(player._online_attempt, 2)
++                finally:
++                    controller.quit()
++                    server.shutdown()
++                    server.server_close()
++                    worker.join(1)
++                self.assertTrue(all(not r.is_alive() for r in controller._readers))
++
+     def test_direct_stream_headers_events_and_local_isolation(self):
+         with tempfile.TemporaryDirectory() as directory:
+             audio = Path(directory) / "tone.wav"
+diff --git a/tests/test_stream_latency.py b/tests/test_stream_latency.py
+index 47153db..48b55fa 100644
+--- a/tests/test_stream_latency.py
++++ b/tests/test_stream_latency.py
+@@ -10,6 +10,7 @@ import threading
+ import time
+ import unittest
+ from concurrent.futures import Future, ThreadPoolExecutor
++from dataclasses import replace
+ from unittest import mock
+ 
+ from meowplayer import MPVController, MeowPlayer
+@@ -45,15 +46,23 @@ class FakePlayerMPV:
+         self.loaded = []
+         self.playback_events = {}
+         self.properties = {"idle-active": True, "time-pos": None}
++        self.play_calls = 0
+ 
+     def stop(self):
+-        pass
++        self.playback_events.clear()
++        self.properties.update({"idle-active": True, "time-pos": None})
+ 
+     def play(self):
+-        pass
++        self.play_calls += 1
++        self.properties["pause"] = False
++
++    def set_property(self, name, value):
++        self.properties[name] = value
+ 
+     def load(self, url):
+         self.loaded.append(url)
++        self.playback_events.clear()
++        self.properties["path"] = url
+ 
+     def load_stream(self, result):
+         self.loaded.append(result)
+@@ -76,7 +85,7 @@ class StreamTests(unittest.TestCase):
+         self.assertIn("--ignore-config", command)
+         self.assertIn("--skip-download", command)
+         self.assertIn("--no-playlist", command)
+-        self.assertIn("%(.{url,http_headers,format_id})j", command)
++        self.assertIn("%(.{url,http_headers,format_id,available_at})j", command)
+         result = parse_stream(track(), json.dumps({"url": "https://media.example/a",
+                               "http_headers": {"Cookie": "required", "Origin": "https://youtube.com"},
+                               "format_id": "251"}))
+@@ -232,12 +241,21 @@ class StreamTests(unittest.TestCase):
+             resolver.resolve(track())
+             player = player_for(FakePlayerMPV(), resolver)
+             player.play_online(track())
+-            for attempt in range(2):
+-                player.mpv.playback_events.update({"end-file": time.monotonic(), "end-reason": "error"})
++            # Unexpected early open failure gets one asynchronous same-URL
++            # retry before the existing fresh-resolution/fallback sequence.
++            player.mpv.playback_events.update({"end-file": time.monotonic(), "end-reason": "error"})
++            player.refresh_online_playback_state()
++            self.assertEqual(player.online_load_state, "waiting")
++            clock = [player._online_wait_until]
++            with mock.patch("meowplayer.time.monotonic", side_effect=lambda: clock[0]):
+                 player.refresh_online_playback_state()
+-                if attempt == 0:
+-                    player._online_future.result(1)
++                for attempt in range(2):
++                    clock[0] += .05
++                    player.mpv.playback_events.update({"end-file": time.monotonic(), "end-reason": "error"})
+                     player.refresh_online_playback_state()
++                    if attempt == 0:
++                        player._online_future.result(1)
++                        player.refresh_online_playback_state()
+             self.assertEqual(extract.call_count, 2)
+             self.assertEqual(player._online_path, "mpv-fallback")
+             self.assertEqual(player.mpv.loaded[-1], track().url)
+@@ -351,7 +369,383 @@ class StreamTests(unittest.TestCase):
+         self.assertEqual(session.results.get(timeout=1)[0], "done")
+ 
+ 
++class Clock:
++    def __init__(self):
++        self.now = 1000.0
++
++    def __call__(self):
++        return self.now
++
++    def advance(self, seconds):
++        self.now += seconds
++
++
++class ScriptedResolver:
++    """No threads or sleeps; uses the same expiry/identity contract as resolver."""
++    def __init__(self, clock):
++        self.clock = clock
++        self.cache = {}
++        self.requests = []
++        self.invalidated = []
++        self.extractions = 0
++        self.pending = None
++        self.delay = 0
++
++    def cached(self, t):
++        value = self.cache.get((t.provider, t.video_id))
++        return value if value and value.valid() else None
++
++    def request(self, t, *, prefetch=False, debounce=0):
++        self.requests.append((t.video_id, prefetch))
++        if self.pending is not None:
++            return self.pending
++        value = self.cached(t)
++        if value is None:
++            self.extractions += 1
++            now = self.clock()
++            value = replace(stream(t.video_id), ready_at=now + self.delay)
++            self.cache[(t.provider, t.video_id)] = value
++        result = Future()
++        result.set_result(value)
++        return result
++
++    def invalidate(self, t):
++        self.invalidated.append(t.video_id)
++        self.cache.pop((t.provider, t.video_id), None)
++
++
++class ReadinessRecoveryTests(unittest.TestCase):
++    def setUp(self):
++        self.clock = Clock()
++        patcher = mock.patch("meowplayer.time.monotonic", side_effect=self.clock)
++        patcher.start()
++        self.addCleanup(patcher.stop)
++        self.resolver = ScriptedResolver(self.clock)
++        self.mpv = FakePlayerMPV()
++        self.player = player_for(self.mpv, self.resolver)
++
++    def fail(self, error="loading failed"):
++        self.clock.advance(.05)
++        self.mpv.playback_events.update({"end-file": self.clock(), "end-reason": "error", "end-error": error})
++        return self.player.refresh_online_playback_state()
++
++    def progress(self):
++        self.clock.advance(.05)
++        self.mpv.playback_events.update({name: self.clock() for name in
++            ("start-file", "file-loaded", "playback-restart", "first-nonzero-time-pos")})
++        self.mpv.properties.update({"time-pos": .25, "idle-active": False})
++        return self.player.refresh_online_playback_state()
++
++    def pending_retry(self):
++        self.player.play_online(track())
++        self.fail()
++        self.assertEqual(self.player.online_load_state, "waiting")
++
++    def test_ready_fresh_url_has_no_delay(self):
++        with mock.patch("meowplayer.time.sleep", side_effect=AssertionError("blocking sleep")):
++            self.player.play_online(track())
++            self.assertEqual(len(self.mpv.loaded), 1)
++            self.assertEqual(self.clock(), 1000)
++            self.assertTrue(self.progress())
++            self.assertEqual(self.player.online_load_state, "streaming")
++            self.assertEqual(self.resolver.extractions, 1)
++
++    def test_available_at_converted_to_monotonic_and_expiry_preserved(self):
++        with mock.patch("youtube_online.time.time", return_value=10000):
++            value = parse_stream(track(), json.dumps({"url": "https://x/a?expire=10090", "available_at": 10004.25}))
++        self.assertEqual(value.ready_at, 1004.25)
++        self.assertEqual(value.expires_at, 1060)
++        self.resolver.cache[("youtube", "cat")] = value
++        self.player.play_online(track())
++        self.assertEqual(self.player.online_load_state, "waiting")
++        self.assertEqual(self.mpv.loaded, [])
++        self.assertFalse(self.player.play_online(track()))
++        with mock.patch("youtube_online.time.time", return_value=9999999):
++            self.clock.advance(4.24)
++            self.player.refresh_online_playback_state()
++            self.assertEqual(self.mpv.loaded, [])
++            self.clock.advance(.01)
++            self.player.refresh_online_playback_state()
++        self.assertEqual(self.mpv.loaded, [value])
++
++    def test_missing_or_past_availability_is_immediate(self):
++        for availability in (None, 9999):
++            with self.subTest(availability=availability), mock.patch("youtube_online.time.time", return_value=10000):
++                value = parse_stream(track(), json.dumps({"url": "https://x/a", "available_at": availability}))
++                self.assertEqual(value.ready_at, self.clock())
++
++    def test_invalid_availability_and_expiry_rejected(self):
++        for data in ({"available_at": "nan"}, {"available_at": float("inf")},
++                     {"available_at": "invalid"}, {"url": "https://x/a?expire=nan"},
++                     {"available_at": 999999999999}):
++            with self.subTest(data=data), self.assertRaises(StreamResolutionError):
++                parse_stream(track(), json.dumps({"url": "https://x/a", **data}))
++
++    def test_prefetched_ready_stream_starts_immediately(self):
++        self.resolver.delay = 4
++        value = self.resolver.request(track(), prefetch=True).result()
++        self.clock.advance(5)
++        self.player.play_online(track())
++        self.assertEqual(self.mpv.loaded, [value])
++        self.assertEqual(self.player._online_path, "cache")
++        self.assertEqual(self.resolver.extractions, 1)
++
++    def test_prefetched_not_ready_waits_only_remaining_time(self):
++        self.resolver.delay = 4
++        value = self.resolver.request(track(), prefetch=True).result()
++        self.clock.advance(3)
++        self.player.play_online(track())
++        self.assertEqual(self.mpv.loaded, [])
++        self.clock.advance(1)
++        self.player.refresh_online_playback_state()
++        self.assertEqual(self.mpv.loaded, [value])
++        self.assertEqual(self.resolver.extractions, 1)
++
++    def test_early_open_failure_retries_exact_url_once_without_extraction(self):
++        self.pending_retry()
++        value = self.mpv.loaded[0]
++        self.clock.advance(.99)
++        self.player.refresh_online_playback_state()
++        self.assertEqual(len(self.mpv.loaded), 1)
++        self.clock.advance(.01)
++        self.player.refresh_online_playback_state()
++        self.assertIs(self.mpv.loaded[1], value)
++        self.assertTrue(self.progress())
++        self.assertEqual(self.player.online_load_state, "streaming")
++        self.assertEqual(self.resolver.extractions, 1)
++        self.assertEqual(self.resolver.invalidated, [])
++
++    def test_repeated_failures_stop_after_same_url_fresh_and_fallback(self):
++        self.pending_retry()
++        self.clock.advance(1)
++        self.player.refresh_online_playback_state()
++        self.fail()
++        self.assertEqual(self.player.online_load_state, "resolving")
++        self.player.refresh_online_playback_state()
++        self.fail()
++        self.assertEqual(self.player._online_path, "mpv-fallback")
++        self.fail()
++        self.assertEqual(self.player.online_load_state, "failed")
++        self.assertEqual(len(self.mpv.loaded), 4)
++        self.assertEqual(self.resolver.extractions, 2)
++        self.clock.advance(100)
++        self.assertFalse(self.player.refresh_online_playback_state())
++        self.assertEqual(len(self.mpv.loaded), 4)
++
++    def test_expiry_before_retry_requires_new_url(self):
++        self.resolver.cache[("youtube", "cat")] = replace(stream(), expires_at=self.clock() + .5)
++        self.player.play_online(track())
++        old = self.mpv.loaded[0]
++        self.fail()
++        self.assertEqual(self.player.online_load_state, "resolving")
++        self.player.refresh_online_playback_state()
++        self.assertIsNot(self.mpv.loaded[-1], old)
++        self.assertEqual(self.resolver.invalidated, ["cat"])
++
++    def test_expiry_while_waiting_requires_resolution(self):
++        self.resolver.delay = 4
++        self.player.play_online(track())
++        self.clock.advance(61)
++        self.player.refresh_online_playback_state()
++        self.assertEqual(self.player.online_load_state, "resolving")
++        self.assertEqual(self.mpv.loaded, [])
++        self.player.refresh_online_playback_state()
++        self.clock.advance(4)
++        self.player.refresh_online_playback_state()
++        self.assertEqual(len(self.mpv.loaded), 1)
++        self.assertEqual(self.resolver.extractions, 2)
++
++    def test_switch_track_revokes_pending_retry(self):
++        self.pending_retry()
++        self.player.play_online(track("other"))
++        self.clock.advance(10)
++        self.player.refresh_online_playback_state()
++        self.assertEqual([s.video_id for s in self.mpv.loaded], ["cat", "other"])
++
++    def test_old_resolution_cannot_replace_new_selection(self):
++        old = self.resolver.pending = Future()
++        self.player.play_online(track())
++        new = self.resolver.pending = Future()
++        self.player.play_online(track("other"))
++        old.set_result(stream())
++        self.assertFalse(self.player.refresh_online_playback_state())
++        new.set_result(stream("other"))
++        self.player.refresh_online_playback_state()
++        self.assertEqual([s.video_id for s in self.mpv.loaded], ["other"])
++
++    def test_stop_cancels_retry_and_explicit_play_can_resume(self):
++        self.pending_retry()
++        self.player.external_actions = queue.SimpleQueue()
++        self.player.external_actions.put(("stop", ()))
++        self.player.process_external_actions()
++        self.clock.advance(10)
++        self.assertFalse(self.player.refresh_online_playback_state())
++        self.assertIsNone(self.player._online_stream)
++        self.assertEqual(len(self.mpv.loaded), 1)
++        self.player.play_online(track())
++        self.assertEqual(len(self.mpv.loaded), 2)
++
++    def test_local_selection_cancels_pending_retry(self):
++        from test_audio import AudioEngineTests
++        player = AudioEngineTests().make_player()
++        player.stream_resolver = self.resolver
++        player.mpv.load_stream = mock.Mock(return_value={"error": "success"})
++        player.mpv.playback_events = {}
++        player.play_online(track())
++        self.clock.advance(.05)
++        player.mpv.playback_events.update({"end-file": self.clock(), "end-reason": "error"})
++        player.refresh_online_playback_state()
++        self.assertEqual(player.online_load_state, "waiting")
++        player.play(1)
++        self.clock.advance(10)
++        self.assertFalse(player.refresh_online_playback_state())
++        self.assertIsNone(player._online_stream)
++        self.assertEqual(player.mpv.loaded, [player.songs[1]])
++        self.assertEqual(player.mpv.load_stream.call_count, 1)
++
++    def test_shutdown_cancels_retry(self):
++        self.pending_retry()
++        self.player.persist_state = mock.Mock()
++        self.player.playback_saboteur = mock.Mock()
++        self.player.youtube_search_session = None
++        self.player.youtube_download_session = None
++        self.player.creator_session = None
++        self.player.catalog = None
++        for name in ("youtube", "stream_resolver", "online_metadata", "mpris", "library_watcher", "album_art", "visualizer"):
++            setattr(self.player, name, mock.Mock())
++        self.mpv.quit = mock.Mock()
++        self.player.shutdown()
++        self.clock.advance(10)
++        self.assertFalse(self.player.refresh_online_playback_state())
++        self.assertFalse(self.player._start_online_stream())
++        self.assertFalse(self.player.play_online(track("other")))
++        self.assertIsNone(self.player._online_stream)
++        self.assertEqual(len(self.mpv.loaded), 1)
++        self.player.stream_resolver.close.assert_called_once()
++
++    def test_non_open_errors_and_timeout_skip_same_url_retry(self):
++        for error in ("audio output initialization failed", "unrecognized file format", "timeout"):
++            with self.subTest(error=error):
++                self.player.online_current = None
++                self.player.play_online(track())
++                if error == "timeout":
++                    self.clock.advance(31)
++                    self.player.refresh_online_playback_state()
++                else:
++                    self.fail(error)
++                self.assertEqual(self.player.online_load_state, "resolving")
++                self.assertEqual(self.player._online_same_url_retry, 0)
++
++    def test_error_after_progress_does_not_restart_track(self):
++        self.player.play_online(track())
++        self.mpv.playback_events["first-nonzero-time-pos"] = self.clock()
++        self.fail()
++        self.assertEqual(self.player.online_load_state, "failed")
++        self.assertEqual(len(self.mpv.loaded), 1)
++
++    def test_normal_eof_before_first_refresh_does_not_retry(self):
++        self.player.play_online(track())
++        self.clock.advance(.1)
++        self.mpv.playback_events.update({"end-file": self.clock(), "end-reason": "eof"})
++        self.player.refresh_online_playback_state()
++        self.assertEqual(self.player.online_load_state, "idle")
++        self.clock.advance(31)
++        self.assertFalse(self.player.refresh_online_playback_state())
++        self.assertEqual(len(self.mpv.loaded), 1)
++        self.assertEqual(self.resolver.extractions, 1)
++
++    def test_short_playlist_track_advances_without_startup_retry(self):
++        self.player.play_online(track(), playlist_tracks=[track(), track("next")], playlist_index=0)
++        self.clock.advance(.1)
++        self.mpv.playback_events.update({"end-file": self.clock(), "end-reason": "eof"})
++        self.player.refresh_online_playback_state()
++        self.assertEqual(self.player.online_playlist_index, 1)
++        self.assertEqual(self.mpv.loaded[-1].video_id, "next")
++        self.assertEqual(self.player._online_retry, 0)
++
++    def test_pause_during_availability_wait_is_preserved(self):
++        self.resolver.delay = 4
++        self.player.play_online(track())
++        self.player.set_playback_paused(True)
++        self.clock.advance(4)
++        self.player.refresh_online_playback_state()
++        self.assertTrue(self.mpv.properties["pause"])
++        self.clock.advance(31)
++        self.player.refresh_online_playback_state()
++        self.assertEqual(self.player.online_load_state, "loading")
++        self.player.set_playback_paused(False)
++        self.assertTrue(self.progress())
++
++    def test_external_pause_toggle_and_play_during_wait(self):
++        self.resolver.delay = 4
++        self.player.play_online(track())
++        self.player.external_actions = queue.SimpleQueue()
++        for action, expected in (("pause", True), ("play_pause", False), ("play_pause", True), ("play", False)):
++            with self.subTest(action=action):
++                self.player.external_actions.put((action, ()))
++                self.player.process_external_actions()
++                self.assertEqual(self.mpv.properties["pause"], expected)
++                self.assertEqual(self.player._online_start_paused, expected)
++                self.assertEqual(self.mpv.loaded, [])
++
++    def test_playlist_prefetch_and_eof_advance_after_recovery(self):
++        self.player.play_online(track(), playlist_tracks=[track(), track("next")], playlist_index=0)
++        self.fail()
++        self.clock.advance(1)
++        self.player.refresh_online_playback_state()
++        self.progress()
++        self.player.refresh_online_playback_state()
++        self.assertIn(("next", True), self.resolver.requests)
++        self.clock.advance(.1)
++        self.mpv.playback_events.update({"end-file": self.clock(), "end-reason": "eof"})
++        self.player.refresh_online_playback_state()
++        self.assertEqual(self.player.online_playlist_index, 1)
++        self.assertEqual(self.mpv.loaded[-1].video_id, "next")
++        self.assertEqual(self.player._online_path, "cache")
++        self.assertEqual(self.player._online_attempt, 1)
++        self.assertEqual(self.player._online_same_url_retry, 0)
++
++    def test_diagnostics_exclude_signed_urls_and_headers(self):
++        self.resolver.delay = 1
++        with self.assertLogs("meowplayer", level="DEBUG") as logged:
++            self.player.play_online(track())
++            self.clock.advance(1)
++            self.player.refresh_online_playback_state()
++            self.fail()
++        output = "\n".join(logged.output)
++        self.assertIn("stream_age_ms=", output)
++        self.assertIn("retry_delay_ms=", output)
++        self.assertIn("playback_attempt=", output)
++        self.assertNotIn("secret=hidden", output)
++        self.assertNotIn("media.example", output)
++        self.assertNotIn("User-Agent", output)
++
++
+ class IPCConcurrencyTests(unittest.TestCase):
++    def test_error_ownership_across_same_url_retry_and_next_entry(self):
++        controller = MPVController.__new__(MPVController)
++        controller._init_ipc()
++        controller._close_ipc = mock.Mock()
++        def events(*messages):
++            sock = mock.Mock()
++            sock.recv.side_effect = [b"".join(json.dumps(m).encode() + b"\n" for m in messages), b""]
++            controller._ipc_socket = sock
++            controller._read_ipc(sock)
++        events({"event": "start-file", "playlist_entry_id": 10},
++               {"event": "end-file", "playlist_entry_id": 10, "reason": "error", "file_error": "loading failed"})
++        self.assertEqual(controller.playback_events["end-error"], "loading failed")
++        self.assertFalse(controller._load_pending)
++        for entry in (11, 12):
++            controller.begin_load()
++            events({"event": "start-file", "playlist_entry_id": entry},
++                   {"event": "end-file", "playlist_entry_id": entry - 1, "reason": "error", "file_error": "loading failed"},
++                   {"event": "file-loaded"}, {"event": "playback-restart"})
++            self.assertNotIn("end-file", controller.playback_events)
++            self.assertNotIn("end-error", controller.playback_events)
++            self.assertEqual(controller.playback_events["entry-id"], entry)
++        events({"event": "end-file", "playlist_entry_id": 12, "reason": "eof"})
++        self.assertEqual(controller.playback_events["end-reason"], "eof")
++
+     def test_interleaved_replies_partial_frames_and_observations(self):
+         client, server = socket.socketpair()
+         controller = MPVController.__new__(MPVController)
+diff --git a/tools/benchmark_youtube_startup.py b/tools/benchmark_youtube_startup.py
+index 279b458..a426d49 100644
+--- a/tools/benchmark_youtube_startup.py
++++ b/tools/benchmark_youtube_startup.py
+@@ -106,9 +106,12 @@ def main():
+                     report["errors"].append(f"{label}: {type(exc).__name__}")
+             report[label] = summary(samples)
+     resolver = YouTubeStreamResolver(catalog.executable, timeout=args.timeout)
+-    mpv = MPVController()
++    mpv = MPVController(network_resolver_workaround=True)
+     player = player_for(mpv, resolver)
+-    samples = {"cold_enter_to_playback": [], "warm_enter_to_playback": [], "resolve": [], "cache_lookup": [], "mpv_direct_open": []}
++    report["warm_policy"] = "wait for extracted available_at before Enter; prefetch lead time reported separately"
++    report["network_environment"] = "product default: process-local glibc resolver workaround"
++    samples = {"cold_enter_to_playback": [], "warm_enter_to_playback": [], "resolve": [],
++               "prefetch_readiness_wait": [], "cache_lookup": [], "mpv_direct_open": []}
+     try:
+         for _ in range(args.runs):
+             resolver.invalidate(track)
+@@ -116,14 +119,20 @@ def main():
+                 samples["cold_enter_to_playback"].append(measure_play(player, track, args.timeout * 3))
+                 resolver.invalidate(track)
+                 start = time.monotonic()
+-                resolver.resolve(track)
++                prefetched = resolver.resolve(track)
+                 samples["resolve"].append((time.monotonic() - start) * 1000)
++                # Model a genuinely ready prefetch. A just-resolved cache entry
++                # can still be unavailable; report this lead time explicitly.
++                start = time.monotonic()
++                while time.monotonic() < prefetched.ready_at:
++                    time.sleep(max(0, min(.01, prefetched.ready_at - time.monotonic())))
++                samples["prefetch_readiness_wait"].append((time.monotonic() - start) * 1000)
+                 start = time.monotonic()
+                 resolver.resolve(track)
+                 samples["cache_lookup"].append((time.monotonic() - start) * 1000)
+                 samples["warm_enter_to_playback"].append(measure_play(player, track, args.timeout * 3))
+                 samples["mpv_direct_open"].append((player._online_playback_started_at - player._online_load_sent) * 1000)
+-                if player._online_path != "cache":
++                if player._online_path != "cache" or player._online_attempt != 1:
+                     report["errors"].append("warm sample required retry/fallback")
+             except Exception as exc:
+                 report["errors"].append(type(exc).__name__)
+diff --git a/youtube_online.py b/youtube_online.py
+index 7ad8091..a8184bc 100644
+--- a/youtube_online.py
++++ b/youtube_online.py
+@@ -1,5 +1,6 @@
+ import json
+ import logging
++import math
+ import os
+ import platform
+ import queue
+@@ -564,6 +565,9 @@ class ResolvedStream:
+     format_id: str | None
+     resolved_at: float
+     expires_at: float
++    # Monotonic deadline converted once from yt-dlp's format available_at.
++    # Zero preserves immediate loading for extractors without this field.
++    ready_at: float = 0.0
+ 
+     def valid(self, now=None):
+         return (time.monotonic() if now is None else now) < self.expires_at
+@@ -572,7 +576,7 @@ class ResolvedStream:
+ def resolver_command(executable, track):
+     return [executable, "--ignore-config", "--no-playlist", "--no-warnings",
+             "--skip-download", "-f", "bestaudio/best", "--print",
+-            "%(.{url,http_headers,format_id})j", track.url]
++            "%(.{url,http_headers,format_id,available_at})j", track.url]
+ 
+ 
+ def parse_stream(track, output, ttl=180.0):
+@@ -590,14 +594,22 @@ def parse_stream(track, output, ttl=180.0):
+         if any("\r" in k + v or "\n" in k + v for k, v in headers.items()):
+             raise ValueError("invalid header newline")
+         now = time.monotonic()
++        wall_now = time.time()
++        available_at = float(data.get("available_at") or 0.0)
++        if not math.isfinite(available_at):
++            raise ValueError("invalid stream availability")
++        ready_at = now + max(0.0, available_at - wall_now)
+         expiry = parse_qs(parsed.query).get("expire", [None])[0]
+         lifetime = float(ttl)
+         if expiry is not None:
+-            lifetime = min(lifetime, float(expiry) - time.time() - 30.0)
+-        if lifetime <= 0:
++            signed_expiry = float(expiry)
++            if not math.isfinite(signed_expiry):
++                raise ValueError("invalid stream expiry")
++            lifetime = min(lifetime, signed_expiry - wall_now - 30.0)
++        if not math.isfinite(lifetime) or lifetime <= 0 or ready_at >= now + lifetime:
+             raise ValueError("expired stream URL")
+         return ResolvedStream(track.video_id, url, headers,
+-                              data.get("format_id"), now, now + lifetime)
++                              data.get("format_id"), now, now + lifetime, ready_at)
+     except (ValueError, TypeError, KeyError) as exc:
+         raise StreamResolutionError("Invalid or expired stream metadata") from exc
+ 
+diff --git a/tools/probe_youtube_readiness.py b/tools/probe_youtube_readiness.py
+new file mode 100644
+index 0000000..0a011d0
+--- /dev/null
++++ b/tools/probe_youtube_readiness.py
+@@ -0,0 +1,89 @@
++#!/usr/bin/env python3
++"""Opt-in live probe: replay one extracted URL, without printing URLs/headers.
++
++Private mpv traces are deleted on exit. No media files are saved. The reported
++HTTP request time is FFmpeg's trace immediately before sending GET (not IPC ACK).
++"""
++import argparse
++import json
++from pathlib import Path
++import re
++import subprocess
++import sys
++import tempfile
++import time
++from unittest import mock
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++from meowplayer import MPVController, build_mpv_command
++from youtube_online import YouTubeTrack, network_subprocess_env, parse_stream
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("url")
++    parser.add_argument("--format", default="bestaudio/best")
++    parser.add_argument("--client", help="optional yt-dlp youtube player_client")
++    parser.add_argument("--no-config", action="store_true")
++    args = parser.parse_args()
++    with tempfile.TemporaryDirectory(prefix="meow-readiness-") as directory:
++        log = Path(directory) / "mpv.log"
++        def command(*a, **kw):
++            return build_mpv_command(*a, **kw) + [
++                "--ao=null", "--msg-level=ffmpeg=trace",
++                *(["--no-config"] if args.no_config else []),
++            ]
++        process_started = time.monotonic()
++        with mock.patch("meowplayer.build_mpv_command", side_effect=command):
++            mpv = MPVController(debug_log_path=log, network_resolver_workaround=True)
++        try:
++            cmd = ["yt-dlp", "--ignore-config", "--no-playlist", "--no-warnings",
++                   "--skip-download", "-f", args.format, "--print",
++                   "%(.{url,http_headers,format_id,available_at,protocol})j"]
++            if args.client:
++                cmd += ["--extractor-args", f"youtube:player_client={args.client}"]
++            result = subprocess.run(cmd + [args.url], capture_output=True, text=True,
++                                    timeout=40, env=network_subprocess_env())
++            if result.returncode:
++                print(json.dumps({"error": "extraction_failed", "exit_code": result.returncode}))
++                return
++            data = json.loads(result.stdout)
++            stream = parse_stream(YouTubeTrack("probe", "Probe", "", 0, args.url), result.stdout)
++            remaining = max(0, (data.get("available_at") or 0) - time.time())
++            print(json.dumps({"format_id": stream.format_id, "protocol": data.get("protocol"),
++                              "client": args.client or "default", "no_config": args.no_config,
++                              "availability_remaining_ms": round(remaining * 1000)}), flush=True)
++            for label in ("immediate", "same_url_delayed"):
++                if label == "same_url_delayed":
++                    # Diagnostic control only; application never blocks this way.
++                    deadline = stream.resolved_at + max(remaining + .25, 5)
++                    while time.monotonic() < deadline:
++                        time.sleep(max(0, min(.05, deadline - time.monotonic())))
++                offset = log.stat().st_size if log.exists() else 0
++                sent = time.monotonic()
++                response = mpv.load_stream(stream)
++                mpv.play()
++                deadline = time.monotonic() + 15
++                progress = False
++                events = {}
++                while time.monotonic() < deadline:
++                    events = mpv.playback_snapshot()
++                    progress = (bool(events.get("file-loaded")) and bool(events.get("playback-restart"))
++                                and (mpv.get_property("time-pos") or 0) > 0
++                                and not mpv.get_property("idle-active"))
++                    if progress or events.get("end-reason") == "error":
++                        break
++                    time.sleep(.01)
++                trace = log.read_bytes()[offset:].decode(errors="replace")
++                request = re.search(r"\[\s*([\d.]+)\].*request: GET ", trace)
++                print(json.dumps({"attempt": label, "ipc_accepted": bool(response and response.get("error") == "success"),
++                                  "stream_age_at_load_ms": round((sent - stream.resolved_at) * 1000),
++                                  "stream_age_at_http_get_ms": round((process_started + float(request[1]) - stream.resolved_at) * 1000) if request else None,
++                                  "http_403": "403 Forbidden" in trace, "playback_progress": progress,
++                                  "end_reason": events.get("end-reason"), "entry_id": events.get("entry-id")}), flush=True)
++        finally:
++            mpv.quit()
++
++
++if __name__ == "__main__":
++    main()

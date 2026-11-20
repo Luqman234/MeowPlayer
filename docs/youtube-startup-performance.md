@@ -1,5 +1,170 @@
 # Internet Nest startup investigation
 
+## Immediate playback HTTP 403: availability metadata (2026-10-30)
+
+The immediate-playback failure was reproduced on `dhYOPzcsbGM` with Python
+3.14.8, yt-dlp 2026.10.26, mpv 0.41.0, FFmpeg runtime 9.0.2, and Deno 2.9.8.
+The selected YouTube format includes an **`available_at` Unix timestamp**.
+MeowPlayer's selected-field metadata extraction discarded it. Consequently,
+mpv requested the media before the extractor's availability deadline. Waiting
+in the results screen let the same prefetched URL become usable. Immediate
+invalidation and re-extraction could obtain another URL with a new future
+deadline, repeating the failure.
+
+This is supported by source inspection and live media requests, rather than
+IPC acknowledgements alone. In the installed yt-dlp, `YoutubeIE` computes a
+per-client availability timestamp from pre-content ad duration/skip metadata
+and attaches it to non-live formats; its downloader honors that timestamp
+before the first download. MeowPlayer uses `--skip-download`, so that downloader
+wait never ran. See the upstream [YouTube extractor](https://github.com/yt-dlp/yt-dlp/blob/2026.10.26/yt_dlp/extractor/youtube/_video.py)
+and [download readiness handling](https://github.com/yt-dlp/yt-dlp/blob/2026.10.26/yt_dlp/downloader/common.py).
+
+The search worker delivers results incrementally. `process_youtube()` requests
+prefetch for the selected result with a 150 ms debounce. Enter's
+`play_online()` shares that same Future and removes the debounce, or consumes
+the cache if extraction is complete. Online playlists request the next stream
+20 seconds before the current track ends. Readiness therefore belongs to the
+extracted stream, independently of whether search, selection or a playlist
+initiated resolution.
+
+Live controls, extracting once and replaying the **identical URL and headers**:
+
+| mpv configuration / format | Remaining availability at extraction | First media GET after resolution | Immediate result | Same URL delayed GET | Delayed result |
+| --- | ---: | ---: | --- | ---: | --- |
+| User configuration / 251 Opus | 4,339 ms | ~61 ms | HTTP 403, end-file(error), no progress | ~5,266 ms | Playback progress |
+| `--no-config` / 251 Opus | 4,296 ms | ~49 ms | HTTP 403, end-file(error), no progress | ~5,093 ms | Playback progress |
+| `--no-config` / 140 AAC | 3,920 ms | ~64 ms | HTTP 403, end-file(error), no progress | ~5,089 ms | Playback progress |
+
+GET timings come from FFmpeg's trace immediately before sending the HTTP
+request, relative to stream resolution; process-start timestamp alignment is
+approximate. These are media requests, not loadfile submission times. Success
+requires file-loaded, playback-restart, advancing time-pos and non-idle state.
+Native playlist entry IDs distinguish attempts. The failures are genuine
+HTTP errors, independent of user mpv configuration in these controls.
+
+This demonstrates a timing constraint for these samples, not a universal
+YouTube delay. Both tested audio formats were affected under the default
+extractor clients; other clients, accounts, live formats, regions and networks
+were not exhaustively compared. `available_at` can already be in the past or
+absent. The precise YouTube server-side enforcement is outside MeowPlayer's
+control, and HTTP 403 can have other causes.
+
+### Playback and recovery behavior
+
+`resolver_command()` now retains `available_at`; `parse_stream()` converts it
+once to a monotonic `ResolvedStream.ready_at` deadline. The existing 180-second
+maximum cache TTL and signed expiry minus 30 seconds still apply. Invalid,
+non-finite or unavailable-until-after-expiry metadata is rejected.
+
+`_finish_online_resolve()` retains the stream and calls `_start_online_stream()`.
+If the deadline is in the future, playback enters `waiting`. The normal TUI
+refresh loop checks the deadline; it starts no media request before then and
+does not sleep or block user input. A ready fresh/cached stream loads immediately.
+Prefetching consumes the readiness interval before Enter when there is enough
+lead time, without keeping the resolver worker busy while waiting.
+
+Recovery is bounded per user selection:
+
+1. Before loading, recheck expiry and readiness.
+2. On an early open failure with no file-loaded event or playback progress,
+   retry the same still-valid stream once after a one-second asynchronous
+   backoff, also respecting its availability deadline. mpv's generic
+   `loading failed` (or missing detail) qualifies; decoder/audio-output errors
+   and startup timeouts skip this step. This is a transient-open retry, not a
+   claim that every open error is HTTP 403 or that one second is a readiness rule.
+3. When reuse fails or expiry prevents it, invalidate and resolve fresh once.
+   The fresh stream's own availability deadline also applies.
+4. Use the existing mpv watch-URL fallback once, then report failure. There are
+   at most three direct loads plus one fallback, and two resolver extractions.
+
+Actual position and playback events still determine success. A failure after
+observed progress does not restart the track from zero. Normal EOF keeps the
+existing playlist advancement behavior. Pausing while waiting is preserved
+when the stream loads; a deliberately paused startup does not trigger the
+startup timeout.
+
+Pending state belongs to the selected provider/video. Track changes, local
+playback, Stop and shutdown revoke it. There are no timer callbacks that can
+restart an obsolete selection. mpv start/end ownership still uses native
+playlist entry IDs across same-URL reloads and playlist transitions. An owned
+end-file event now also clears the controller's pending-load flag and retains
+mpv's error category for recovery decisions.
+
+### Current performance and validation
+
+Three patched application-entry-point runs on the reported video, normal mpv
+audio output, product-default process-local DNS environment:
+
+| Measurement | Median | Range |
+| --- | ---: | ---: |
+| Cold Enter to advancing playback | 7,557 ms | 6,970–8,028 ms |
+| Ready prefetched Enter to advancing playback | **230 ms** | **214–232 ms** |
+| Metadata extraction | 3,008 ms | 2,912–3,138 ms |
+| Prefetch readiness lead time after extraction | 3,812 ms | 3,751–4,665 ms |
+
+All three cold and three ready-prefetched runs succeeded. No fixed delay is
+added to ready streams or local files. Cold streams wait only the remaining
+extractor-declared availability interval; network/extraction latency remains
+external. These small samples are not latency or reliability guarantees.
+
+The benchmark now uses the application's mpv resolver environment and reports
+prefetch readiness lead time separately, before timing a *ready* cache hit.
+An initial patched run of the old benchmark also succeeded in all six starts,
+but measured a just-resolved cache entry as warm and omitted mpv's DNS
+workaround: medians were 12,358 ms cold / 9,682 ms just-cached. This is not a
+matched performance comparison. Do not interpret those numbers as ready-cache
+latency or attribute the difference entirely to the availability fix.
+
+Offline fake-clock regression tests cover availability, missing/past metadata,
+expiry, immediate success, same-URL reuse, exhausted recovery, cancellation,
+pause/resume, privacy, entry ownership and playlist prefetch/advancement.
+Opt-in real-mpv tests use a loopback server to assert the first HTTP request
+occurs after declared readiness, observe real 403 failure/recovery, and verify
+bounded persistent failure. They also check per-file header isolation, local
+FLAC/MP3/Opus, native gapless handoff, pause, seek, Stop and ReplayGain. Unit
+tests never require YouTube connectivity.
+
+Final validation: `MEOW_REAL_MPV=1 python -m unittest discover -s tests`
+passed all **368 tests** in 6.89 seconds, including the three real-mpv tests
+(26 additional test methods over the 342-test baseline). A separate real
+MPRIS registration/update check passed on an isolated session D-Bus.
+Existing tests for NicoNico, Creator's Nest, queues, crossfade, lyrics, cache
+behavior and IPC remained green; those services and interactive curses input
+were not separately exercised live. The optional `web_safari` live control
+failed at extraction and therefore supplied no playback timing evidence.
+
+### Troubleshooting future failures
+
+Enable MeowPlayer debug logging and inspect `YT_PLAY`, `YT_RETRY`, `YT_END`
+and `YT_LATENCY`. Logs contain video ID, resolver path, cache hit, format ID,
+stream age, attempt number, remaining wait, end reason and playback latency.
+They do not include media URLs or HTTP headers. The availability wait is
+identified by `wait_reason=availability`; a retry uses `resolver_path=same-url`.
+`success` from loadfile only means the command was accepted.
+
+For an opt-in live control (null audio, no saved media):
+
+```bash
+python tools/probe_youtube_readiness.py 'https://youtu.be/dhYOPzcsbGM'
+python tools/probe_youtube_readiness.py 'https://youtu.be/dhYOPzcsbGM' --no-config
+python tools/probe_youtube_readiness.py 'https://youtu.be/dhYOPzcsbGM' --format 140 --no-config
+# Optional client comparison; availability/formats depend on extractor support:
+python tools/probe_youtube_readiness.py 'https://youtu.be/dhYOPzcsbGM' --client web_safari --no-config
+```
+
+The diagnostic intentionally bypasses the application readiness gate for its
+first attempt, then replays the exact same URL after the reported deadline (or
+five seconds for the diagnostic control). That sleep is confined to the CLI
+probe. It prints safe timings, HTTP-403 detection and actual playback evidence;
+its private temporary mpv traces are deleted on exit. Trace parsing is
+diagnostic only and may need adjustment with future FFmpeg log formats. A
+failure that persists after readiness may involve expiry, rate limits, tokens,
+headers, network conditions, or extractor changes; the timing fix does not
+establish which of those applies. Redact manually retained mpv logs before
+sharing because mpv itself may log signed URLs and headers.
+
+The earlier DNS investigation below describes a separate failure mode.
+
 Measured on 2026-09-25 with Python 3.14, mpv 0.41.0, yt-dlp
 2026.08.19, Linux/glibc, and the default PipeWire audio output. The original
 performance investigation was based on `95bda09` (main already included the
@@ -154,8 +319,9 @@ session. The user's original observation was about 1,200 requests in 13 s.
 - Per-file mpv options preserve extractor HTTP headers, disable ytdl for direct
   streams, and restore options afterward. Named loadfile arguments support
   both sides of mpv 0.38's positional index change.
-- Resolution failure falls back to the watch URL. Direct stream-open failure
-  invalidates and resolves once, then falls back. Repeated Enter cannot restart
+- Resolution failure falls back to the watch URL. Direct playback honors the
+  extractor availability deadline; an early open failure can reuse the URL once
+  before invalidating/resolving once and falling back. Repeated Enter cannot restart
   a resolving/loading track. No media files, SQLite inserts, or new dependency.
 - Local playback and Bad Larry's seek/pause controls use the existing controller.
   Without `--youtube`, no online workers start.

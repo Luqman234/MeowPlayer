@@ -1,7 +1,7 @@
 # Maintainer: Luqman234
 pkgname=meowplayer
 pkgver=0.21.0
-pkgrel=1
+pkgrel=2
 pkgdesc="A lightweight, aggressively cat-themed terminal music player powered by mpv"
 arch=('any')
 url="https://github.com/Luqman234/MeowPlayer"
@@ -27,9 +27,21 @@ makedepends=(
   'python-wheel'
 )
 
-_commit='4ebc756d0ada8bc35956a066f9c2cb48ac372b6c'
-source=("$pkgname::git+$url.git#commit=$_commit")
-sha256sums=('SKIP')
+_commit='5ab1b9f6dd6c365b28c8677b59da11b80f908188'
+source=(
+  "$pkgname::git+$url.git#commit=$_commit"
+  'youtube-readiness.patch'
+)
+sha256sums=(
+  'SKIP'
+  '074f3a33e237f8a60bca3ff71c69864f0e88df5f39082328bbe651f0809e6e76'
+)
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  # Include the playback fix while retaining a reproducible upstream source pin.
+  patch -Np1 -i "$srcdir/youtube-readiness.patch"
+}
 
 build() {
   cd "$srcdir/$pkgname"

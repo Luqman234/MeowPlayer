@@ -94,6 +94,7 @@ SUPPORTED_EXTENSIONS = {
     ".wav", ".m4a", ".aac", ".wma"
 }
 ONLINE_RETRY_GUARD_SECONDS = 8.0
+ONLINE_OPEN_RETRY_SECONDS = 1.0
 ONLINE_PLAYLIST_PREFETCH_SECONDS = 20.0
 
 LIBRARY_VIEWS = (
@@ -691,7 +692,9 @@ class MPVController:
                                     self._load_pending = False
                                 self.playback_events[event] = time.monotonic()
                                 if event == "end-file":
+                                    self._load_pending = False
                                     self.playback_events["end-reason"] = message.get("reason")
+                                    self.playback_events["end-error"] = message.get("file_error", message.get("error"))
                                 MPV_LOGGER.debug("mpv event=%s monotonic=%.6f", event, time.monotonic())
                         pending = self._pending.pop(message.get("request_id"), None)
                         if pending:
@@ -1046,8 +1049,11 @@ class MeowPlayer:
         self.youtube_download_session = None
         self.youtube_download_track = None
         self._prefetch_selection = None
-        self._online_future = None
+        self._cancel_online_pending()
         self._online_retry = 0
+        self._online_same_url_retry = 0
+        self._online_attempt = 0
+        self._online_start_paused = False
         self._online_path = None
         self.youtube_results = []
         self.youtube_selected = 0
@@ -2204,14 +2210,17 @@ class MeowPlayer:
                     self.set_playback_paused(True)
             elif action == "play":
                 if self.online_current is not None:
-                    if (getattr(self, "_playback_stopped", False)
+                    if (not getattr(self, "_playback_stopped", False)
+                            and self.online_load_state in {"resolving", "waiting", "loading"}):
+                        self.set_playback_paused(False)
+                    elif (getattr(self, "_playback_stopped", False)
                             or bool(self.mpv.get_property("idle-active"))):
                         self.play_online(
                             self.online_current,
                             preserve_playlist=True,
                         )
                     else:
-                        self.mpv.play()
+                        self.set_playback_paused(False)
                 elif self.current is None:
                     self.play_selected_library_song()
                 elif (getattr(self, "_playback_stopped", False)
@@ -2226,14 +2235,17 @@ class MeowPlayer:
                     self.set_playback_paused(False)
             elif action == "play_pause":
                 if self.online_current is not None:
-                    if (getattr(self, "_playback_stopped", False)
+                    if (not getattr(self, "_playback_stopped", False)
+                            and self.online_load_state in {"resolving", "waiting", "loading"}):
+                        self.toggle_playback_pause()
+                    elif (getattr(self, "_playback_stopped", False)
                             or bool(self.mpv.get_property("idle-active"))):
                         self.play_online(
                             self.online_current,
                             preserve_playlist=True,
                         )
                     else:
-                        self.mpv.toggle_pause()
+                        self.toggle_playback_pause()
                 elif self.current is None:
                     self.play_selected_library_song()
                 elif (getattr(self, "_playback_stopped", False)
@@ -2253,7 +2265,7 @@ class MeowPlayer:
                         self.cancel_crossfade()
                     self.mpv.stop()
                     if self.online_current is not None:
-                        self._online_future = None
+                        self._cancel_online_pending()
                         self.online_load_state = "idle"
             elif action == "seek" and self.has_active_track():
                 if getattr(self, "_crossfade_active", False):
@@ -2288,7 +2300,7 @@ class MeowPlayer:
         # Establish authority before closing/joining any producer.
         self._shutting_down = True
         self._playback_stopped = True
-        self._online_future = None
+        self._cancel_online_pending()
         self.online_load_state = "idle"
         self._crossfade_active = False
         LOGGER.info("Player shutdown starting")
@@ -4087,7 +4099,7 @@ class MeowPlayer:
         preserve_playlist=False,
         automatic=False,
     ):
-        if track is None:
+        if track is None or getattr(self, "_shutting_down", False):
             return False
 
         if playlist_tracks is not None:
@@ -4110,7 +4122,7 @@ class MeowPlayer:
             elapsed = max(0.0, timestamp - self.online_load_started_at)
             idle = bool(self.mpv.get_property("idle-active"))
 
-            if self.online_load_state in {"resolving", "loading"} or not idle or elapsed < ONLINE_RETRY_GUARD_SECONDS:
+            if self.online_load_state in {"resolving", "waiting", "loading"} or not idle or elapsed < ONLINE_RETRY_GUARD_SECONDS:
                 state = (
                     "resolving"
                     if self.online_load_state == "resolving"
@@ -4158,6 +4170,7 @@ class MeowPlayer:
         )
 
         self._playback_stopped = False
+        self._cancel_online_pending()
         self.online_current = track
         self.online_load_state = "resolving"
         self.online_load_started_at = timestamp
@@ -4176,6 +4189,9 @@ class MeowPlayer:
         self._awaiting_mpv_path = False
 
         self._online_retry = 0
+        self._online_same_url_retry = 0
+        self._online_attempt = 0
+        self._online_start_paused = False
         self._online_path = None
         LOGGER.debug("YT_LATENCY user_enter=%.6f video_id=%s", timestamp, track.video_id)
         resolver = getattr(self, "stream_resolver", None)
@@ -4183,12 +4199,13 @@ class MeowPlayer:
             self.mpv.stop()
             cached = resolver.cached(track)
             self._online_future = resolver.request(track)
+            self._online_future_owner = online_track_key(track)
             self._online_resolver_path = "cache" if cached else "fresh"
             self._finish_online_resolve()
         else:
-            self._load_online_fallback()
+            self._load_online_fallback("resolver-unavailable")
 
-        state = "Loading" if self.online_load_state == "loading" else "Resolving"
+        state = {"loading": "Loading", "waiting": "Preparing"}.get(self.online_load_state, "Resolving")
         provider_name = online_provider_label(
             getattr(track, "provider", "youtube")
         )
@@ -4199,52 +4216,148 @@ class MeowPlayer:
         self.sync_mpris(force=True)
         return True
 
-    def _load_online_fallback(self):
+    def _cancel_online_pending(self):
+        # All pending work is polled on the TUI thread. Dropping these references
+        # revokes ownership; no timer/worker callback can later load a track.
+        self._online_future = None
+        self._online_future_owner = None
+        self._online_stream = None
+        self._online_stream_owner = None
+        self._online_wait_until = 0.0
+
+    def _load_online_fallback(self, reason="resolution-failed"):
+        if (self.online_current is None or getattr(self, "_shutting_down", False)
+                or getattr(self, "_playback_stopped", False)):
+            return
+        self._cancel_online_pending()
         self._online_path = "mpv-fallback"
         self._online_expected_path = None
+        self._online_attempt = getattr(self, "_online_attempt", 0) + 1
         self._online_load_sent = time.monotonic()
         self.mpv.load(self.online_current.url)
-        self.mpv.play()
+        if getattr(self, "_online_start_paused", False):
+            self.mpv.set_property("pause", True)
+        else:
+            self.mpv.play()
         self.online_load_state = "loading"
         LOGGER.debug("YT_PLAY resolver=mpv-fallback cache_hit=false "
+                     "video_id=%s playback_attempt=%s fallback_reason=%s "
                      "mpv_loadfile_sent=%.6f enter_to_loadfile_ms=%.3f",
+                     self.online_current.video_id, self._online_attempt, reason,
                      self._online_load_sent,
                      (self._online_load_sent - self.online_load_started_at) * 1000)
 
     def _finish_online_resolve(self):
-        if getattr(self, "_shutting_down", False):
+        if (getattr(self, "_shutting_down", False) or self.online_current is None
+                or getattr(self, "_playback_stopped", False)
+                or self.online_load_state != "resolving"):
             return False
         future = getattr(self, "_online_future", None)
         if future is None or not future.done():
             return False
+        owner = getattr(self, "_online_future_owner", None)
+        if owner is not None and owner != online_track_key(self.online_current):
+            return False
         self._online_future = None
         try:
             stream = future.result()
-            if not stream.valid():
-                raise ValueError("expired stream")
         except Exception:
             self._load_online_fallback()
             return True
+        if stream.video_id != self.online_current.video_id:
+            return False
         self._online_path = self._online_resolver_path
+        self._online_stream = stream
+        self._online_stream_owner = online_track_key(self.online_current)
+        return self._start_online_stream()
+
+    def _start_online_stream(self, now=None):
+        timestamp = time.monotonic() if now is None else float(now)
+        stream = getattr(self, "_online_stream", None)
+        if (stream is None or self.online_current is None
+                or getattr(self, "_shutting_down", False)
+                or getattr(self, "_playback_stopped", False)
+                or self._online_stream_owner != online_track_key(self.online_current)):
+            return False
+        if not stream.valid(timestamp):
+            return self._recover_online_stream("expired", timestamp)
+        due = max(stream.ready_at, self._online_wait_until)
+        if timestamp < due:
+            changed = self.online_load_state != "waiting"
+            if changed:
+                LOGGER.debug("YT_PLAY video_id=%s resolver_path=%s cache_hit=%s "
+                             "stream_age_ms=%.3f playback_attempt=%s retry_delay_ms=%.3f wait_reason=availability",
+                             stream.video_id, self._online_path, str(self._online_path == "cache").lower(),
+                             (timestamp - stream.resolved_at) * 1000, self._online_attempt + 1,
+                             (due - timestamp) * 1000)
+            self.online_load_state = "waiting"
+            return changed
+        self._online_attempt += 1
         self._online_expected_path = stream.url
         self._online_load_sent = time.monotonic()
         response = self.mpv.load_stream(stream)
         if not response or response.get("error") != "success":
-            self._load_online_fallback()
+            self._load_online_fallback("ipc-load-rejected")
             return True
-        self.mpv.play()
+        if self._online_start_paused:
+            self.mpv.set_property("pause", True)
+        else:
+            self.mpv.play()
         self.online_load_state = "loading"
-        LOGGER.debug("YT_PLAY resolver=%s cache_hit=%s mpv_loadfile_sent=%.6f enter_to_loadfile_ms=%.3f",
-                     self._online_path, str(self._online_path == "cache").lower(), self._online_load_sent,
+        LOGGER.debug("YT_PLAY resolver=%s resolver_path=%s cache_hit=%s video_id=%s "
+                     "format_id=%s stream_age_ms=%.3f playback_attempt=%s "
+                     "mpv_loadfile_sent=%.6f enter_to_loadfile_ms=%.3f",
+                     self._online_path, self._online_path, str(self._online_path == "cache").lower(),
+                     stream.video_id, stream.format_id, (timestamp - stream.resolved_at) * 1000,
+                     self._online_attempt, self._online_load_sent,
                      (self._online_load_sent - self.online_load_started_at) * 1000)
+        return True
+
+    def _recover_online_stream(self, reason, timestamp, *, retry_same=False):
+        stream = getattr(self, "_online_stream", None)
+        resolver = getattr(self, "stream_resolver", None)
+        if (retry_same and stream is not None and not self._online_same_url_retry
+                and stream.valid(max(timestamp + ONLINE_OPEN_RETRY_SECONDS, stream.ready_at))):
+            self._online_same_url_retry += 1
+            self._online_wait_until = max(timestamp + ONLINE_OPEN_RETRY_SECONDS, stream.ready_at)
+            self.online_load_state = "waiting"
+            LOGGER.debug("YT_RETRY video_id=%s resolver_path=same-url stream_age_ms=%.3f "
+                         "playback_attempt=%s retry_delay_ms=%.3f fallback_reason=%s",
+                         stream.video_id, (timestamp - stream.resolved_at) * 1000,
+                         self._online_attempt + 1, (self._online_wait_until - timestamp) * 1000, reason)
+            return True
+        if resolver and self._online_path != "mpv-fallback":
+            resolver.invalidate(self.online_current)
+            if self._online_retry == 0:
+                self._online_retry += 1
+                self._online_stream = None
+                self._online_wait_until = 0.0
+                self._online_future = resolver.request(self.online_current)
+                self._online_future_owner = online_track_key(self.online_current)
+                self._online_resolver_path = "fresh"
+                self.online_load_state = "resolving"
+                LOGGER.debug("YT_RETRY video_id=%s resolver_path=fresh fallback_reason=%s",
+                             self.online_current.video_id, reason)
+                return True
+            self._load_online_fallback(reason)
+        else:
+            self._cancel_online_pending()
+            self.online_load_state = "failed"
+            provider_name = online_provider_label(getattr(self.online_current, "provider", "youtube"))
+            self.set_status(
+                f"{provider_name} stream did not start. Press Enter to retry.",
+                "The internet cat returned empty-pawed. Enter to retry.",
+            )
         return True
 
     def refresh_online_playback_state(self, now=None):
         if getattr(self, "_shutting_down", False):
             return False
-        if self.online_current is None:
+        if self.online_current is None or getattr(self, "_playback_stopped", False):
             self.online_load_state = "idle"
             return False
+        if self.online_load_state == "waiting":
+            return self._start_online_stream(now)
         if self.online_load_state == "resolving":
             return self._finish_online_resolve()
         if self.online_load_state == "streaming":
@@ -4262,15 +4375,26 @@ class MeowPlayer:
         # Duration/file-loaded alone is not evidence of audible playback.
         expected = getattr(self, "_online_expected_path", None)
         same_file = expected is None or self.mpv.get_property("path") == expected
+        if events.get("end-file", 0) >= sent and events.get("end-reason") == "eof":
+            # A short track can finish between TUI frames. An owned normal EOF
+            # must advance/complete, never become a startup timeout and replay.
+            self.online_load_state = "streaming"
+            if not self.process_online_playlist_streaming(now=now):
+                self.online_load_state = "idle"
+            return True
+        failed = (events.get("end-file", 0) >= sent and events.get("end-reason") == "error")
         ready = (same_file and started and events.get("file-loaded", 0) >= sent
                  and events.get("playback-restart", 0) >= sent
                  and position is not None and float(position) > 0
-                 and not self.mpv.get_property("idle-active"))
+                 and not self.mpv.get_property("idle-active") and not failed)
         if ready:
             timestamp = max(events.get("first-nonzero-time-pos", timestamp),
                             events["playback-restart"])
             self._online_playback_started_at = timestamp
             self.online_load_state = "streaming"
+            LOGGER.debug("YT_PLAY video_id=%s resolver_path=%s playback_attempt=%s playback_start_latency_ms=%.3f",
+                         self.online_current.video_id, self._online_path, self._online_attempt,
+                         (timestamp - self.online_load_started_at) * 1000)
             LOGGER.debug(
                 "YT_LATENCY enter_to_playback_ms=%.3f loadfile_to_file_loaded_ms=%.3f "
                 "file_loaded_to_playback_ms=%.3f mpv_start_file_event=%.6f "
@@ -4289,28 +4413,23 @@ class MeowPlayer:
                 f"The internet cat is streaming: {self.online_current.artist_title}",
             )
             return True
-        failed = (events.get("end-file", 0) >= sent and events.get("end-reason") == "error")
-        if failed or timestamp - sent >= 30.0:
-            resolver = getattr(self, "stream_resolver", None)
-            if resolver and self._online_path != "mpv-fallback":
-                resolver.invalidate(self.online_current)
-                if self._online_retry == 0:
-                    self._online_retry += 1
-                    self._online_future = resolver.request(self.online_current)
-                    self._online_resolver_path = "fresh"
-                    self.online_load_state = "resolving"
-                else:
-                    self._load_online_fallback()
-            else:
-                self.online_load_state = "failed"
-                provider_name = online_provider_label(
-                    getattr(self.online_current, "provider", "youtube")
-                )
-                self.set_status(
-                    f"{provider_name} stream did not start. Press Enter to retry.",
-                    "The internet cat returned empty-pawed. Enter to retry.",
-                )
+        if failed and events.get("first-nonzero-time-pos", 0) >= sent:
+            # Playback may have started and ended between TUI frames. Never
+            # restart a track from zero after it has already made progress.
+            self.online_load_state = "failed"
+            self.set_status("Online stream ended with an error. Press Enter to retry.",
+                            "The internet cat lost the stream. Enter to retry.")
             return True
+        if failed or (timestamp - sent >= 30.0 and not getattr(self, "_online_start_paused", False)):
+            LOGGER.debug("YT_END video_id=%s playback_attempt=%s mpv_end_reason=%s",
+                         self.online_current.video_id, self._online_attempt,
+                         events.get("end-reason") if failed else "startup-timeout")
+            return self._recover_online_stream(
+                "early-open-error" if failed else "startup-timeout", timestamp,
+                retry_same=(failed and self._online_path != "mpv-fallback"
+                            and events.get("file-loaded", 0) < sent
+                            and events.get("end-error") in (None, "loading failed")),
+            )
         return False
 
     def process_youtube(self):
@@ -4698,7 +4817,7 @@ class MeowPlayer:
             automatic,
         )
         self.online_current = None
-        self._online_future = None
+        self._cancel_online_pending()
         self.online_load_state = "idle"
         self.online_load_started_at = 0.0
         self.clear_online_playlist_context()
@@ -5119,6 +5238,8 @@ class MeowPlayer:
 
     def set_playback_paused(self, paused):
         paused = bool(paused)
+        if getattr(self, "online_current", None) is not None:
+            self._online_start_paused = paused
         self.mpv.set_property("pause", paused)
         if getattr(self, "_crossfade_active", False):
             deck = getattr(self, "crossfade_mpv", None)
@@ -6736,7 +6857,7 @@ class MeowPlayer:
 
             if self.online_current is not None:
                 paused = self.mpv.get_property("pause")
-                if self.online_load_state in {"resolving", "loading"}:
+                if self.online_load_state in {"resolving", "waiting", "loading"}:
                     icon = "…"
                     label = self.text(
                         "Loading Stream" if self.online_load_state == "loading" else "Resolving Stream",

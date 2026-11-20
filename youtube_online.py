@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import platform
 import queue
@@ -564,6 +565,9 @@ class ResolvedStream:
     format_id: str | None
     resolved_at: float
     expires_at: float
+    # Monotonic deadline converted once from yt-dlp's format available_at.
+    # Zero preserves immediate loading for extractors without this field.
+    ready_at: float = 0.0
 
     def valid(self, now=None):
         return (time.monotonic() if now is None else now) < self.expires_at
@@ -572,7 +576,7 @@ class ResolvedStream:
 def resolver_command(executable, track):
     return [executable, "--ignore-config", "--no-playlist", "--no-warnings",
             "--skip-download", "-f", "bestaudio/best", "--print",
-            "%(.{url,http_headers,format_id})j", track.url]
+            "%(.{url,http_headers,format_id,available_at})j", track.url]
 
 
 def parse_stream(track, output, ttl=180.0):
@@ -590,14 +594,22 @@ def parse_stream(track, output, ttl=180.0):
         if any("\r" in k + v or "\n" in k + v for k, v in headers.items()):
             raise ValueError("invalid header newline")
         now = time.monotonic()
+        wall_now = time.time()
+        available_at = float(data.get("available_at") or 0.0)
+        if not math.isfinite(available_at):
+            raise ValueError("invalid stream availability")
+        ready_at = now + max(0.0, available_at - wall_now)
         expiry = parse_qs(parsed.query).get("expire", [None])[0]
         lifetime = float(ttl)
         if expiry is not None:
-            lifetime = min(lifetime, float(expiry) - time.time() - 30.0)
-        if lifetime <= 0:
+            signed_expiry = float(expiry)
+            if not math.isfinite(signed_expiry):
+                raise ValueError("invalid stream expiry")
+            lifetime = min(lifetime, signed_expiry - wall_now - 30.0)
+        if not math.isfinite(lifetime) or lifetime <= 0 or ready_at >= now + lifetime:
             raise ValueError("expired stream URL")
         return ResolvedStream(track.video_id, url, headers,
-                              data.get("format_id"), now, now + lifetime)
+                              data.get("format_id"), now, now + lifetime, ready_at)
     except (ValueError, TypeError, KeyError) as exc:
         raise StreamResolutionError("Invalid or expired stream metadata") from exc
 
